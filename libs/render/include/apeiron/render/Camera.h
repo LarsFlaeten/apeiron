@@ -31,6 +31,8 @@ public:
     void setAspect  (float aspect)            { m_aspect   = aspect; }
 
     const glm::vec3& position() const { return m_position; }
+    float            near()     const { return m_near;     }
+    float            far()      const { return m_far;      }
 
 private:
     glm::vec3 m_position;

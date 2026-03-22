@@ -53,13 +53,14 @@ int main()
         apeiron::render::Pipeline     pipeline (ctx, swapchain, APEIRON_SHADER_DIR);
 
         // Camera: 3 units back along +Z, looking at the origin.
+        // near/far must match C_NEAR/C_FAR constants in triangle.frag.
         apeiron::render::Camera camera(
             glm::vec3(0.0f, 0.0f, 3.0f),
             glm::vec3(0.0f, 0.0f, 0.0f),
             glm::vec3(0.0f, 1.0f, 0.0f),
             45.0f,
             static_cast<float>(kWidth) / static_cast<float>(kHeight),
-            0.1f, 100.0f
+            0.1f, 1.0e9f
         );
 
         // Earth-like blue-green sphere, 1 m radius, 64 rings × 64 sectors.
