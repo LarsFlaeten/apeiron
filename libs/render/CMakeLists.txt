@@ -38,3 +38,7 @@ target_link_libraries(render
 )
 
 target_compile_features(render PUBLIC cxx_std_23)
+
+# Vulkan NDC depth is [0, 1]; GLM defaults to OpenGL [-1, 1].
+# This flag makes glm::perspective (and friends) emit the correct matrix.
+target_compile_definitions(render PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
