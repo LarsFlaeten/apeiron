@@ -17,6 +17,7 @@ add_library(render STATIC
     src/GpuAllocator.cpp
     src/Buffer.cpp
     src/Mesh.cpp
+    src/Camera.cpp
 )
 
 target_include_directories(render

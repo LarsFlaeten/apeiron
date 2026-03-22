@@ -4,6 +4,8 @@
 #include "apeiron/render/Pipeline.h"
 #include "apeiron/render/Mesh.h"
 
+#include <glm/glm.hpp>
+
 #include <stdexcept>
 
 namespace apeiron::render {
@@ -67,7 +69,7 @@ Renderer::~Renderer()
         device.destroyFramebuffer(fb);
 }
 
-void Renderer::drawFrame(float angle, const Mesh& mesh)
+void Renderer::drawFrame(const glm::mat4& mvp, const Mesh& mesh)
 {
     auto device = m_ctx.device();
     int  frame  = m_currentFrame;
@@ -110,10 +112,9 @@ void Renderer::drawFrame(float angle, const Mesh& mesh)
     cmd.setViewport(0, vp);
     cmd.setScissor (0, vk::Rect2D{{0, 0}, m_swapchain.extent()});
 
-    // Push the rotation angle to the vertex shader.
     cmd.pushConstants(m_pipeline.layout(),
                       vk::ShaderStageFlagBits::eVertex,
-                      0, sizeof(float), &angle);
+                      0, sizeof(glm::mat4), &mvp);
 
     mesh.draw(cmd);
     cmd.endRenderPass();

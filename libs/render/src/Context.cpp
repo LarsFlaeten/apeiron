@@ -42,11 +42,15 @@ Context::Context(GLFWwindow* window)
     m_surface = vk::SurfaceKHR(rawSurface);
 
     // --- Physical device ---
+    VkPhysicalDeviceFeatures requiredFeatures{};
+    requiredFeatures.fillModeNonSolid = VK_TRUE; // needed for wireframe rendering
+
     vkb::PhysicalDeviceSelector selector(m_vkbInstance);
     auto physResult = selector
         .set_surface(rawSurface)
         .set_minimum_version(1, 3)
         .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
+        .set_required_features(requiredFeatures)
         .select();
     if (!physResult)
         throw std::runtime_error("Physical device selection failed: "

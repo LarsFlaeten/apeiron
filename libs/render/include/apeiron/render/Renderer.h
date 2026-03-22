@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.hpp>
+#include <glm/glm.hpp>
 
 #include <array>
 #include <vector>
@@ -24,8 +25,8 @@ public:
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    // Draw one frame.  angle (radians) is pushed to the vertex shader.
-    void drawFrame(float angle, const Mesh& mesh);
+    // Draw one frame.  mvp (proj * view * model) is pushed to the vertex shader.
+    void drawFrame(const glm::mat4& mvp, const Mesh& mesh);
 
 private:
     static constexpr int kMaxFramesInFlight = 2;

@@ -3,6 +3,7 @@
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Vertex.h"
 
+#include <glm/glm.hpp>
 #include <fstream>
 #include <stdexcept>
 #include <vector>
@@ -136,11 +137,12 @@ Pipeline::Pipeline(const Context&               ctx,
     colorBlend.setAttachments(blendAttachment);
 
     // ----- Push constants -----
-    // One float (rotation angle, radians) visible in the vertex stage.
+    // One mat4 (MVP matrix) visible in the vertex stage.
+    // 64 bytes is well within the 128-byte minimum guaranteed by the Vulkan spec.
     vk::PushConstantRange pcRange{};
     pcRange.setStageFlags(vk::ShaderStageFlagBits::eVertex)
            .setOffset(0)
-           .setSize(sizeof(float));
+           .setSize(sizeof(glm::mat4));
 
     vk::PipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.setPushConstantRanges(pcRange);
