@@ -1,0 +1,48 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "default",
+            "displayName": "Debug (vcpkg)",
+            "description": "Debug build using vcpkg toolchain. Requires VCPKG_ROOT to be set.",
+            "generator": "Unix Makefiles",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+            }
+        },
+        {
+            "name": "release",
+            "displayName": "Release (vcpkg)",
+            "inherits": "default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "dev",
+            "displayName": "Debug (no vcpkg)",
+            "description": "Debug build without vcpkg — for early scaffolding before dependencies are needed.",
+            "generator": "Unix Makefiles",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "default",
+            "configurePreset": "default"
+        },
+        {
+            "name": "release",
+            "configurePreset": "release"
+        },
+        {
+            "name": "dev",
+            "configurePreset": "dev"
+        }
+    ]
+}
