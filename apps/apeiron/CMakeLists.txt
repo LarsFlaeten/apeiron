@@ -46,7 +46,7 @@ target_link_libraries(apeiron
 target_compile_definitions(apeiron
     PRIVATE
         APEIRON_SHADER_DIR="${SHADER_OUT_DIR}"
-        APEIRON_SCENARIO_FILE="${CMAKE_CURRENT_SOURCE_DIR}/data/scenario.toml"
+        APEIRON_SCENARIO_FILE="${CMAKE_SOURCE_DIR}/data/scenarios/scenario.toml"
 )
 
 target_compile_features(apeiron PRIVATE cxx_std_23)

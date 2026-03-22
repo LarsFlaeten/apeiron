@@ -17,8 +17,8 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
                 auto p = (*t)["path"].value<std::string>();
                 if (!p) throw std::runtime_error("kernel entry missing 'path'");
                 std::filesystem::path kp(*p);
-                cfg.kernels.push_back(
-                    kp.is_absolute() ? kp.string() : (baseDir / kp).string());
+                auto resolved = kp.is_absolute() ? kp : std::filesystem::weakly_canonical(baseDir / kp);
+                cfg.kernels.push_back(resolved.string());
             }
         }
     }
@@ -47,9 +47,8 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
             }
             if (auto tp = (*t)["texture"].value<std::string>()) {
                 std::filesystem::path tp_path(*tp);
-                bc.texturePath = tp_path.is_absolute()
-                    ? tp_path.string()
-                    : (baseDir / tp_path).string();
+                auto resolved = tp_path.is_absolute() ? tp_path : std::filesystem::weakly_canonical(baseDir / tp_path);
+                bc.texturePath = resolved.string();
             }
             cfg.bodies.push_back(bc);
         }

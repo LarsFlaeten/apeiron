@@ -229,7 +229,7 @@ TEST_CASE("CelestialBody: update sets Earth's world position via SPICE", "[unive
 
 TEST_CASE("CelestialBody: naifName and observer accessors round-trip", "[universe][scene]")
 {
-    apeiron::universe::CelestialBody body("Mars", "MARS BARYCENTER", "SUN");
+    apeiron::universe::CelestialBody body("Mars", "MARS BARYCENTER", 0.0, "SUN");
     REQUIRE(body.naifName() == "MARS BARYCENTER");
     REQUIRE(body.observer() == "SUN");
 }

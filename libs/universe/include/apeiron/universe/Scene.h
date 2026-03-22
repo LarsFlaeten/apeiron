@@ -28,7 +28,7 @@ public:
     // Convenience factory: create and add a CelestialBody.
     CelestialBody& addBody(std::string name,
                            std::string naifName,
-                           double      radiusKm,
+                           double      radiusKm = 0.0,
                            std::string observer = "SOLAR SYSTEM BARYCENTER",
                            std::string frame    = "ECLIPJ2000");
 

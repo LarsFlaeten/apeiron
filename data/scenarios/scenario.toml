@@ -3,13 +3,13 @@
 # Kernel load order: LSK first, then PCK, then SPK.
 
 [[kernels]]
-path = "/home/lars/workspace/orbit/bin/spice/lsk/naif0012.tls"
+path = "../../kernels/lsk/naif0012.tls"
 
 [[kernels]]
-path = "/home/lars/workspace/orbit/bin/spice/pck/pck00010.tpc"
+path = "../../kernels/pck/pck00011.tpc"
 
 [[kernels]]
-path = "/home/lars/workspace/orbit/bin/spice/spk/de430.bsp"
+path = "../../kernels/spk/de440s.bsp"
 
 # ---------------------------------------------------------------------------
 
@@ -32,7 +32,7 @@ color = [1.0, 0.92, 0.23]
 [[bodies]]
 naif  = "EARTH"
 color = [1.0, 1.0, 1.0]   # tint is white so texture shows unmodified
-# texture = "textures/earth.jpg"
+texture = "../textures/earth/8k_earth_daymap.jpg"
 
 [[bodies]]
 naif  = "MOON"
