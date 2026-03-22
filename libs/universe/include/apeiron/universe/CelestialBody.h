@@ -16,7 +16,8 @@ public:
     CelestialBody(std::string name,
                   std::string naifName,
                   double      radiusKm,
-                  std::string observer = "SOLAR SYSTEM BARYCENTER");
+                  std::string observer = "SOLAR SYSTEM BARYCENTER",
+                  std::string frame    = "ECLIPJ2000");
 
     const std::string& naifName()  const;
     const std::string& observer()  const;
@@ -28,6 +29,7 @@ public:
 private:
     std::string m_naifName;
     std::string m_observer;
+    std::string m_frame;
     double      m_radiusKm = 0.0;
 };
 

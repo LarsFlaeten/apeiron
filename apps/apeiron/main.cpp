@@ -82,8 +82,8 @@ int main()
         for (int i = 0; i < static_cast<int>(cfg.bodies.size()); ++i) {
             auto& bc    = cfg.bodies[i];
             auto  props = apeiron::universe::BodyProperties::queryFromSpice(bc.naif);
-            auto& node  = scene.addBody(bc.naif, bc.naif,
-                                        props.radiusKm, "SOLAR SYSTEM BARYCENTER");
+            auto& node  = scene.addBody(bc.naif, bc.naif, props.radiusKm,
+                                        "SOLAR SYSTEM BARYCENTER", cfg.frame);
             bodyInfos.push_back({ &node, static_cast<float>(props.radiusKm), bc.color });
             if (bc.naif == "SUN") sunIndex = i;
         }
@@ -116,10 +116,15 @@ int main()
                 allocator, verts, idxs));
         }
 
-        // Camera: 10× Earth radii back, looking at Earth (floating-origin centre).
-        // At this distance Earth is well-framed and the Moon (~60 R_E away) is visible.
+        // Camera: above the ecliptic north pole (ECLIPJ2000 +Z) looking down at Earth.
+        // In this frame the Moon's orbit is roughly in the X-Y plane, so it sweeps
+        // left/right across the screen.  500 000 km gives a frustum half-width of
+        // ~207 000 km at Earth's distance — enough to keep the Moon (384 400 km out)
+        // in frame whenever it is not directly behind Earth.
+        // "up" = +Y in ECLIPJ2000 = toward ecliptic longitude 90° (summer solstice).
+        constexpr float kCamDistKm = 500'000.0f;
         apeiron::render::Camera camera(
-            glm::vec3(0.0f, 0.0f, 10.0f * earthRadius),
+            glm::vec3(0.0f, 0.0f, kCamDistKm),
             glm::vec3(0.0f, 0.0f, 0.0f),
             glm::vec3(0.0f, 1.0f, 0.0f),
             45.0f,

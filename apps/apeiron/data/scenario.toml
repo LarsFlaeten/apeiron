@@ -17,9 +17,9 @@ path = "/home/lars/workspace/orbit/bin/spice/spk/de430.bsp"
 # ---------------------------------------------------------------------------
 
 [observer]
-body   = "EARTH"       # floating origin tracks Earth; camera placed near it
-target = "SUN"         # look direction
-frame  = "J2000"
+body   = "EARTH"        # floating origin tracks Earth; camera placed near it
+target = "SUN"          # look direction
+frame  = "ECLIPJ2000"   # ecliptic inertial: X=vernal equinox, Y=90° lon, Z=ecliptic north
 
 [time]
 epoch  = "2025-06-21T12:00:00"   # northern summer solstice

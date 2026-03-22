@@ -29,7 +29,8 @@ public:
     CelestialBody& addBody(std::string name,
                            std::string naifName,
                            double      radiusKm,
-                           std::string observer = "SOLAR SYSTEM BARYCENTER");
+                           std::string observer = "SOLAR SYSTEM BARYCENTER",
+                           std::string frame    = "ECLIPJ2000");
 
     // Recenter origin at cameraWorldPos, then update all nodes for time et.
     void update(const astro::EphemerisTime& et, const glm::dvec3& cameraWorldPos);
