@@ -1,0 +1,3 @@
+[submodule "libs/astro"]
+	path = libs/astro
+	url = git@github.com:LarsFlaeten/astro.git
