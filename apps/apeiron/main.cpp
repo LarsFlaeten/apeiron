@@ -48,6 +48,11 @@ int main()
         constexpr float kRadiansPerSecond = 1.0f; // one full turn every ~6.3 s
         auto startTime = std::chrono::steady_clock::now();
 
+        glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int) {
+            if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+                glfwSetWindowShouldClose(w, GLFW_TRUE);
+        });
+
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
 
