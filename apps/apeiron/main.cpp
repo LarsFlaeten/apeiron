@@ -2,9 +2,12 @@
 #include <GLFW/glfw3.h>
 
 #include "apeiron/render/Context.h"
+#include "apeiron/render/GpuAllocator.h"
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Pipeline.h"
 #include "apeiron/render/Renderer.h"
+#include "apeiron/render/Mesh.h"
+#include "apeiron/render/Vertex.h"
 
 #include <chrono>
 #include <cmath>
@@ -39,10 +42,21 @@ int main()
     // ----- Render stack -----
     // Constructed in dependency order; destroyed in reverse order by RAII.
     try {
-        apeiron::render::Context   ctx(window);
-        apeiron::render::Swapchain swapchain(ctx, kWidth, kHeight);
-        apeiron::render::Pipeline  pipeline (ctx, swapchain, APEIRON_SHADER_DIR);
-        apeiron::render::Renderer  renderer (ctx, swapchain, pipeline);
+        apeiron::render::Context      ctx(window);
+        apeiron::render::GpuAllocator allocator(ctx);
+        apeiron::render::Swapchain    swapchain(ctx, kWidth, kHeight);
+        apeiron::render::Pipeline     pipeline (ctx, swapchain, APEIRON_SHADER_DIR);
+        apeiron::render::Renderer     renderer (ctx, swapchain, pipeline);
+
+        // Triangle vertices uploaded once to device-local memory.
+        using V = apeiron::render::Vertex;
+        std::vector<V> vertices = {
+            {{ 0.0f, -0.5f, 0.0f}, {1.0f,  0.15f, 0.15f}},
+            {{ 0.5f,  0.5f, 0.0f}, {0.15f, 1.0f,  0.15f}},
+            {{-0.5f,  0.5f, 0.0f}, {0.15f, 0.15f, 1.0f }},
+        };
+        std::vector<uint32_t> indices = {0, 1, 2};
+        apeiron::render::Mesh mesh(allocator, vertices, indices);
 
         // ----- Main loop -----
         constexpr float kRadiansPerSecond = 1.0f; // one full turn every ~6.3 s
@@ -61,7 +75,7 @@ int main()
             float angle = std::fmod(elapsed * kRadiansPerSecond,
                                     2.0f * 3.14159265f);
 
-            renderer.drawFrame(angle);
+            renderer.drawFrame(angle, mesh);
         }
     }
     catch (const std::exception& e) {

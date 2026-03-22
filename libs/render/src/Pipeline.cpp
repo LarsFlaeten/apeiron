@@ -1,6 +1,7 @@
 #include "apeiron/render/Pipeline.h"
 #include "apeiron/render/Context.h"
 #include "apeiron/render/Swapchain.h"
+#include "apeiron/render/Vertex.h"
 
 #include <fstream>
 #include <stdexcept>
@@ -99,8 +100,11 @@ Pipeline::Pipeline(const Context&               ctx,
 
     // ----- Fixed-function state -----
 
-    // No vertex bindings — triangle vertices live entirely in the shader.
-    vk::PipelineVertexInputStateCreateInfo   vertexInput{};
+    auto binding    = Vertex::bindingDescription();
+    auto attributes = Vertex::attributeDescriptions();
+    vk::PipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.setVertexBindingDescriptions  (binding)
+               .setVertexAttributeDescriptions(attributes);
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);

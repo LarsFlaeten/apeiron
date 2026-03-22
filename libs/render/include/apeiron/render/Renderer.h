@@ -10,6 +10,7 @@ namespace apeiron::render {
 class Context;
 class Swapchain;
 class Pipeline;
+class Mesh;
 
 // Owns framebuffers, command pool/buffers, and per-frame sync objects.
 // Drives the acquire → record → submit → present loop.
@@ -24,7 +25,7 @@ public:
     Renderer& operator=(const Renderer&) = delete;
 
     // Draw one frame.  angle (radians) is pushed to the vertex shader.
-    void drawFrame(float angle);
+    void drawFrame(float angle, const Mesh& mesh);
 
 private:
     static constexpr int kMaxFramesInFlight = 2;

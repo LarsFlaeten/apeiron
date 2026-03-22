@@ -1,6 +1,7 @@
 find_package(Vulkan REQUIRED)
 find_package(glfw3  CONFIG REQUIRED)
 find_package(vk-bootstrap CONFIG REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(glm CONFIG QUIET)
 if(NOT TARGET glm::glm)
     if(TARGET glm)
@@ -13,6 +14,9 @@ add_library(render STATIC
     src/Swapchain.cpp
     src/Pipeline.cpp
     src/Renderer.cpp
+    src/GpuAllocator.cpp
+    src/Buffer.cpp
+    src/Mesh.cpp
 )
 
 target_include_directories(render
@@ -26,6 +30,7 @@ target_link_libraries(render
         Vulkan::Vulkan
         glfw
         vk-bootstrap::vk-bootstrap
+        GPUOpen::VulkanMemoryAllocator
         glm::glm
 )
 

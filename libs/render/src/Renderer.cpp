@@ -2,6 +2,7 @@
 #include "apeiron/render/Context.h"
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Pipeline.h"
+#include "apeiron/render/Mesh.h"
 
 #include <stdexcept>
 
@@ -66,7 +67,7 @@ Renderer::~Renderer()
         device.destroyFramebuffer(fb);
 }
 
-void Renderer::drawFrame(float angle)
+void Renderer::drawFrame(float angle, const Mesh& mesh)
 {
     auto device = m_ctx.device();
     int  frame  = m_currentFrame;
@@ -114,7 +115,7 @@ void Renderer::drawFrame(float angle)
                       vk::ShaderStageFlagBits::eVertex,
                       0, sizeof(float), &angle);
 
-    cmd.draw(3, 1, 0, 0);
+    mesh.draw(cmd);
     cmd.endRenderPass();
     cmd.end();
 
