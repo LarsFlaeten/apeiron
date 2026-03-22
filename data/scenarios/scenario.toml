@@ -3,13 +3,13 @@
 # Kernel load order: LSK first, then PCK, then SPK.
 
 [[kernels]]
-path = "../../kernels/lsk/naif0012.tls"
+path = "../kernels/lsk/naif0012.tls"
 
 [[kernels]]
-path = "../../kernels/pck/pck00011.tpc"
+path = "../kernels/pck/pck00011.tpc"
 
 [[kernels]]
-path = "../../kernels/spk/de440s.bsp"
+path = "../kernels/spk/de440s.bsp"
 
 # ---------------------------------------------------------------------------
 
