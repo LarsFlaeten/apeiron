@@ -1,6 +1,10 @@
 add_library(universe STATIC
     src/KernelPool.cpp
     src/Ephemeris.cpp
+    src/FloatingOrigin.cpp
+    src/SceneNode.cpp
+    src/CelestialBody.cpp
+    src/Scene.cpp
 )
 
 target_include_directories(universe

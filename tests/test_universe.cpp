@@ -5,6 +5,10 @@
 
 #include "apeiron/universe/KernelPool.h"
 #include "apeiron/universe/Ephemeris.h"
+#include "apeiron/universe/FloatingOrigin.h"
+#include "apeiron/universe/SceneNode.h"
+#include "apeiron/universe/CelestialBody.h"
+#include "apeiron/universe/Scene.h"
 #include "astro/Exceptions.h"
 #include "astro/Time.h"
 
@@ -143,4 +147,128 @@ TEST_CASE("Unknown body name throws SpiceException", "[universe][ephemeris]")
         apeiron::universe::getState("NOTABODY", j2000()),
         astro::SpiceException
     );
+}
+
+// ---------------------------------------------------------------------------
+// FloatingOrigin
+// ---------------------------------------------------------------------------
+
+TEST_CASE("FloatingOrigin: default position is at the origin", "[universe][scene]")
+{
+    apeiron::universe::FloatingOrigin fo;
+    REQUIRE(fo.position() == glm::dvec3(0.0));
+}
+
+TEST_CASE("FloatingOrigin: recenter moves anchor to camera position", "[universe][scene]")
+{
+    apeiron::universe::FloatingOrigin fo;
+    glm::dvec3 cam{1.0e6, 2.0e6, 3.0e6};
+    fo.recenter(cam);
+    REQUIRE(fo.position() == cam);
+}
+
+TEST_CASE("FloatingOrigin: subtraction is done in double before cast to float", "[universe][scene]")
+{
+    // Key invariant: (worldPos - origin) must be computed in double so that
+    // small offsets near a large origin are not wiped out by float rounding.
+    apeiron::universe::FloatingOrigin fo;
+
+    const double farKm = 1.0e9; // 1 billion km — well beyond float precision
+    fo.recenter(glm::dvec3(farKm, 0.0, 0.0));
+
+    // Body is exactly 1000 km further along X than the origin.
+    glm::dvec3 bodyPos{farKm + 1000.0, 0.0, 0.0};
+    glm::vec3  render = fo.toRenderSpace(bodyPos);
+
+    // 1000.0f is exactly representable in float; tolerance is numerical noise only.
+    REQUIRE_THAT(render.x, Catch::Matchers::WithinAbs(1000.0f, 0.01f));
+    REQUIRE_THAT(render.y, Catch::Matchers::WithinAbs(0.0f,    0.01f));
+    REQUIRE_THAT(render.z, Catch::Matchers::WithinAbs(0.0f,    0.01f));
+}
+
+// ---------------------------------------------------------------------------
+// SceneNode
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SceneNode: name is preserved and default world position is zero", "[universe][scene]")
+{
+    apeiron::universe::SceneNode node("sun");
+    REQUIRE(node.name() == "sun");
+    REQUIRE(node.worldPosition() == glm::dvec3(0.0));
+}
+
+TEST_CASE("SceneNode: setPosition and renderPosition agree with FloatingOrigin", "[universe][scene]")
+{
+    apeiron::universe::SceneNode       node("marker");
+    apeiron::universe::FloatingOrigin  fo;
+
+    fo.recenter(glm::dvec3(100.0, 0.0, 0.0));
+    node.setPosition(glm::dvec3(250.0, 0.0, 0.0));
+
+    glm::vec3 rp = node.renderPosition(fo);
+
+    REQUIRE_THAT(rp.x, Catch::Matchers::WithinAbs(150.0f, 1e-4f));
+    REQUIRE_THAT(rp.y, Catch::Matchers::WithinAbs(0.0f,   1e-4f));
+    REQUIRE_THAT(rp.z, Catch::Matchers::WithinAbs(0.0f,   1e-4f));
+}
+
+// ---------------------------------------------------------------------------
+// CelestialBody
+// ---------------------------------------------------------------------------
+
+TEST_CASE("CelestialBody: update sets Earth's world position via SPICE", "[universe][scene]")
+{
+    ensureKernels();
+
+    apeiron::universe::CelestialBody earth("Earth", "EARTH");
+    earth.update(j2000());
+
+    double dist = glm::length(earth.worldPosition()) / AU_KM;
+    REQUIRE_THAT(dist, Catch::Matchers::WithinAbs(1.0, 0.02));
+}
+
+TEST_CASE("CelestialBody: naifName and observer accessors round-trip", "[universe][scene]")
+{
+    apeiron::universe::CelestialBody body("Mars", "MARS BARYCENTER", "SUN");
+    REQUIRE(body.naifName() == "MARS BARYCENTER");
+    REQUIRE(body.observer() == "SUN");
+}
+
+// ---------------------------------------------------------------------------
+// Scene
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Scene: addBody stores nodes and update fills positions", "[universe][scene]")
+{
+    ensureKernels();
+
+    apeiron::universe::Scene scene;
+    scene.addBody("Earth", "EARTH");
+    scene.addBody("Mars",  "MARS BARYCENTER");
+
+    scene.update(j2000(), glm::dvec3(0.0));
+
+    REQUIRE(scene.nodes().size() == 2);
+
+    double earthDist = glm::length(scene.nodes()[0]->worldPosition()) / AU_KM;
+    REQUIRE_THAT(earthDist, Catch::Matchers::WithinAbs(1.0,  0.02));
+
+    double marsDist  = glm::length(scene.nodes()[1]->worldPosition()) / AU_KM;
+    REQUIRE_THAT(marsDist,  Catch::Matchers::WithinAbs(1.38, 0.05));
+}
+
+TEST_CASE("Scene: render positions are offset correctly from the floating origin", "[universe][scene]")
+{
+    ensureKernels();
+
+    apeiron::universe::Scene scene;
+    auto& earth = scene.addBody("Earth", "EARTH");
+
+    // Place camera at SSB; Earth should be ~1 AU away in render space too.
+    scene.update(j2000(), glm::dvec3(0.0));
+
+    glm::vec3 rp   = earth.renderPosition(scene.origin());
+    float     dist = glm::length(rp) / static_cast<float>(AU_KM);
+
+    REQUIRE_THAT(dist, Catch::Matchers::WithinAbs(1.0f, 0.02f));
 }
