@@ -46,9 +46,10 @@ int main()
         apeiron::render::GpuAllocator allocator(ctx);
         apeiron::render::Swapchain    swapchain(ctx, kWidth, kHeight);
         apeiron::render::Pipeline     pipeline (ctx, swapchain, APEIRON_SHADER_DIR);
-        apeiron::render::Renderer     renderer (ctx, swapchain, pipeline);
 
-        // Triangle vertices uploaded once to device-local memory.
+        // Mesh is declared BEFORE Renderer so RAII destroys Renderer first.
+        // Renderer::~Renderer calls device.waitIdle(), which ensures the GPU
+        // has finished all in-flight frames before the mesh buffers are freed.
         using V = apeiron::render::Vertex;
         std::vector<V> vertices = {
             {{ 0.0f, -0.5f, 0.0f}, {1.0f,  0.15f, 0.15f}},
@@ -56,7 +57,8 @@ int main()
             {{-0.5f,  0.5f, 0.0f}, {0.15f, 0.15f, 1.0f }},
         };
         std::vector<uint32_t> indices = {0, 1, 2};
-        apeiron::render::Mesh mesh(allocator, vertices, indices);
+        apeiron::render::Mesh     mesh    (allocator, vertices, indices);
+        apeiron::render::Renderer renderer(ctx, swapchain, pipeline);
 
         // ----- Main loop -----
         constexpr float kRadiansPerSecond = 1.0f; // one full turn every ~6.3 s
