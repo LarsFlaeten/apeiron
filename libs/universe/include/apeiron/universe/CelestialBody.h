@@ -15,10 +15,12 @@ class CelestialBody : public SceneNode {
 public:
     CelestialBody(std::string name,
                   std::string naifName,
+                  double      radiusKm,
                   std::string observer = "SOLAR SYSTEM BARYCENTER");
 
-    const std::string& naifName() const;
-    const std::string& observer() const;
+    const std::string& naifName()  const;
+    const std::string& observer()  const;
+    double             radiusKm()  const;
 
     // Queries SPICE and updates worldPosition().
     void update(const astro::EphemerisTime& et) override;
@@ -26,6 +28,7 @@ public:
 private:
     std::string m_naifName;
     std::string m_observer;
+    double      m_radiusKm = 0.0;
 };
 
 } // namespace apeiron::universe

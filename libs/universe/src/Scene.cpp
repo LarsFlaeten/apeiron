@@ -11,10 +11,11 @@ SceneNode& Scene::addNode(std::unique_ptr<SceneNode> node)
     return ref;
 }
 
-CelestialBody& Scene::addBody(std::string name, std::string naifName, std::string observer)
+CelestialBody& Scene::addBody(std::string name, std::string naifName,
+                              double radiusKm, std::string observer)
 {
     auto body = std::make_unique<CelestialBody>(
-        std::move(name), std::move(naifName), std::move(observer));
+        std::move(name), std::move(naifName), radiusKm, std::move(observer));
     CelestialBody& ref = *body;
     m_nodes.push_back(std::move(body));
     return ref;

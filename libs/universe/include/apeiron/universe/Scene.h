@@ -28,6 +28,7 @@ public:
     // Convenience factory: create and add a CelestialBody.
     CelestialBody& addBody(std::string name,
                            std::string naifName,
+                           double      radiusKm,
                            std::string observer = "SOLAR SYSTEM BARYCENTER");
 
     // Recenter origin at cameraWorldPos, then update all nodes for time et.

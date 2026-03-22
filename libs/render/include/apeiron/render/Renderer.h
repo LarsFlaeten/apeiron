@@ -15,9 +15,15 @@ class Mesh;
 
 // Owns framebuffers, command pool/buffers, and per-frame sync objects.
 // Drives the acquire → record → submit → present loop.
+//
+// Usage per frame:
+//   if (!renderer.beginFrame()) continue;   // acquire + begin render pass
+//   renderer.draw(mvp, model, meshA);       // any number of draw calls
+//   renderer.draw(mvp, model, meshB);
+//   renderer.endFrame();                    // submit + present
 class Renderer {
 public:
-    Renderer(const Context&  ctx,
+    Renderer(const Context&   ctx,
              const Swapchain& swapchain,
              const Pipeline&  pipeline);
     ~Renderer();
@@ -25,9 +31,20 @@ public:
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    // Draw one frame.  Both mvp and model are pushed to the vertex shader
-    // so the fragment shader can compute world-space normals.
-    void drawFrame(const glm::mat4& mvp, const glm::mat4& model, const Mesh& mesh);
+    // Acquire the next swapchain image and begin the render pass.
+    // Returns false if the swapchain is out of date (resize) — skip the frame.
+    bool beginFrame();
+
+    // Record one mesh draw.  sunDir is the normalised world-space direction
+    // toward the sun for this body (computed by the caller per body).
+    // Must be called between beginFrame() and endFrame().
+    void draw(const glm::mat4& mvp,
+              const glm::mat4& model,
+              const glm::vec3& sunDir,
+              const Mesh&      mesh);
+
+    // End the render pass, submit, and present.
+    void endFrame();
 
     void setWireframe(bool enabled) { m_wireframe = enabled; }
     bool wireframe()          const { return m_wireframe; }
@@ -47,8 +64,9 @@ private:
     std::array<vk::Semaphore, kMaxFramesInFlight> m_renderFinished;
     std::array<vk::Fence,     kMaxFramesInFlight> m_inFlight;
 
-    int  m_currentFrame = 0;
-    bool m_wireframe    = false;
+    int      m_currentFrame     = 0;
+    uint32_t m_activeImageIndex = 0;
+    bool     m_wireframe        = false;
 };
 
 } // namespace apeiron::render

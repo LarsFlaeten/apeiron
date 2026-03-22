@@ -1,0 +1,40 @@
+# Apeiron scenario — inner solar system
+#
+# Kernel load order matters: LSK first, then PCK, then SPK.
+
+# Leap-second kernel — required for UTC ↔ ET conversion
+[[kernels]]
+path = "/home/lars/workspace/orbit/bin/spice/lsk/naif0012.tls"
+
+# Planetary constants (radii, rotation, GM)
+[[kernels]]
+path = "/home/lars/workspace/orbit/bin/spice/pck/pck00010.tpc"
+
+# DE430 planetary + lunar ephemeris
+[[kernels]]
+path = "/home/lars/workspace/orbit/bin/spice/spk/de430.bsp"
+
+# ---------------------------------------------------------------------------
+
+[observer]
+body   = "EARTH"       # floating origin tracks Earth; camera placed near it
+target = "SUN"         # look direction
+frame  = "J2000"
+
+[time]
+epoch  = "2025-06-21T12:00:00"   # northern summer solstice
+
+# ---------------------------------------------------------------------------
+# Bodies to render — order determines draw order (no z-sorting yet)
+
+[[bodies]]
+naif  = "SUN"
+color = [1.0, 0.92, 0.23]
+
+[[bodies]]
+naif  = "EARTH"
+color = [0.25, 0.52, 0.95]
+
+[[bodies]]
+naif  = "MOON"
+color = [0.67, 0.67, 0.67]

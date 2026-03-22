@@ -5,7 +5,6 @@
 #include "apeiron/render/Mesh.h"
 
 #include <glm/glm.hpp>
-
 #include <stdexcept>
 
 namespace apeiron::render {
@@ -18,8 +17,6 @@ Renderer::Renderer(const Context&  ctx,
     auto device = ctx.device();
 
     // ----- Framebuffers -----
-    // One framebuffer per swapchain image, each wrapping that image's view
-    // and the render pass that clears and writes to it.
     for (auto view : swapchain.imageViews()) {
         std::array<vk::ImageView, 2> attachments{view, swapchain.depthImageView()};
         vk::FramebufferCreateInfo fbInfo{};
@@ -45,9 +42,6 @@ Renderer::Renderer(const Context&  ctx,
     m_commandBuffers = device.allocateCommandBuffers(allocInfo);
 
     // ----- Per-frame sync objects -----
-    // imageAvailable: signalled by the driver when an image is ready to render into.
-    // renderFinished: signalled by the queue when the command buffer has finished.
-    // inFlight:       CPU fence; we wait on it before reusing this frame's resources.
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
         m_imageAvailable[i] = device.createSemaphore({});
         m_renderFinished[i] = device.createSemaphore({});
@@ -70,24 +64,22 @@ Renderer::~Renderer()
         device.destroyFramebuffer(fb);
 }
 
-void Renderer::drawFrame(const glm::mat4& mvp, const glm::mat4& model, const Mesh& mesh)
+bool Renderer::beginFrame()
 {
     auto device = m_ctx.device();
     int  frame  = m_currentFrame;
 
-    // Wait for the previous use of this frame slot to finish on the GPU.
     (void)device.waitForFences(m_inFlight[frame], vk::True, UINT64_MAX);
 
-    // Acquire the next swapchain image.
     auto [acqResult, imageIndex] = device.acquireNextImageKHR(
         m_swapchain.handle(), UINT64_MAX, m_imageAvailable[frame], nullptr);
 
     if (acqResult == vk::Result::eErrorOutOfDateKHR)
-        return; // Window resized — swapchain rebuild goes here later.
+        return false;
 
     device.resetFences(m_inFlight[frame]);
+    m_activeImageIndex = imageIndex;
 
-    // ----- Record -----
     auto& cmd = m_commandBuffers[frame];
     cmd.reset();
     cmd.begin(vk::CommandBufferBeginInfo{});
@@ -98,7 +90,7 @@ void Renderer::drawFrame(const glm::mat4& mvp, const glm::mat4& model, const Mes
 
     vk::RenderPassBeginInfo rpBegin{};
     rpBegin.setRenderPass (m_pipeline.renderPass())
-           .setFramebuffer(m_framebuffers[imageIndex])
+           .setFramebuffer(m_framebuffers[m_activeImageIndex])
            .setRenderArea ({vk::Offset2D{0, 0}, m_swapchain.extent()})
            .setClearValues(clearValues);
 
@@ -114,16 +106,48 @@ void Renderer::drawFrame(const glm::mat4& mvp, const glm::mat4& model, const Mes
     cmd.setViewport(0, vp);
     cmd.setScissor (0, vk::Rect2D{{0, 0}, m_swapchain.extent()});
 
-    struct PushConstants { glm::mat4 mvp; glm::mat4 model; } pc{mvp, model};
-    cmd.pushConstants(m_pipeline.layout(),
-                      vk::ShaderStageFlagBits::eVertex,
-                      0, sizeof(PushConstants), &pc);
+    return true;
+}
 
+void Renderer::draw(const glm::mat4& mvp, const glm::mat4& model,
+                    const glm::vec3& sunDir, const Mesh& mesh)
+{
+    // Push constant layout (128 bytes total, matches triangle.vert/.frag):
+    //   offset  0: mat4 mvp          (64 bytes)
+    //   offset 64: mat3 normalMat    (48 bytes — 3 columns, each padded to vec4)
+    //   offset112: vec3 sunDir       (12 bytes + 4 pad)
+    struct PushConstants {
+        glm::mat4 mvp;
+        glm::vec4 normalCol[3]; // mat3 columns, each padded to vec4
+        glm::vec3 sunDir;
+        float     _pad = 0.0f;
+    };
+    static_assert(sizeof(PushConstants) == 128);
+
+    glm::mat3 nm = glm::mat3(model);
+    PushConstants pc{};
+    pc.mvp           = mvp;
+    pc.normalCol[0]  = glm::vec4(nm[0], 0.0f);
+    pc.normalCol[1]  = glm::vec4(nm[1], 0.0f);
+    pc.normalCol[2]  = glm::vec4(nm[2], 0.0f);
+    pc.sunDir        = sunDir;
+
+    auto& cmd = m_commandBuffers[m_currentFrame];
+    cmd.pushConstants(m_pipeline.layout(),
+                      vk::ShaderStageFlagBits::eVertex |
+                      vk::ShaderStageFlagBits::eFragment,
+                      0, sizeof(PushConstants), &pc);
     mesh.draw(cmd);
+}
+
+void Renderer::endFrame()
+{
+    int  frame = m_currentFrame;
+    auto& cmd  = m_commandBuffers[frame];
+
     cmd.endRenderPass();
     cmd.end();
 
-    // ----- Submit -----
     vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     vk::SubmitInfo submitInfo{};
     submitInfo.setWaitSemaphores  (m_imageAvailable[frame])
@@ -132,12 +156,11 @@ void Renderer::drawFrame(const glm::mat4& mvp, const glm::mat4& model, const Mes
               .setSignalSemaphores(m_renderFinished[frame]);
     m_ctx.graphicsQueue().submit(submitInfo, m_inFlight[frame]);
 
-    // ----- Present -----
     vk::SwapchainKHR   swapchain = m_swapchain.handle();
     vk::PresentInfoKHR presentInfo{};
     presentInfo.setWaitSemaphores(m_renderFinished[frame])
                .setSwapchains   (swapchain)
-               .setImageIndices (imageIndex);
+               .setImageIndices (m_activeImageIndex);
     (void)m_ctx.presentQueue().presentKHR(presentInfo);
 
     m_currentFrame = (m_currentFrame + 1) % kMaxFramesInFlight;

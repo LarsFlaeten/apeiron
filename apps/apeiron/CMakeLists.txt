@@ -26,7 +26,12 @@ add_custom_target(apeiron_shaders DEPENDS ${SHADER_SPIRV})
 # ---------------------------------------------------------------------------
 # Executable
 # ---------------------------------------------------------------------------
-add_executable(apeiron main.cpp)
+find_package(tomlplusplus CONFIG REQUIRED)
+
+add_executable(apeiron
+    main.cpp
+    ScenarioConfig.cpp
+)
 
 add_dependencies(apeiron apeiron_shaders)
 
@@ -34,13 +39,14 @@ target_link_libraries(apeiron
     PRIVATE
         universe
         render
+        tomlplusplus::tomlplusplus
 )
 
-# Bake the absolute shader directory path into the binary so the renderer
-# can find compiled SPIR-V regardless of the working directory.
+# Bake absolute paths into the binary (avoids working-directory sensitivity).
 target_compile_definitions(apeiron
     PRIVATE
         APEIRON_SHADER_DIR="${SHADER_OUT_DIR}"
+        APEIRON_SCENARIO_FILE="${CMAKE_CURRENT_SOURCE_DIR}/data/scenario.toml"
 )
 
 target_compile_features(apeiron PRIVATE cxx_std_23)

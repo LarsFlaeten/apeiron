@@ -6,6 +6,7 @@
         "catch2",
         "glfw3",
         "vk-bootstrap",
-        "vulkan-memory-allocator"
+        "vulkan-memory-allocator",
+        "tomlplusplus"
     ]
 }

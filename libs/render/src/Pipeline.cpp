@@ -180,8 +180,11 @@ Pipeline::Pipeline(const Context&               ctx,
     // ----- Layout (shared by both pipelines) -----
     // Two mat4s: mvp (0–63) + model (64–127).  128 bytes is the guaranteed
     // minimum push-constant space across all Vulkan implementations.
+    // 128 bytes: mat4 mvp + mat3 normalMat (as 3×vec4) + vec3 sunDir (+ pad).
+    // sunDir is read in the fragment shader, so both stages need access.
     vk::PushConstantRange pcRange{};
-    pcRange.setStageFlags(vk::ShaderStageFlagBits::eVertex)
+    pcRange.setStageFlags(vk::ShaderStageFlagBits::eVertex |
+                          vk::ShaderStageFlagBits::eFragment)
            .setOffset(0)
            .setSize(sizeof(glm::mat4) * 2);
 

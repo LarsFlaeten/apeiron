@@ -5,6 +5,8 @@ add_library(universe STATIC
     src/SceneNode.cpp
     src/CelestialBody.cpp
     src/Scene.cpp
+    src/BodyProperties.cpp
+    src/Observer.cpp
 )
 
 target_include_directories(universe
