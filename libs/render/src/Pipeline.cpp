@@ -178,10 +178,12 @@ Pipeline::Pipeline(const Context&               ctx,
     m_renderPass = device.createRenderPass(rpInfo);
 
     // ----- Layout (shared by both pipelines) -----
+    // Two mat4s: mvp (0–63) + model (64–127).  128 bytes is the guaranteed
+    // minimum push-constant space across all Vulkan implementations.
     vk::PushConstantRange pcRange{};
     pcRange.setStageFlags(vk::ShaderStageFlagBits::eVertex)
            .setOffset(0)
-           .setSize(sizeof(glm::mat4));
+           .setSize(sizeof(glm::mat4) * 2);
 
     vk::PipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.setPushConstantRanges(pcRange);

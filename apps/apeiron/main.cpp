@@ -3,6 +3,7 @@
 
 #include "apeiron/render/Camera.h"
 #include "apeiron/render/Context.h"
+#include "apeiron/render/Geometry.h"
 #include "apeiron/render/GpuAllocator.h"
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Pipeline.h"
@@ -36,7 +37,7 @@ int main()
     constexpr uint32_t kHeight = 720;
 
     GLFWwindow* window = glfwCreateWindow(
-        kWidth, kHeight, "Apeiron — spinning triangle", nullptr, nullptr);
+        kWidth, kHeight, "Apeiron — lit sphere", nullptr, nullptr);
     if (!window) {
         std::cerr << "Window creation failed\n";
         glfwTerminate();
@@ -51,30 +52,24 @@ int main()
         apeiron::render::Swapchain    swapchain(ctx, allocator, kWidth, kHeight);
         apeiron::render::Pipeline     pipeline (ctx, swapchain, APEIRON_SHADER_DIR);
 
-        // Camera: 2 units back along +Z, looking at the origin.
+        // Camera: 3 units back along +Z, looking at the origin.
         apeiron::render::Camera camera(
-            glm::vec3(0.0f, 0.0f, 2.0f),   // position
-            glm::vec3(0.0f, 0.0f, 0.0f),   // target
-            glm::vec3(0.0f, 1.0f, 0.0f),   // up
-            45.0f,                           // fov
+            glm::vec3(0.0f, 0.0f, 3.0f),
+            glm::vec3(0.0f, 0.0f, 0.0f),
+            glm::vec3(0.0f, 1.0f, 0.0f),
+            45.0f,
             static_cast<float>(kWidth) / static_cast<float>(kHeight),
-            0.1f, 100.0f                    // near / far
+            0.1f, 100.0f
         );
 
-        // Mesh declared BEFORE Renderer — ensures Renderer::~Renderer (waitIdle)
-        // runs before the vertex/index buffers are freed.
-        using V = apeiron::render::Vertex;
-        std::vector<V> vertices = {
-            {{ 0.0f, -0.5f, 0.0f}, {1.0f,  0.15f, 0.15f}},
-            {{ 0.5f,  0.5f, 0.0f}, {0.15f, 1.0f,  0.15f}},
-            {{-0.5f,  0.5f, 0.0f}, {0.15f, 0.15f, 1.0f }},
-        };
-        std::vector<uint32_t> indices = {0, 1, 2};
-        apeiron::render::Mesh     mesh    (allocator, vertices, indices);
+        // Earth-like blue-green sphere, 1 m radius, 64 rings × 64 sectors.
+        auto [verts, idxs] = apeiron::render::Geometry::makeSphere(
+            1.0f, 64, 64, glm::vec3(0.25f, 0.52f, 0.95f));
+        apeiron::render::Mesh     mesh    (allocator, verts, idxs);
         apeiron::render::Renderer renderer(ctx, swapchain, pipeline);
 
         // ----- Main loop -----
-        constexpr float kRadiansPerSecond = 1.0f;
+        constexpr float kRadiansPerSecond = 0.4f;
         auto startTime = std::chrono::steady_clock::now();
 
         glfwSetWindowUserPointer(window, &renderer);
@@ -93,13 +88,12 @@ int main()
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
 
-            float elapsed = std::chrono::duration<float>(
+            float     elapsed = std::chrono::duration<float>(
                 std::chrono::steady_clock::now() - startTime).count();
-            float angle = elapsed * kRadiansPerSecond;
-
-            glm::mat4 model = glm::rotate(glm::mat4(1.0f), angle,
-                                          glm::vec3(0.0f, 0.0f, 1.0f));
-            renderer.drawFrame(vp * model, mesh);
+            glm::mat4 model   = glm::rotate(glm::mat4(1.0f),
+                                            elapsed * kRadiansPerSecond,
+                                            glm::vec3(0.0f, 1.0f, 0.0f));
+            renderer.drawFrame(vp * model, model, mesh);
         }
     }
     catch (const std::exception& e) {

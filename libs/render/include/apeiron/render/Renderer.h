@@ -25,8 +25,9 @@ public:
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    // Draw one frame.  mvp (proj * view * model) is pushed to the vertex shader.
-    void drawFrame(const glm::mat4& mvp, const Mesh& mesh);
+    // Draw one frame.  Both mvp and model are pushed to the vertex shader
+    // so the fragment shader can compute world-space normals.
+    void drawFrame(const glm::mat4& mvp, const glm::mat4& model, const Mesh& mesh);
 
     void setWireframe(bool enabled) { m_wireframe = enabled; }
     bool wireframe()          const { return m_wireframe; }

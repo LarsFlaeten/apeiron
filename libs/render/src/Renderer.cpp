@@ -70,7 +70,7 @@ Renderer::~Renderer()
         device.destroyFramebuffer(fb);
 }
 
-void Renderer::drawFrame(const glm::mat4& mvp, const Mesh& mesh)
+void Renderer::drawFrame(const glm::mat4& mvp, const glm::mat4& model, const Mesh& mesh)
 {
     auto device = m_ctx.device();
     int  frame  = m_currentFrame;
@@ -114,9 +114,10 @@ void Renderer::drawFrame(const glm::mat4& mvp, const Mesh& mesh)
     cmd.setViewport(0, vp);
     cmd.setScissor (0, vk::Rect2D{{0, 0}, m_swapchain.extent()});
 
+    struct PushConstants { glm::mat4 mvp; glm::mat4 model; } pc{mvp, model};
     cmd.pushConstants(m_pipeline.layout(),
                       vk::ShaderStageFlagBits::eVertex,
-                      0, sizeof(glm::mat4), &mvp);
+                      0, sizeof(PushConstants), &pc);
 
     mesh.draw(cmd);
     cmd.endRenderPass();

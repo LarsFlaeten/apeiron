@@ -19,6 +19,7 @@ add_library(render STATIC
     src/Mesh.cpp
     src/Camera.cpp
     src/Image.cpp
+    src/Geometry.cpp
 )
 
 target_include_directories(render
