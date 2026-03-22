@@ -27,9 +27,11 @@ makeSphere(float radius, uint32_t rings, uint32_t sectors, glm::vec3 color)
             float cosPhi = std::cos(phi);
 
             // Unit direction from centre.
+            // Poles along +Z/-Z to match the IAU body-fixed frame convention
+            // (Z = north pole), so SPICE orientation matrices apply correctly.
             glm::vec3 n{ sinTheta * cosPhi,
-                         cosTheta,
-                         sinTheta * sinPhi };
+                         sinTheta * sinPhi,
+                         cosTheta };
             vertices.push_back({ n * radius, n, color });
         }
     }

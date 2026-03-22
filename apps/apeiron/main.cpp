@@ -118,17 +118,11 @@ int main()
                 allocator, verts, idxs));
         }
 
-        // Camera: above the ecliptic north pole (ECLIPJ2000 +Z) looking down at Earth.
-        // In this frame the Moon's orbit is roughly in the X-Y plane, so it sweeps
-        // left/right across the screen.  500 000 km gives a frustum half-width of
-        // ~207 000 km at Earth's distance — enough to keep the Moon (384 400 km out)
-        // in frame whenever it is not directly behind Earth.
-        // "up" = +Y in ECLIPJ2000 = toward ecliptic longitude 90° (summer solstice).
-        // 1 000 000 km gives frustum half-width ~414 000 km at Earth's distance,
-        // which keeps the Moon (384 400 km out) in frame at first-quarter phase.
-        constexpr float kCamDistKm = 1'000'000.0f;
+        // Camera above ecliptic north pole, looking down at Earth.
+        // + / - keys zoom proportionally (see main loop).
+        float camDistKm = 1'000'000.0f;
         apeiron::render::Camera camera(
-            glm::vec3(0.0f, 0.0f, kCamDistKm),
+            glm::vec3(0.0f, 0.0f, camDistKm),
             glm::vec3(0.0f, 0.0f, 0.0f),
             glm::vec3(0.0f, 1.0f, 0.0f),
             45.0f,
@@ -155,13 +149,29 @@ int main()
         // Main loop
         // =================================================================
         constexpr double kSecondsPerSimSecond = 3600.0; // 1 h per real second
-        auto wallStart = std::chrono::steady_clock::now();
+        // Zoom: e^(kZoomRate * dt) change per second — ~4.5× per second, feels
+        // proportional at any distance.
+        constexpr float kZoomRate = 1.5f;
+
+        auto wallStart     = std::chrono::steady_clock::now();
+        auto prevFrameTime = wallStart;
 
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
 
-            double wallElapsed = std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - wallStart).count();
+            auto  now      = std::chrono::steady_clock::now();
+            float frameDt  = std::chrono::duration<float>(now - prevFrameTime).count();
+            prevFrameTime  = now;
+
+            // Zoom: + key moves closer, - key moves further. Delta is proportional
+            // to current distance so the speed feels consistent across scales.
+            if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS)
+                camDistKm *= std::exp(-kZoomRate * frameDt);
+            if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS)
+                camDistKm *= std::exp( kZoomRate * frameDt);
+            camera.setPosition(glm::vec3(0.0f, 0.0f, camDistKm));
+
+            double wallElapsed = std::chrono::duration<double>(now - wallStart).count();
             auto currentEt = et + astro::TimeDelta(wallElapsed * kSecondsPerSimSecond);
 
             observerPos = observer.worldPosition(currentEt);
@@ -184,13 +194,16 @@ int main()
                 glm::vec3 renderPos = scene.origin().toRenderSpace(
                     bi.node->worldPosition());
 
+                // T * R * S: translate to body position, rotate by IAU orientation,
+                // then scale to physical radius.
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), renderPos);
-                model = glm::scale(model, glm::vec3(bi.radiusKm * bi.renderScale));
+                model = model * glm::mat4(bi.node->orientation());
+                model = glm::scale(model, glm::vec3(bi.radiusKm));
 
-                // Per-body sun direction: from this body toward the sun.
+                // Per-body sun direction.
                 glm::vec3 sunDir = (sunIndex >= 0 && static_cast<int>(i) != sunIndex)
                     ? glm::normalize(sunRenderPos - renderPos)
-                    : glm::vec3(0.0f, 1.0f, 0.0f); // sun lights itself uniformly
+                    : glm::vec3(0.0f, 1.0f, 0.0f);
 
                 renderer.draw(vp * model, model, sunDir, *meshes[i]);
             }

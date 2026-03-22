@@ -21,9 +21,11 @@ public:
 
     const std::string& name()          const;
     const glm::dvec3&  worldPosition() const;
+    const glm::mat3&   orientation()   const; // body-fixed → inertial rotation
 
     // Set position explicitly (e.g. for spacecraft or static markers).
-    void setPosition(const glm::dvec3& pos);
+    void setPosition   (const glm::dvec3& pos);
+    void setOrientation(const glm::mat3&  rot);
 
     // Convert world position to a 32-bit render offset via the floating origin.
     glm::vec3 renderPosition(const FloatingOrigin& origin) const;
@@ -35,6 +37,7 @@ public:
 private:
     std::string m_name;
     glm::dvec3  m_worldPosition{0.0, 0.0, 0.0};
+    glm::mat3   m_orientation  {1.0f};          // identity = no tilt, no rotation
 };
 
 } // namespace apeiron::universe
