@@ -3,6 +3,8 @@
     "version": "0.1.0",
     "dependencies": [
         "glm",
-        "catch2"
+        "catch2",
+        "glfw3",
+        "vk-bootstrap"
     ]
 }
