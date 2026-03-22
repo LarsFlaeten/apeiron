@@ -6,3 +6,6 @@ CMakeUserPresets.json
 
 # SPICE kernel binaries — too large for git, use scripts/fetch_kernels.sh
 data/kernels/spk/*.bsp
+
+data/textures/*
+
