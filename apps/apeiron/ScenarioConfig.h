@@ -7,8 +7,9 @@
 
 // Parsed contents of a scenario TOML file.
 struct BodyConfig {
-    std::string naif;   // NAIF body name, e.g. "EARTH"
-    glm::vec3   color;  // RGB [0,1] for rendering
+    std::string naif;         // NAIF body name, e.g. "EARTH"
+    glm::vec3   color;        // RGB [0,1] for rendering
+    float       renderScale;  // visual radius multiplier (physical radius × renderScale)
 };
 
 struct ScenarioConfig {

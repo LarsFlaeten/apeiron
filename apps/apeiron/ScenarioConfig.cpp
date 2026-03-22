@@ -45,6 +45,7 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
             } else {
                 bc.color = {1.0f, 1.0f, 1.0f};
             }
+            bc.renderScale = (*t)["render_scale"].value_or(1.0f);
             cfg.bodies.push_back(bc);
         }
     }

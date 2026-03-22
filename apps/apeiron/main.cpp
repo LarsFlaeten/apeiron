@@ -72,6 +72,7 @@ int main()
         struct BodyInfo {
             apeiron::universe::CelestialBody* node;
             float     radiusKm;
+            float     renderScale; // visual radius = radiusKm * renderScale
             glm::vec3 color;
         };
         std::vector<BodyInfo> bodyInfos;
@@ -84,7 +85,8 @@ int main()
             auto  props = apeiron::universe::BodyProperties::queryFromSpice(bc.naif);
             auto& node  = scene.addBody(bc.naif, bc.naif, props.radiusKm,
                                         "SOLAR SYSTEM BARYCENTER", cfg.frame);
-            bodyInfos.push_back({ &node, static_cast<float>(props.radiusKm), bc.color });
+            bodyInfos.push_back({ &node, static_cast<float>(props.radiusKm),
+                                   bc.renderScale, bc.color });
             if (bc.naif == "SUN") sunIndex = i;
         }
 
@@ -122,7 +124,9 @@ int main()
         // ~207 000 km at Earth's distance — enough to keep the Moon (384 400 km out)
         // in frame whenever it is not directly behind Earth.
         // "up" = +Y in ECLIPJ2000 = toward ecliptic longitude 90° (summer solstice).
-        constexpr float kCamDistKm = 500'000.0f;
+        // 1 000 000 km gives frustum half-width ~414 000 km at Earth's distance,
+        // which keeps the Moon (384 400 km out) in frame at first-quarter phase.
+        constexpr float kCamDistKm = 1'000'000.0f;
         apeiron::render::Camera camera(
             glm::vec3(0.0f, 0.0f, kCamDistKm),
             glm::vec3(0.0f, 0.0f, 0.0f),
@@ -181,7 +185,7 @@ int main()
                     bi.node->worldPosition());
 
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), renderPos);
-                model           = glm::scale(model, glm::vec3(bi.radiusKm));
+                model = glm::scale(model, glm::vec3(bi.radiusKm * bi.renderScale));
 
                 // Per-body sun direction: from this body toward the sun.
                 glm::vec3 sunDir = (sunIndex >= 0 && static_cast<int>(i) != sunIndex)

@@ -1,40 +1,46 @@
-# Apeiron scenario — inner solar system
+# Apeiron scenario — Earth-Moon system
 #
 # Kernel load order matters: LSK first, then PCK, then SPK.
 
-# Leap-second kernel — required for UTC ↔ ET conversion
 [[kernels]]
 path = "/home/lars/workspace/orbit/bin/spice/lsk/naif0012.tls"
 
-# Planetary constants (radii, rotation, GM)
 [[kernels]]
 path = "/home/lars/workspace/orbit/bin/spice/pck/pck00010.tpc"
 
-# DE430 planetary + lunar ephemeris
 [[kernels]]
 path = "/home/lars/workspace/orbit/bin/spice/spk/de430.bsp"
 
 # ---------------------------------------------------------------------------
 
 [observer]
-body   = "EARTH"        # floating origin tracks Earth; camera placed near it
-target = "SUN"          # look direction
+body   = "EARTH"
+target = "SUN"
 frame  = "ECLIPJ2000"   # ecliptic inertial: X=vernal equinox, Y=90° lon, Z=ecliptic north
 
 [time]
-epoch  = "2025-06-21T12:00:00"   # northern summer solstice
+# First quarter moon 2025 — Moon is ~90° from Sun, in the +X direction from Earth.
+# Camera looks from ecliptic north (+Z), so Moon appears to the right of Earth on screen.
+epoch  = "2025-07-03T12:00:00"
 
 # ---------------------------------------------------------------------------
-# Bodies to render — order determines draw order (no z-sorting yet)
+# render_scale: visual radius multiplier.
+# Physical radius is used for positions; render_scale only affects the drawn sphere.
+# The real Earth-Moon distance is ~60 Earth radii — at true scale both bodies
+# are sub-pixel from any distance that shows the whole orbit.  10× is a
+# common compromise used by space visualisers.
 
 [[bodies]]
-naif  = "SUN"
-color = [1.0, 0.92, 0.23]
+naif         = "SUN"
+color        = [1.0, 0.92, 0.23]
+render_scale = 10.0
 
 [[bodies]]
-naif  = "EARTH"
-color = [0.25, 0.52, 0.95]
+naif         = "EARTH"
+color        = [0.25, 0.52, 0.95]
+render_scale = 10.0
 
 [[bodies]]
-naif  = "MOON"
-color = [0.67, 0.67, 0.67]
+naif         = "MOON"
+color        = [0.67, 0.67, 0.67]
+render_scale = 10.0
