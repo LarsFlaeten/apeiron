@@ -7,11 +7,12 @@
 
 namespace apeiron::render {
 
-// Interleaved vertex layout: position (vec3), normal (vec3), color (vec3).
+// Interleaved vertex layout: position (vec3), normal (vec3), color (vec3), uv (vec2).
 struct Vertex {
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec3 color;
+    glm::vec2 uv;
 
     static vk::VertexInputBindingDescription bindingDescription()
     {
@@ -22,10 +23,10 @@ struct Vertex {
         return desc;
     }
 
-    // location 0 → position,  location 1 → normal,  location 2 → color.
-    static std::array<vk::VertexInputAttributeDescription, 3> attributeDescriptions()
+    // location 0 → position, 1 → normal, 2 → color, 3 → uv.
+    static std::array<vk::VertexInputAttributeDescription, 4> attributeDescriptions()
     {
-        std::array<vk::VertexInputAttributeDescription, 3> attrs{};
+        std::array<vk::VertexInputAttributeDescription, 4> attrs{};
         attrs[0].setBinding (0).setLocation(0)
                 .setFormat  (vk::Format::eR32G32B32Sfloat)
                 .setOffset  (offsetof(Vertex, position));
@@ -35,6 +36,9 @@ struct Vertex {
         attrs[2].setBinding (0).setLocation(2)
                 .setFormat  (vk::Format::eR32G32B32Sfloat)
                 .setOffset  (offsetof(Vertex, color));
+        attrs[3].setBinding (0).setLocation(3)
+                .setFormat  (vk::Format::eR32G32Sfloat)
+                .setOffset  (offsetof(Vertex, uv));
         return attrs;
     }
 };

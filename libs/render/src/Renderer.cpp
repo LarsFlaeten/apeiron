@@ -41,6 +41,15 @@ Renderer::Renderer(const Context&  ctx,
              .setCommandBufferCount(kMaxFramesInFlight);
     m_commandBuffers = device.allocateCommandBuffers(allocInfo);
 
+    // ----- Descriptor pool for body textures (capacity for up to 64 bodies) -----
+    vk::DescriptorPoolSize poolSize{};
+    poolSize.setType           (vk::DescriptorType::eCombinedImageSampler)
+            .setDescriptorCount(64);
+    vk::DescriptorPoolCreateInfo dpInfo{};
+    dpInfo.setMaxSets  (64)
+          .setPoolSizes(poolSize);
+    m_descriptorPool = device.createDescriptorPool(dpInfo);
+
     // ----- Per-frame sync objects -----
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
         m_imageAvailable[i] = device.createSemaphore({});
@@ -59,7 +68,8 @@ Renderer::~Renderer()
         device.destroySemaphore(m_renderFinished[i]);
         device.destroyFence    (m_inFlight[i]);
     }
-    device.destroyCommandPool(m_commandPool);
+    device.destroyDescriptorPool(m_descriptorPool);
+    device.destroyCommandPool   (m_commandPool);
     for (auto fb : m_framebuffers)
         device.destroyFramebuffer(fb);
 }
@@ -110,7 +120,8 @@ bool Renderer::beginFrame()
 }
 
 void Renderer::draw(const glm::mat4& mvp, const glm::mat4& model,
-                    const glm::vec3& sunDir, const Mesh& mesh)
+                    const glm::vec3& sunDir, vk::DescriptorSet descriptorSet,
+                    const Mesh& mesh)
 {
     // Push constant layout (128 bytes total, matches triangle.vert/.frag):
     //   offset  0: mat4 mvp          (64 bytes)
@@ -133,11 +144,37 @@ void Renderer::draw(const glm::mat4& mvp, const glm::mat4& model,
     pc.sunDir        = sunDir;
 
     auto& cmd = m_commandBuffers[m_currentFrame];
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                           m_pipeline.layout(), 0, descriptorSet, {});
     cmd.pushConstants(m_pipeline.layout(),
                       vk::ShaderStageFlagBits::eVertex |
                       vk::ShaderStageFlagBits::eFragment,
                       0, sizeof(PushConstants), &pc);
     mesh.draw(cmd);
+}
+
+vk::DescriptorSet Renderer::allocateDescriptorSet(vk::ImageView view,
+                                                   vk::Sampler   sampler)
+{
+    auto layout = m_pipeline.descriptorSetLayout();
+    vk::DescriptorSetAllocateInfo allocInfo{};
+    allocInfo.setDescriptorPool(m_descriptorPool)
+             .setSetLayouts    (layout);
+    auto sets = m_ctx.device().allocateDescriptorSets(allocInfo);
+
+    vk::DescriptorImageInfo imgInfo{};
+    imgInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+           .setImageView  (view)
+           .setSampler    (sampler);
+
+    vk::WriteDescriptorSet write{};
+    write.setDstSet         (sets[0])
+         .setDstBinding     (0)
+         .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
+         .setImageInfo      (imgInfo);
+    m_ctx.device().updateDescriptorSets(write, {});
+
+    return sets[0];
 }
 
 void Renderer::endFrame()

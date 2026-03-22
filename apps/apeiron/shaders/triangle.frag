@@ -2,7 +2,10 @@
 
 layout(location = 0) in  vec3 fragNormal;
 layout(location = 1) in  vec3 fragColor;
+layout(location = 2) in  vec2 fragUV;
 layout(location = 0) out vec4 outColor;
+
+layout(set = 0, binding = 0) uniform sampler2D diffuseTex;
 
 layout(push_constant) uniform PC {
     mat4 mvp;
@@ -23,6 +26,9 @@ void main()
     // Phong diffuse — sun direction comes from the CPU each draw call.
     vec3  n       = normalize(fragNormal);
     float diffuse = max(dot(n, normalize(pc.sunDir)), 0.0);
-    vec3  color   = fragColor * (0.08 + diffuse);
+
+    // Sample diffuse texture; vertex color acts as a tint.
+    vec3 texColor = texture(diffuseTex, fragUV).rgb;
+    vec3 color    = texColor * fragColor * (0.08 + diffuse);
     outColor = vec4(color, 1.0);
 }

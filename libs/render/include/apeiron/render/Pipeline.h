@@ -21,8 +21,9 @@ public:
     Pipeline(const Pipeline&)            = delete;
     Pipeline& operator=(const Pipeline&) = delete;
 
-    vk::RenderPass     renderPass()              const { return m_renderPass; }
-    vk::PipelineLayout layout()                  const { return m_layout;     }
+    vk::RenderPass          renderPass()           const { return m_renderPass;          }
+    vk::PipelineLayout      layout()               const { return m_layout;               }
+    vk::DescriptorSetLayout descriptorSetLayout()  const { return m_descriptorSetLayout;  }
 
     // Select the active pipeline variant.
     vk::Pipeline handle(bool wireframe = false) const
@@ -36,11 +37,12 @@ private:
                                    vk::ShaderModule           vert,
                                    vk::ShaderModule           frag);
 
-    const Context&     m_ctx;
-    vk::RenderPass     m_renderPass;
-    vk::PipelineLayout m_layout;
-    vk::Pipeline       m_fillPipeline;
-    vk::Pipeline       m_wireframePipeline;
+    const Context&          m_ctx;
+    vk::DescriptorSetLayout m_descriptorSetLayout;
+    vk::RenderPass          m_renderPass;
+    vk::PipelineLayout      m_layout;
+    vk::Pipeline            m_fillPipeline;
+    vk::Pipeline            m_wireframePipeline;
 };
 
 } // namespace apeiron::render

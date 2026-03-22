@@ -8,8 +8,8 @@
 // Parsed contents of a scenario TOML file.
 struct BodyConfig {
     std::string naif;         // NAIF body name, e.g. "EARTH"
-    glm::vec3   color;        // RGB [0,1] for rendering
-    float       renderScale;  // visual radius multiplier (physical radius × renderScale)
+    glm::vec3   color;        // RGB [0,1] tint (multiplied on top of the texture)
+    std::string texturePath;  // path to equirectangular texture, empty = none
 };
 
 struct ScenarioConfig {

@@ -9,6 +9,7 @@
 #include "apeiron/render/Pipeline.h"
 #include "apeiron/render/Renderer.h"
 #include "apeiron/render/Swapchain.h"
+#include "apeiron/render/Texture.h"
 #include "apeiron/render/Vertex.h"
 
 #include "apeiron/universe/BodyProperties.h"
@@ -72,8 +73,8 @@ int main()
         struct BodyInfo {
             apeiron::universe::CelestialBody* node;
             float     radiusKm;
-            float     renderScale; // visual radius = radiusKm * renderScale
             glm::vec3 color;
+            std::string texturePath;
         };
         std::vector<BodyInfo> bodyInfos;
 
@@ -86,7 +87,7 @@ int main()
             auto& node  = scene.addBody(bc.naif, bc.naif, props.radiusKm,
                                         "SOLAR SYSTEM BARYCENTER", cfg.frame);
             bodyInfos.push_back({ &node, static_cast<float>(props.radiusKm),
-                                   bc.renderScale, bc.color });
+                                   bc.color, bc.texturePath });
             if (bc.naif == "SUN") sunIndex = i;
         }
 
@@ -109,13 +110,19 @@ int main()
         apeiron::render::Swapchain    swapchain(ctx, allocator, kWidth, kHeight);
         apeiron::render::Pipeline     pipeline (ctx, swapchain, APEIRON_SHADER_DIR);
 
-        // Meshes declared after allocator — destroyed before allocator.
+        // Meshes and textures declared after allocator — destroyed before allocator.
+        // Textures declared before renderer so they outlive it.
         std::vector<std::unique_ptr<apeiron::render::Mesh>> meshes;
+        std::vector<apeiron::render::Texture> textures;
         for (auto& bi : bodyInfos) {
             auto [verts, idxs] = apeiron::render::Geometry::makeSphere(
                 1.0f, 64, 64, bi.color);
             meshes.push_back(std::make_unique<apeiron::render::Mesh>(
                 allocator, verts, idxs));
+            if (!bi.texturePath.empty())
+                textures.emplace_back(ctx, allocator, bi.texturePath);
+            else
+                textures.push_back(apeiron::render::Texture::makeWhite(ctx, allocator));
         }
 
         // Camera above ecliptic north pole, looking down at Earth.
@@ -132,6 +139,12 @@ int main()
 
         // Renderer last — its destructor calls waitIdle before anything else frees.
         apeiron::render::Renderer renderer(ctx, swapchain, pipeline);
+
+        // Descriptor sets — allocated from Renderer's pool, freed with it.
+        std::vector<vk::DescriptorSet> descriptorSets;
+        for (auto& tex : textures)
+            descriptorSets.push_back(
+                renderer.allocateDescriptorSet(tex.imageView(), tex.sampler()));
 
         glfwSetWindowUserPointer(window, &renderer);
         glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int) {
@@ -205,7 +218,8 @@ int main()
                     ? glm::normalize(sunRenderPos - renderPos)
                     : glm::vec3(0.0f, 1.0f, 0.0f);
 
-                renderer.draw(vp * model, model, sunDir, *meshes[i]);
+                renderer.draw(vp * model, model, sunDir,
+                              descriptorSets[i], *meshes[i]);
             }
 
             renderer.endFrame();

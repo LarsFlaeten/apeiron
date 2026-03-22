@@ -32,7 +32,10 @@ makeSphere(float radius, uint32_t rings, uint32_t sectors, glm::vec3 color)
             glm::vec3 n{ sinTheta * cosPhi,
                          sinTheta * sinPhi,
                          cosTheta };
-            vertices.push_back({ n * radius, n, color });
+            // Equirectangular UV: u goes [0,1] along longitude, v along latitude.
+            glm::vec2 uv{ static_cast<float>(s) / static_cast<float>(sectors),
+                          static_cast<float>(r) / static_cast<float>(rings) };
+            vertices.push_back({ n * radius, n, color, uv });
         }
     }
 

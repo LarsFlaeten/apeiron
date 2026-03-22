@@ -27,11 +27,14 @@ epoch  = "2025-07-03T12:00:00"
 [[bodies]]
 naif  = "SUN"
 color = [1.0, 0.92, 0.23]
+# texture = "textures/sun.jpg"
 
 [[bodies]]
 naif  = "EARTH"
-color = [0.25, 0.52, 0.95]
+color = [1.0, 1.0, 1.0]   # tint is white so texture shows unmodified
+# texture = "textures/earth.jpg"
 
 [[bodies]]
 naif  = "MOON"
-color = [0.67, 0.67, 0.67]
+color = [1.0, 1.0, 1.0]
+# texture = "textures/moon.jpg"

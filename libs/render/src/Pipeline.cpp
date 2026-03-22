@@ -177,9 +177,18 @@ Pipeline::Pipeline(const Context&               ctx,
     rpInfo.setAttachments(attachments).setSubpasses(subpass).setDependencies(dep);
     m_renderPass = device.createRenderPass(rpInfo);
 
-    // ----- Layout (shared by both pipelines) -----
-    // Two mat4s: mvp (0–63) + model (64–127).  128 bytes is the guaranteed
-    // minimum push-constant space across all Vulkan implementations.
+    // ----- Descriptor set layout (set 0, binding 0 = diffuse texture sampler) -----
+    vk::DescriptorSetLayoutBinding samplerBinding{};
+    samplerBinding.setBinding        (0)
+                  .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
+                  .setDescriptorCount(1)
+                  .setStageFlags     (vk::ShaderStageFlagBits::eFragment);
+
+    vk::DescriptorSetLayoutCreateInfo dslInfo{};
+    dslInfo.setBindings(samplerBinding);
+    m_descriptorSetLayout = device.createDescriptorSetLayout(dslInfo);
+
+    // ----- Pipeline layout (shared by both pipelines) -----
     // 128 bytes: mat4 mvp + mat3 normalMat (as 3×vec4) + vec3 sunDir (+ pad).
     // sunDir is read in the fragment shader, so both stages need access.
     vk::PushConstantRange pcRange{};
@@ -189,7 +198,8 @@ Pipeline::Pipeline(const Context&               ctx,
            .setSize(sizeof(glm::mat4) * 2);
 
     vk::PipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.setPushConstantRanges(pcRange);
+    layoutInfo.setSetLayouts        (m_descriptorSetLayout)
+              .setPushConstantRanges(pcRange);
     m_layout = device.createPipelineLayout(layoutInfo);
 
     // ----- Shaders (loaded once, shared by both pipelines) -----
@@ -206,10 +216,11 @@ Pipeline::Pipeline(const Context&               ctx,
 Pipeline::~Pipeline()
 {
     auto device = m_ctx.device();
-    device.destroyPipeline      (m_wireframePipeline);
-    device.destroyPipeline      (m_fillPipeline);
-    device.destroyPipelineLayout(m_layout);
-    device.destroyRenderPass    (m_renderPass);
+    device.destroyPipeline           (m_wireframePipeline);
+    device.destroyPipeline           (m_fillPipeline);
+    device.destroyPipelineLayout     (m_layout);
+    device.destroyRenderPass         (m_renderPass);
+    device.destroyDescriptorSetLayout(m_descriptorSetLayout);
 }
 
 } // namespace apeiron::render

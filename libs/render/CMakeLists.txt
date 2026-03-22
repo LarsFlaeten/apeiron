@@ -2,6 +2,7 @@ find_package(Vulkan REQUIRED)
 find_package(glfw3  CONFIG REQUIRED)
 find_package(vk-bootstrap CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(Stb REQUIRED)
 find_package(glm CONFIG QUIET)
 if(NOT TARGET glm::glm)
     if(TARGET glm)
@@ -20,6 +21,7 @@ add_library(render STATIC
     src/Camera.cpp
     src/Image.cpp
     src/Geometry.cpp
+    src/Texture.cpp
 )
 
 target_include_directories(render
@@ -36,6 +38,8 @@ target_link_libraries(render
         GPUOpen::VulkanMemoryAllocator
         glm::glm
 )
+
+target_include_directories(render PRIVATE ${Stb_INCLUDE_DIR})
 
 target_compile_features(render PUBLIC cxx_std_23)
 

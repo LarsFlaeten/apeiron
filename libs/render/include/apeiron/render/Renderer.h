@@ -37,11 +37,18 @@ public:
 
     // Record one mesh draw.  sunDir is the normalised world-space direction
     // toward the sun for this body (computed by the caller per body).
+    // descriptorSet must have been allocated via allocateDescriptorSet().
     // Must be called between beginFrame() and endFrame().
-    void draw(const glm::mat4& mvp,
-              const glm::mat4& model,
-              const glm::vec3& sunDir,
-              const Mesh&      mesh);
+    void draw(const glm::mat4&   mvp,
+              const glm::mat4&   model,
+              const glm::vec3&   sunDir,
+              vk::DescriptorSet  descriptorSet,
+              const Mesh&        mesh);
+
+    // Allocate and write a descriptor set for a texture.  The returned set is
+    // owned by the Renderer's pool and freed when the Renderer is destroyed.
+    vk::DescriptorSet allocateDescriptorSet(vk::ImageView view,
+                                            vk::Sampler   sampler);
 
     // End the render pass, submit, and present.
     void endFrame();
@@ -56,6 +63,7 @@ private:
     const Swapchain& m_swapchain;
     const Pipeline&  m_pipeline;
 
+    vk::DescriptorPool             m_descriptorPool;
     vk::CommandPool                m_commandPool;
     std::vector<vk::CommandBuffer> m_commandBuffers;
     std::vector<vk::Framebuffer>   m_framebuffers;

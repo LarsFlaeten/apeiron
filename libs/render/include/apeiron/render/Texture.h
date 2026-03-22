@@ -1,0 +1,47 @@
+#pragma once
+
+#include "apeiron/render/Image.h"
+
+#include <vulkan/vulkan.hpp>
+#include <filesystem>
+
+namespace apeiron::render {
+
+class Context;
+class GpuAllocator;
+
+// A 2-D GPU texture: owns a VMA-backed Image, an ImageView, and a Sampler.
+// Movable but not copyable.
+class Texture {
+public:
+    // Load from an image file (JPEG, PNG, etc.) via stb_image.
+    Texture(const Context& ctx, GpuAllocator& allocator,
+            const std::filesystem::path& path);
+
+    // 1×1 opaque-white fallback — used for bodies without a texture file.
+    static Texture makeWhite(const Context& ctx, GpuAllocator& allocator);
+
+    ~Texture();
+
+    Texture(Texture&&) noexcept;
+    Texture& operator=(Texture&&) noexcept;
+
+    Texture(const Texture&)            = delete;
+    Texture& operator=(const Texture&) = delete;
+
+    vk::ImageView imageView() const { return m_view;    }
+    vk::Sampler   sampler()   const { return m_sampler; }
+
+private:
+    Texture() = default;
+
+    void upload(const Context& ctx, GpuAllocator& allocator,
+                const uint8_t* pixels, int width, int height);
+
+    const Context* m_ctx{};
+    Image          m_image;
+    vk::ImageView  m_view;
+    vk::Sampler    m_sampler;
+};
+
+} // namespace apeiron::render

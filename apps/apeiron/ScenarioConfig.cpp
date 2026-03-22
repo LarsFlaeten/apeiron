@@ -45,7 +45,12 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
             } else {
                 bc.color = {1.0f, 1.0f, 1.0f};
             }
-            bc.renderScale = (*t)["render_scale"].value_or(1.0f);
+            if (auto tp = (*t)["texture"].value<std::string>()) {
+                std::filesystem::path tp_path(*tp);
+                bc.texturePath = tp_path.is_absolute()
+                    ? tp_path.string()
+                    : (baseDir / tp_path).string();
+            }
             cfg.bodies.push_back(bc);
         }
     }
