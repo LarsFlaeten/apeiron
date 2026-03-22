@@ -48,7 +48,7 @@ int main()
     try {
         apeiron::render::Context      ctx(window);
         apeiron::render::GpuAllocator allocator(ctx);
-        apeiron::render::Swapchain    swapchain(ctx, kWidth, kHeight);
+        apeiron::render::Swapchain    swapchain(ctx, allocator, kWidth, kHeight);
         apeiron::render::Pipeline     pipeline (ctx, swapchain, APEIRON_SHADER_DIR);
 
         // Camera: 2 units back along +Z, looking at the origin.
@@ -77,9 +77,15 @@ int main()
         constexpr float kRadiansPerSecond = 1.0f;
         auto startTime = std::chrono::steady_clock::now();
 
+        glfwSetWindowUserPointer(window, &renderer);
         glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int) {
-            if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+            if (action != GLFW_PRESS) return;
+            if (key == GLFW_KEY_ESCAPE) {
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
+            } else if (key == GLFW_KEY_W) {
+                auto* r = static_cast<apeiron::render::Renderer*>(glfwGetWindowUserPointer(w));
+                r->setWireframe(!r->wireframe());
+            }
         });
 
         const glm::mat4 vp = camera.viewProjection();

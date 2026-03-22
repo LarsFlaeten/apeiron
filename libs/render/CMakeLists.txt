@@ -18,6 +18,7 @@ add_library(render STATIC
     src/Buffer.cpp
     src/Mesh.cpp
     src/Camera.cpp
+    src/Image.cpp
 )
 
 target_include_directories(render

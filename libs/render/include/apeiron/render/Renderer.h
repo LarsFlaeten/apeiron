@@ -28,6 +28,9 @@ public:
     // Draw one frame.  mvp (proj * view * model) is pushed to the vertex shader.
     void drawFrame(const glm::mat4& mvp, const Mesh& mesh);
 
+    void setWireframe(bool enabled) { m_wireframe = enabled; }
+    bool wireframe()          const { return m_wireframe; }
+
 private:
     static constexpr int kMaxFramesInFlight = 2;
 
@@ -43,7 +46,8 @@ private:
     std::array<vk::Semaphore, kMaxFramesInFlight> m_renderFinished;
     std::array<vk::Fence,     kMaxFramesInFlight> m_inFlight;
 
-    int m_currentFrame = 0;
+    int  m_currentFrame = 0;
+    bool m_wireframe    = false;
 };
 
 } // namespace apeiron::render

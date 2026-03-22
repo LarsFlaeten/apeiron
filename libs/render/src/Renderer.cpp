@@ -21,9 +21,10 @@ Renderer::Renderer(const Context&  ctx,
     // One framebuffer per swapchain image, each wrapping that image's view
     // and the render pass that clears and writes to it.
     for (auto view : swapchain.imageViews()) {
+        std::array<vk::ImageView, 2> attachments{view, swapchain.depthImageView()};
         vk::FramebufferCreateInfo fbInfo{};
         fbInfo.setRenderPass(pipeline.renderPass())
-              .setAttachments(view)
+              .setAttachments(attachments)
               .setWidth (swapchain.extent().width)
               .setHeight(swapchain.extent().height)
               .setLayers(1);
@@ -91,17 +92,18 @@ void Renderer::drawFrame(const glm::mat4& mvp, const Mesh& mesh)
     cmd.reset();
     cmd.begin(vk::CommandBufferBeginInfo{});
 
-    vk::ClearValue clearValue{};
-    clearValue.color = vk::ClearColorValue{std::array<float, 4>{0.01f, 0.01f, 0.02f, 1.0f}};
+    std::array<vk::ClearValue, 2> clearValues{};
+    clearValues[0].color        = vk::ClearColorValue{std::array<float,4>{0.01f, 0.01f, 0.02f, 1.0f}};
+    clearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
 
     vk::RenderPassBeginInfo rpBegin{};
     rpBegin.setRenderPass (m_pipeline.renderPass())
            .setFramebuffer(m_framebuffers[imageIndex])
            .setRenderArea ({vk::Offset2D{0, 0}, m_swapchain.extent()})
-           .setClearValues(clearValue);
+           .setClearValues(clearValues);
 
     cmd.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
-    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline.handle());
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline.handle(m_wireframe));
 
     vk::Viewport vp{
         0.0f, 0.0f,
