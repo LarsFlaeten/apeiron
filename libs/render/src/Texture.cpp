@@ -157,6 +157,23 @@ Texture Texture::makeWhite(const Context& ctx, GpuAllocator& allocator)
     return t;
 }
 
+Texture Texture::makeBlack(const Context& ctx, GpuAllocator& allocator)
+{
+    Texture t;
+    uint8_t pixels[4] = {0, 0, 0, 255};
+    t.upload(ctx, allocator, pixels, 1, 1);
+    return t;
+}
+
+Texture Texture::makeNeutralNormal(const Context& ctx, GpuAllocator& allocator)
+{
+    // (128, 128, 255) decodes to tangent-space (0, 0, 1) — no perturbation.
+    Texture t;
+    uint8_t pixels[4] = {128, 128, 255, 255};
+    t.upload(ctx, allocator, pixels, 1, 1);
+    return t;
+}
+
 Texture::~Texture()
 {
     if (m_ctx) {

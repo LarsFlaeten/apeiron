@@ -177,15 +177,17 @@ Pipeline::Pipeline(const Context&               ctx,
     rpInfo.setAttachments(attachments).setSubpasses(subpass).setDependencies(dep);
     m_renderPass = device.createRenderPass(rpInfo);
 
-    // ----- Descriptor set layout (set 0, binding 0 = diffuse texture sampler) -----
-    vk::DescriptorSetLayoutBinding samplerBinding{};
-    samplerBinding.setBinding        (0)
-                  .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
-                  .setDescriptorCount(1)
-                  .setStageFlags     (vk::ShaderStageFlagBits::eFragment);
-
+    // ----- Descriptor set layout (set 0): diffuse, specular, normals, clouds -----
+    std::array<vk::DescriptorSetLayoutBinding, 4> samplerBindings{};
+    for (uint32_t i = 0; i < 4; ++i) {
+        samplerBindings[i]
+            .setBinding        (i)
+            .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
+            .setDescriptorCount(1)
+            .setStageFlags     (vk::ShaderStageFlagBits::eFragment);
+    }
     vk::DescriptorSetLayoutCreateInfo dslInfo{};
-    dslInfo.setBindings(samplerBinding);
+    dslInfo.setBindings(samplerBindings);
     m_descriptorSetLayout = device.createDescriptorSetLayout(dslInfo);
 
     // ----- Pipeline layout (shared by both pipelines) -----

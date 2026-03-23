@@ -74,7 +74,10 @@ int main()
             apeiron::universe::CelestialBody* node;
             float     radiusKm;
             glm::vec3 color;
-            std::string texturePath;
+            std::string diffusePath;
+            std::string specularPath;
+            std::string normalPath;
+            std::string cloudsPath;
         };
         std::vector<BodyInfo> bodyInfos;
 
@@ -87,7 +90,8 @@ int main()
             auto& node  = scene.addBody(bc.naif, bc.naif, props.radiusKm,
                                         "SOLAR SYSTEM BARYCENTER", cfg.frame);
             bodyInfos.push_back({ &node, static_cast<float>(props.radiusKm),
-                                   bc.color, bc.texturePath });
+                                   bc.color, bc.diffusePath, bc.specularPath,
+                                   bc.normalPath, bc.cloudsPath });
             if (bc.naif == "SUN") sunIndex = i;
         }
 
@@ -111,18 +115,29 @@ int main()
         apeiron::render::Pipeline     pipeline (ctx, swapchain, APEIRON_SHADER_DIR);
 
         // Meshes and textures declared after allocator — destroyed before allocator.
-        // Textures declared before renderer so they outlive it.
+        // Textures declared before renderer so they outlive it (destroyed after renderer).
+        using Tex = apeiron::render::Texture;
+        struct BodyTextures { Tex diffuse, specular, normal, clouds; };
+
+        auto load = [&](const std::string& path, Tex fallback) -> Tex {
+            return path.empty() ? std::move(fallback)
+                                : Tex(ctx, allocator, path);
+        };
+
         std::vector<std::unique_ptr<apeiron::render::Mesh>> meshes;
-        std::vector<apeiron::render::Texture> textures;
+        std::vector<BodyTextures> bodyTextures;
+        bodyTextures.reserve(bodyInfos.size());
         for (auto& bi : bodyInfos) {
             auto [verts, idxs] = apeiron::render::Geometry::makeSphere(
                 1.0f, 64, 64, bi.color);
             meshes.push_back(std::make_unique<apeiron::render::Mesh>(
                 allocator, verts, idxs));
-            if (!bi.texturePath.empty())
-                textures.emplace_back(ctx, allocator, bi.texturePath);
-            else
-                textures.push_back(apeiron::render::Texture::makeWhite(ctx, allocator));
+            bodyTextures.push_back({
+                load(bi.diffusePath,  Tex::makeWhite        (ctx, allocator)),
+                load(bi.specularPath, Tex::makeBlack        (ctx, allocator)),
+                load(bi.normalPath,   Tex::makeNeutralNormal(ctx, allocator)),
+                load(bi.cloudsPath,   Tex::makeBlack        (ctx, allocator))
+            });
         }
 
         // Camera above ecliptic north pole, looking down at Earth.
@@ -142,9 +157,12 @@ int main()
 
         // Descriptor sets — allocated from Renderer's pool, freed with it.
         std::vector<vk::DescriptorSet> descriptorSets;
-        for (auto& tex : textures)
-            descriptorSets.push_back(
-                renderer.allocateDescriptorSet(tex.imageView(), tex.sampler()));
+        for (auto& bt : bodyTextures)
+            descriptorSets.push_back(renderer.allocateDescriptorSet(
+                {bt.diffuse.imageView(), bt.specular.imageView(),
+                 bt.normal.imageView(),  bt.clouds.imageView()},
+                {bt.diffuse.sampler(),   bt.specular.sampler(),
+                 bt.normal.sampler(),    bt.clouds.sampler()}));
 
         glfwSetWindowUserPointer(window, &renderer);
         glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int) {
@@ -218,7 +236,8 @@ int main()
                     ? glm::normalize(sunRenderPos - renderPos)
                     : glm::vec3(0.0f, 1.0f, 0.0f);
 
-                renderer.draw(vp * model, model, sunDir,
+                glm::vec3 viewDir = glm::normalize(camera.position() - renderPos);
+                renderer.draw(vp * model, model, sunDir, viewDir,
                               descriptorSets[i], *meshes[i]);
             }
 

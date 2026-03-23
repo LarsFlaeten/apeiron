@@ -42,13 +42,16 @@ public:
     void draw(const glm::mat4&   mvp,
               const glm::mat4&   model,
               const glm::vec3&   sunDir,
+              const glm::vec3&   viewDir,
               vk::DescriptorSet  descriptorSet,
               const Mesh&        mesh);
 
-    // Allocate and write a descriptor set for a texture.  The returned set is
-    // owned by the Renderer's pool and freed when the Renderer is destroyed.
-    vk::DescriptorSet allocateDescriptorSet(vk::ImageView view,
-                                            vk::Sampler   sampler);
+    // Allocate and write a descriptor set for 4 material texture slots:
+    // [0]=diffuse  [1]=specular  [2]=normals  [3]=clouds
+    // The returned set is owned by the Renderer's pool and freed with it.
+    vk::DescriptorSet allocateDescriptorSet(
+        const std::array<vk::ImageView, 4>& views,
+        const std::array<vk::Sampler,   4>& samplers);
 
     // End the render pass, submit, and present.
     void endFrame();

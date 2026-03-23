@@ -7,8 +7,10 @@ layout(location = 3) in vec2 inUV;
 
 layout(push_constant) uniform PC {
     mat4 mvp;
-    mat3 normalMat;  // 48 bytes (3 × vec4-aligned columns)
-    vec3 sunDir;     // 16 bytes (vec3 aligned to 16 in std430)
+    vec4 normalCol0;   // rotation matrix columns 0 & 1;
+    vec4 normalCol1;   // column 2 reconstructed in shader as cross(col0, col1)
+    vec4 sunDirPad;    // xyz = sun direction  (w unused)
+    vec4 viewDirPad;   // xyz = view direction (w unused)
 } pc;
 
 layout(location = 0) out vec3 fragNormal;
@@ -18,7 +20,13 @@ layout(location = 2) out vec2 fragUV;
 void main()
 {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
-    fragNormal  = pc.normalMat * inNormal;
-    fragColor   = inColor;
-    fragUV      = inUV;
+
+    // Reconstruct rotation matrix; normalize to strip uniform scale factor.
+    vec3 c0 = normalize(pc.normalCol0.xyz);
+    vec3 c1 = normalize(pc.normalCol1.xyz);
+    mat3 normalMat = mat3(c0, c1, cross(c0, c1));
+
+    fragNormal = normalMat * inNormal;
+    fragColor  = inColor;
+    fragUV     = inUV;
 }

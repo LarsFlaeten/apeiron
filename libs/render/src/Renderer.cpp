@@ -41,10 +41,10 @@ Renderer::Renderer(const Context&  ctx,
              .setCommandBufferCount(kMaxFramesInFlight);
     m_commandBuffers = device.allocateCommandBuffers(allocInfo);
 
-    // ----- Descriptor pool for body textures (capacity for up to 64 bodies) -----
+    // ----- Descriptor pool: 4 texture slots × 64 bodies -----
     vk::DescriptorPoolSize poolSize{};
     poolSize.setType           (vk::DescriptorType::eCombinedImageSampler)
-            .setDescriptorCount(64);
+            .setDescriptorCount(64 * 4);
     vk::DescriptorPoolCreateInfo dpInfo{};
     dpInfo.setMaxSets  (64)
           .setPoolSizes(poolSize);
@@ -120,28 +120,29 @@ bool Renderer::beginFrame()
 }
 
 void Renderer::draw(const glm::mat4& mvp, const glm::mat4& model,
-                    const glm::vec3& sunDir, vk::DescriptorSet descriptorSet,
-                    const Mesh& mesh)
+                    const glm::vec3& sunDir, const glm::vec3& viewDir,
+                    vk::DescriptorSet descriptorSet, const Mesh& mesh)
 {
-    // Push constant layout (128 bytes total, matches triangle.vert/.frag):
-    //   offset  0: mat4 mvp          (64 bytes)
-    //   offset 64: mat3 normalMat    (48 bytes — 3 columns, each padded to vec4)
-    //   offset112: vec3 sunDir       (12 bytes + 4 pad)
+    // Push constant layout (128 bytes):
+    //   offset  0: mat4 mvp            (64 bytes)
+    //   offset 64: vec4 normalCol[2]   (32 bytes — columns 0 & 1; col2 = cross in shader)
+    //   offset 96: vec4 sunDirPad      (16 bytes — xyz=sunDir,  w=unused)
+    //   offset112: vec4 viewDirPad     (16 bytes — xyz=viewDir, w=unused)
     struct PushConstants {
         glm::mat4 mvp;
-        glm::vec4 normalCol[3]; // mat3 columns, each padded to vec4
-        glm::vec3 sunDir;
-        float     _pad = 0.0f;
+        glm::vec4 normalCol[2];
+        glm::vec4 sunDirPad;
+        glm::vec4 viewDirPad;
     };
     static_assert(sizeof(PushConstants) == 128);
 
     glm::mat3 nm = glm::mat3(model);
     PushConstants pc{};
-    pc.mvp           = mvp;
-    pc.normalCol[0]  = glm::vec4(nm[0], 0.0f);
-    pc.normalCol[1]  = glm::vec4(nm[1], 0.0f);
-    pc.normalCol[2]  = glm::vec4(nm[2], 0.0f);
-    pc.sunDir        = sunDir;
+    pc.mvp         = mvp;
+    pc.normalCol[0] = glm::vec4(nm[0], 0.0f);
+    pc.normalCol[1] = glm::vec4(nm[1], 0.0f);
+    pc.sunDirPad   = glm::vec4(sunDir,  0.0f);
+    pc.viewDirPad  = glm::vec4(viewDir, 0.0f);
 
     auto& cmd = m_commandBuffers[m_currentFrame];
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
@@ -153,8 +154,9 @@ void Renderer::draw(const glm::mat4& mvp, const glm::mat4& model,
     mesh.draw(cmd);
 }
 
-vk::DescriptorSet Renderer::allocateDescriptorSet(vk::ImageView view,
-                                                   vk::Sampler   sampler)
+vk::DescriptorSet Renderer::allocateDescriptorSet(
+    const std::array<vk::ImageView, 4>& views,
+    const std::array<vk::Sampler,   4>& samplers)
 {
     auto layout = m_pipeline.descriptorSetLayout();
     vk::DescriptorSetAllocateInfo allocInfo{};
@@ -162,18 +164,18 @@ vk::DescriptorSet Renderer::allocateDescriptorSet(vk::ImageView view,
              .setSetLayouts    (layout);
     auto sets = m_ctx.device().allocateDescriptorSets(allocInfo);
 
-    vk::DescriptorImageInfo imgInfo{};
-    imgInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-           .setImageView  (view)
-           .setSampler    (sampler);
-
-    vk::WriteDescriptorSet write{};
-    write.setDstSet         (sets[0])
-         .setDstBinding     (0)
-         .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
-         .setImageInfo      (imgInfo);
-    m_ctx.device().updateDescriptorSets(write, {});
-
+    std::array<vk::DescriptorImageInfo, 4> imgInfos{};
+    std::array<vk::WriteDescriptorSet,  4> writes{};
+    for (uint32_t i = 0; i < 4; ++i) {
+        imgInfos[i].setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                   .setImageView  (views[i])
+                   .setSampler    (samplers[i]);
+        writes[i].setDstSet        (sets[0])
+                 .setDstBinding    (i)
+                 .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+                 .setImageInfo     (imgInfos[i]);
+    }
+    m_ctx.device().updateDescriptorSets(writes, {});
     return sets[0];
 }
 

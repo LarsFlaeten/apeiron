@@ -45,11 +45,16 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
             } else {
                 bc.color = {1.0f, 1.0f, 1.0f};
             }
-            if (auto tp = (*t)["texture"].value<std::string>()) {
-                std::filesystem::path tp_path(*tp);
-                auto resolved = tp_path.is_absolute() ? tp_path : std::filesystem::weakly_canonical(baseDir / tp_path);
-                bc.texturePath = resolved.string();
-            }
+            auto resolvePath = [&](std::string_view key) -> std::string {
+                auto val = (*t)[key].value<std::string>();
+                if (!val) return {};
+                std::filesystem::path p(*val);
+                return (p.is_absolute() ? p : std::filesystem::weakly_canonical(baseDir / p)).string();
+            };
+            bc.diffusePath  = resolvePath("diffuse");
+            bc.specularPath = resolvePath("specular");
+            bc.normalPath   = resolvePath("normals");
+            bc.cloudsPath   = resolvePath("clouds");
             cfg.bodies.push_back(bc);
         }
     }

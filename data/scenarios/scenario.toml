@@ -27,14 +27,18 @@ epoch  = "2025-07-03T12:00:00"
 [[bodies]]
 naif  = "SUN"
 color = [1.0, 0.92, 0.23]
-# texture = "textures/sun.jpg"
+# diffuse = "textures/sun.jpg"
 
 [[bodies]]
 naif  = "EARTH"
 color = [1.0, 1.0, 1.0]   # tint is white so texture shows unmodified
-texture = "../textures/earth/8k_earth_daymap.jpg"
+diffuse = "../textures/earth/8k_earth_daymap.jpg"
+specular = "../textures/earth/8k_earth_specular_map.tif"
+normals = "../textures/earth/8k_earth_normal_map.tif"
+clouds = "../textures/earth/8k_earth_clouds.jpg"
+
 
 [[bodies]]
 naif  = "MOON"
 color = [1.0, 1.0, 1.0]
-# texture = "textures/moon.jpg"
+diffuse = "../textures/moon/moon-4k.png"

@@ -18,8 +18,9 @@ public:
     Texture(const Context& ctx, GpuAllocator& allocator,
             const std::filesystem::path& path);
 
-    // 1×1 opaque-white fallback — used for bodies without a texture file.
-    static Texture makeWhite(const Context& ctx, GpuAllocator& allocator);
+    static Texture makeWhite        (const Context& ctx, GpuAllocator& allocator); // diffuse fallback
+    static Texture makeBlack        (const Context& ctx, GpuAllocator& allocator); // specular/clouds fallback
+    static Texture makeNeutralNormal(const Context& ctx, GpuAllocator& allocator); // normal map fallback (flat)
 
     ~Texture();
 
