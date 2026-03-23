@@ -4,6 +4,12 @@
 #include "apeiron/render/Pipeline.h"
 #include "apeiron/render/Mesh.h"
 
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+
 #include <glm/glm.hpp>
 #include <stdexcept>
 
@@ -62,6 +68,13 @@ Renderer::~Renderer()
 {
     auto device = m_ctx.device();
     device.waitIdle();
+
+    if (m_imguiPool) {
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        device.destroyDescriptorPool(m_imguiPool);
+    }
 
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
         device.destroySemaphore(m_imageAvailable[i]);
@@ -203,6 +216,46 @@ void Renderer::endFrame()
     (void)m_ctx.presentQueue().presentKHR(presentInfo);
 
     m_currentFrame = (m_currentFrame + 1) % kMaxFramesInFlight;
+}
+
+void Renderer::initImGui(GLFWwindow* window)
+{
+    auto device = m_ctx.device();
+
+    // Dedicated pool for ImGui's font texture and any internal descriptors.
+    vk::DescriptorPoolSize poolSize{};
+    poolSize.setType(vk::DescriptorType::eCombinedImageSampler)
+            .setDescriptorCount(16);
+    vk::DescriptorPoolCreateInfo poolInfo{};
+    poolInfo.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
+            .setMaxSets(16)
+            .setPoolSizes(poolSize);
+    m_imguiPool = device.createDescriptorPool(poolInfo);
+
+    ImGui::CreateContext();
+
+    ImGui_ImplGlfw_InitForVulkan(window, /*install_callbacks=*/true);
+
+    ImGui_ImplVulkan_InitInfo initInfo{};
+    initInfo.Instance       = static_cast<VkInstance>       (m_ctx.instance());
+    initInfo.PhysicalDevice = static_cast<VkPhysicalDevice> (m_ctx.physicalDevice());
+    initInfo.Device         = static_cast<VkDevice>         (m_ctx.device());
+    initInfo.QueueFamily    = m_ctx.graphicsFamily();
+    initInfo.Queue          = static_cast<VkQueue>          (m_ctx.graphicsQueue());
+    initInfo.DescriptorPool = static_cast<VkDescriptorPool> (m_imguiPool);
+    initInfo.MinImageCount  = 2;
+    initInfo.ImageCount     = m_swapchain.imageCount();
+    // Since ImGui 1.92: RenderPass and MSAASamples moved into PipelineInfoMain.
+    initInfo.PipelineInfoMain.RenderPass  = static_cast<VkRenderPass>(m_pipeline.renderPass());
+    initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    ImGui_ImplVulkan_Init(&initInfo);
+}
+
+void Renderer::renderImGui()
+{
+    if (!m_imguiPool) return;
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
+        static_cast<VkCommandBuffer>(m_commandBuffers[m_currentFrame]));
 }
 
 } // namespace apeiron::render

@@ -6,6 +6,8 @@
 #include <array>
 #include <vector>
 
+struct GLFWwindow;
+
 namespace apeiron::render {
 
 class Context;
@@ -56,6 +58,13 @@ public:
     // End the render pass, submit, and present.
     void endFrame();
 
+    // Initialise Dear ImGui (call once after construction).
+    void initImGui(GLFWwindow* window);
+
+    // Record ImGui draw data into the active command buffer.
+    // Call between beginFrame() and endFrame().
+    void renderImGui();
+
     void setWireframe(bool enabled) { m_wireframe = enabled; }
     bool wireframe()          const { return m_wireframe; }
 
@@ -67,6 +76,7 @@ private:
     const Pipeline&  m_pipeline;
 
     vk::DescriptorPool             m_descriptorPool;
+    vk::DescriptorPool             m_imguiPool;
     vk::CommandPool                m_commandPool;
     std::vector<vk::CommandBuffer> m_commandBuffers;
     std::vector<vk::Framebuffer>   m_framebuffers;

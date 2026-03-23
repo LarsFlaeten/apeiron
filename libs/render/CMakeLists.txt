@@ -3,6 +3,7 @@ find_package(glfw3  CONFIG REQUIRED)
 find_package(vk-bootstrap CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(Stb REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 find_package(glm CONFIG QUIET)
 if(NOT TARGET glm::glm)
     if(TARGET glm)
@@ -37,6 +38,7 @@ target_link_libraries(render
         vk-bootstrap::vk-bootstrap
         GPUOpen::VulkanMemoryAllocator
         glm::glm
+        imgui::imgui
 )
 
 target_include_directories(render PRIVATE ${Stb_INCLUDE_DIR})

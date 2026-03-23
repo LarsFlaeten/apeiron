@@ -1,6 +1,10 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
+
 #include "apeiron/render/Camera.h"
 #include "apeiron/render/Context.h"
 #include "apeiron/render/Geometry.h"
@@ -24,9 +28,11 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 #include <chrono>
 
@@ -140,13 +146,26 @@ int main()
             });
         }
 
-        // Camera above ecliptic north pole, looking down at Earth.
-        // + / - keys zoom proportionally (see main loop).
-        float camDistKm = 1'000'000.0f;
+        // Orbit camera: azimuth/elevation around scene origin, Z = ecliptic north.
+        struct OrbitCamera {
+            float azimuthDeg   =   0.0f;
+            float elevationDeg =  60.0f;
+            float distanceKm   = 1'000'000.0f;
+
+            glm::vec3 position() const {
+                float az = glm::radians(azimuthDeg);
+                float el = glm::radians(elevationDeg);
+                return distanceKm * glm::vec3(
+                    std::cos(el) * std::cos(az),
+                    std::cos(el) * std::sin(az),
+                    std::sin(el));
+            }
+        } orbit;
+
         apeiron::render::Camera camera(
-            glm::vec3(0.0f, 0.0f, camDistKm),
+            orbit.position(),
             glm::vec3(0.0f, 0.0f, 0.0f),
-            glm::vec3(0.0f, 1.0f, 0.0f),
+            glm::vec3(0.0f, 0.0f, 1.0f),   // Z = ecliptic north
             45.0f,
             static_cast<float>(kWidth) / static_cast<float>(kHeight),
             0.1f, 1.0e9f  // must match C_NEAR / C_FAR in triangle.frag
@@ -154,6 +173,7 @@ int main()
 
         // Renderer last — its destructor calls waitIdle before anything else frees.
         apeiron::render::Renderer renderer(ctx, swapchain, pipeline);
+        renderer.initImGui(window);
 
         // Descriptor sets — allocated from Renderer's pool, freed with it.
         std::vector<vk::DescriptorSet> descriptorSets;
@@ -164,46 +184,65 @@ int main()
                 {bt.diffuse.sampler(),   bt.specular.sampler(),
                  bt.normal.sampler(),    bt.clouds.sampler()}));
 
-        glfwSetWindowUserPointer(window, &renderer);
+        // Window state shared between callbacks.
+        struct WindowState {
+            apeiron::render::Renderer* renderer;
+            double scrollDelta = 0.0;
+        } windowState{&renderer};
+
+        glfwSetWindowUserPointer(window, &windowState);
         glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int) {
             if (action != GLFW_PRESS) return;
+            auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w));
             if (key == GLFW_KEY_ESCAPE)
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
-            else if (key == GLFW_KEY_W) {
-                auto* r = static_cast<apeiron::render::Renderer*>(
-                    glfwGetWindowUserPointer(w));
-                r->setWireframe(!r->wireframe());
-            }
+            else if (key == GLFW_KEY_W)
+                s->renderer->setWireframe(!s->renderer->wireframe());
+        });
+        glfwSetScrollCallback(window, [](GLFWwindow* w, double, double yoff) {
+            auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w));
+            s->scrollDelta += yoff;
         });
 
         // =================================================================
         // Main loop
         // =================================================================
-        constexpr double kSecondsPerSimSecond = 3600.0; // 1 h per real second
-        // Zoom: e^(kZoomRate * dt) change per second — ~4.5× per second, feels
-        // proportional at any distance.
-        constexpr float kZoomRate = 1.5f;
+        double simSecondsPerRealSecond = 3600.0; // adjustable via ImGui
+        double simElapsed = 0.0; // accumulated simulation seconds
 
-        auto wallStart     = std::chrono::steady_clock::now();
-        auto prevFrameTime = wallStart;
+        auto prevFrameTime = std::chrono::steady_clock::now();
+        double prevMouseX{}, prevMouseY{};
+        glfwGetCursorPos(window, &prevMouseX, &prevMouseY);
 
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
 
-            auto  now      = std::chrono::steady_clock::now();
-            float frameDt  = std::chrono::duration<float>(now - prevFrameTime).count();
-            prevFrameTime  = now;
+            auto  now     = std::chrono::steady_clock::now();
+            float frameDt = std::chrono::duration<float>(now - prevFrameTime).count();
+            prevFrameTime = now;
 
-            // Zoom: + key moves closer, - key moves further. Delta is proportional
-            // to current distance so the speed feels consistent across scales.
-            if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS)
-                camDistKm *= std::exp(-kZoomRate * frameDt);
-            if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS)
-                camDistKm *= std::exp( kZoomRate * frameDt);
-            camera.setPosition(glm::vec3(0.0f, 0.0f, camDistKm));
+            // --- Orbit camera input (ignored when ImGui is using the mouse) ---
+            double mx{}, my{};
+            glfwGetCursorPos(window, &mx, &my);
+            float dx = static_cast<float>(mx - prevMouseX);
+            float dy = static_cast<float>(my - prevMouseY);
+            prevMouseX = mx; prevMouseY = my;
 
-            double wallElapsed = std::chrono::duration<double>(now - wallStart).count();
-            auto currentEt = et + astro::TimeDelta(wallElapsed * kSecondsPerSimSecond);
+            if (!ImGui::GetIO().WantCaptureMouse) {
+                if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+                    orbit.azimuthDeg   -= dx * 0.3f;
+                    orbit.elevationDeg += dy * 0.3f;
+                    orbit.elevationDeg  = glm::clamp(orbit.elevationDeg, -85.0f, 85.0f);
+                }
+                if (windowState.scrollDelta != 0.0) {
+                    orbit.distanceKm *= std::exp(-0.2f * static_cast<float>(windowState.scrollDelta));
+                }
+            }
+            windowState.scrollDelta = 0.0;
+            camera.setPosition(orbit.position());
+
+            simElapsed += frameDt * simSecondsPerRealSecond;
+            auto currentEt = et + astro::TimeDelta(simElapsed);
 
             observerPos = observer.worldPosition(currentEt);
             scene.update(currentEt, observerPos);
@@ -215,6 +254,54 @@ int main()
                     bodyInfos[sunIndex].node->worldPosition());
             }
 
+            // --- ImGui frame ---
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+
+            ImGui::Begin("Dev View");
+            ImGui::Text("%.1f fps  (%.2f ms)", ImGui::GetIO().Framerate,
+                        1000.0f / ImGui::GetIO().Framerate);
+            ImGui::Separator();
+
+            ImGui::Text("Simulation");
+            ImGui::SliderScalar("Speed (s/s)", ImGuiDataType_Double,
+                                &simSecondsPerRealSecond,
+                                (const double[]){1.0}, (const double[]){1e6},
+                                "%.0f", ImGuiSliderFlags_Logarithmic);
+
+            ImGui::Separator();
+            ImGui::Text("Camera");
+            ImGui::Text("  Distance : %.0f km  /  %.4f AU",
+                        orbit.distanceKm, orbit.distanceKm / 149'597'870.7f);
+            ImGui::Text("  Azimuth  : %.1f°", orbit.azimuthDeg);
+            ImGui::Text("  Elevation: %.1f°", orbit.elevationDeg);
+
+            ImGui::Separator();
+            ImGui::Text("Bodies");
+            if (ImGui::BeginTable("bodies", 3,
+                                  ImGuiTableFlags_Borders |
+                                  ImGuiTableFlags_RowBg   |
+                                  ImGuiTableFlags_SizingFixedFit)) {
+                ImGui::TableSetupColumn("Name");
+                ImGui::TableSetupColumn("Dist from cam (km)");
+                ImGui::TableSetupColumn("Dist from cam (AU)");
+                ImGui::TableHeadersRow();
+                for (auto& bi : bodyInfos) {
+                    glm::vec3 rp   = scene.origin().toRenderSpace(bi.node->worldPosition());
+                    float     dist = glm::length(rp - camera.position());
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0); ImGui::Text("%s", bi.node->naifName().c_str());
+                    ImGui::TableSetColumnIndex(1); ImGui::Text("%.0f", dist);
+                    ImGui::TableSetColumnIndex(2); ImGui::Text("%.4f", dist / 149'597'870.7f);
+                }
+                ImGui::EndTable();
+            }
+            ImGui::End();
+
+            ImGui::Render();
+
+            // --- GPU frame ---
             const glm::mat4 vp = camera.viewProjection();
 
             if (!renderer.beginFrame()) continue;
@@ -241,6 +328,7 @@ int main()
                               descriptorSets[i], *meshes[i]);
             }
 
+            renderer.renderImGui();
             renderer.endFrame();
         }
     }
