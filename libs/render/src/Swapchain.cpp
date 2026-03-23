@@ -56,11 +56,30 @@ Swapchain::Swapchain(const Context& ctx, GpuAllocator& allocator,
             .setFormat          (depthFmt)
             .setSubresourceRange({vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1});
     m_depthView = ctx.device().createImageView(viewInfo);
+
+    // ----- HDR offscreen images (one per frame-in-flight) -----
+    for (int i = 0; i < kHdrCount; ++i) {
+        m_hdrImages[i] = Image(allocator.handle(),
+                               vk::Extent2D{width, height},
+                               kHdrFormat,
+                               vk::ImageUsageFlagBits::eColorAttachment |
+                               vk::ImageUsageFlagBits::eSampled);
+
+        vk::ImageViewCreateInfo hdrViewInfo{};
+        hdrViewInfo.setImage           (m_hdrImages[i].handle())
+                   .setViewType        (vk::ImageViewType::e2D)
+                   .setFormat          (kHdrFormat)
+                   .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+        m_hdrImageViews[i] = ctx.device().createImageView(hdrViewInfo);
+    }
 }
 
 Swapchain::~Swapchain()
 {
     auto device = m_ctx.device();
+    for (auto view : m_hdrImageViews)
+        device.destroyImageView(view);
+    // m_hdrImages destroyed by Image RAII
     device.destroyImageView(m_depthView);
     // m_depthImage destroyed by Image RAII
     for (auto view : m_imageViews)

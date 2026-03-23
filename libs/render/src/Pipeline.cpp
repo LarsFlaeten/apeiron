@@ -124,17 +124,18 @@ Pipeline::Pipeline(const Context&               ctx,
     auto device = ctx.device();
 
     // ----- Render pass -----
-    // attachment 0 — colour
+    // attachment 0 — HDR colour (RGBA16F); transitions to ShaderReadOnly so
+    // the tonemap pass can sample it without an extra explicit barrier.
     vk::AttachmentDescription colorAttachment{};
     colorAttachment
-        .setFormat        (swapchain.imageFormat())
+        .setFormat        (vk::Format::eR16G16B16A16Sfloat)
         .setSamples       (vk::SampleCountFlagBits::e1)
         .setLoadOp        (vk::AttachmentLoadOp::eClear)
         .setStoreOp       (vk::AttachmentStoreOp::eStore)
         .setStencilLoadOp (vk::AttachmentLoadOp::eDontCare)
         .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
         .setInitialLayout (vk::ImageLayout::eUndefined)
-        .setFinalLayout   (vk::ImageLayout::ePresentSrcKHR);
+        .setFinalLayout   (vk::ImageLayout::eShaderReadOnlyOptimal);
 
     // attachment 1 — depth (cleared to 1.0, not needed after the pass)
     vk::AttachmentDescription depthAttachment{};
@@ -159,22 +160,29 @@ Pipeline::Pipeline(const Context&               ctx,
            .setColorAttachments       (colorRef)
            .setPDepthStencilAttachment(&depthRef);
 
-    // Both colour-output and early-fragment-tests stages need to complete
-    // before the subpass writes to colour and depth.
-    vk::SubpassDependency dep{};
-    dep.setSrcSubpass   (vk::SubpassExternal)
-       .setDstSubpass   (0)
-       .setSrcStageMask (vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                         vk::PipelineStageFlagBits::eEarlyFragmentTests)
-       .setSrcAccessMask({})
-       .setDstStageMask (vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                         vk::PipelineStageFlagBits::eEarlyFragmentTests)
-       .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite |
-                         vk::AccessFlagBits::eDepthStencilAttachmentWrite);
+    // dep[0]: wait for prior colour/depth writes before this subpass starts.
+    // dep[1]: after the subpass, make the HDR colour available for the
+    //         tonemap fragment shader without a separate explicit barrier.
+    std::array<vk::SubpassDependency, 2> deps{};
+    deps[0].setSrcSubpass   (vk::SubpassExternal)
+           .setDstSubpass   (0)
+           .setSrcStageMask (vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                             vk::PipelineStageFlagBits::eEarlyFragmentTests)
+           .setSrcAccessMask({})
+           .setDstStageMask (vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                             vk::PipelineStageFlagBits::eEarlyFragmentTests)
+           .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite |
+                             vk::AccessFlagBits::eDepthStencilAttachmentWrite);
+    deps[1].setSrcSubpass   (0)
+           .setDstSubpass   (vk::SubpassExternal)
+           .setSrcStageMask (vk::PipelineStageFlagBits::eColorAttachmentOutput)
+           .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+           .setDstStageMask (vk::PipelineStageFlagBits::eFragmentShader)
+           .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
 
     std::array<vk::AttachmentDescription, 2> attachments{colorAttachment, depthAttachment};
     vk::RenderPassCreateInfo rpInfo{};
-    rpInfo.setAttachments(attachments).setSubpasses(subpass).setDependencies(dep);
+    rpInfo.setAttachments(attachments).setSubpasses(subpass).setDependencies(deps);
     m_renderPass = device.createRenderPass(rpInfo);
 
     // ----- Descriptor set layout (set 0): diffuse, specular, normals, clouds -----

@@ -11,6 +11,7 @@
 #include "apeiron/render/GpuAllocator.h"
 #include "apeiron/render/Mesh.h"
 #include "apeiron/render/Pipeline.h"
+#include "apeiron/render/TonemapPipeline.h"
 #include "apeiron/render/Renderer.h"
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Texture.h"
@@ -118,7 +119,8 @@ int main()
         apeiron::render::Context      ctx(window);
         apeiron::render::GpuAllocator allocator(ctx);
         apeiron::render::Swapchain    swapchain(ctx, allocator, kWidth, kHeight);
-        apeiron::render::Pipeline     pipeline (ctx, swapchain, APEIRON_SHADER_DIR);
+        apeiron::render::Pipeline        pipeline (ctx, swapchain, APEIRON_SHADER_DIR);
+        apeiron::render::TonemapPipeline tonemap  (ctx, swapchain, APEIRON_SHADER_DIR);
 
         // Meshes and textures declared after allocator — destroyed before allocator.
         // Textures declared before renderer so they outlive it (destroyed after renderer).
@@ -172,7 +174,7 @@ int main()
         );
 
         // Renderer last — its destructor calls waitIdle before anything else frees.
-        apeiron::render::Renderer renderer(ctx, swapchain, pipeline);
+        apeiron::render::Renderer renderer(ctx, swapchain, pipeline, tonemap);
         renderer.initImGui(window);
 
         // Descriptor sets — allocated from Renderer's pool, freed with it.
@@ -271,6 +273,13 @@ int main()
                                 "%.0f", ImGuiSliderFlags_Logarithmic);
 
             ImGui::Separator();
+            ImGui::Text("Rendering");
+            float exposure = renderer.exposure();
+            if (ImGui::SliderFloat("Exposure", &exposure, 0.01f, 10.0f,
+                                   "%.2f", ImGuiSliderFlags_Logarithmic))
+                renderer.setExposure(exposure);
+
+            ImGui::Separator();
             ImGui::Text("Camera");
             ImGui::Text("  Frame    : %s", cfg.frame.c_str());
             ImGui::Text("  Focus    : %s", cfg.observerBody.c_str());
@@ -320,17 +329,23 @@ int main()
                 model = model * glm::mat4(bi.node->orientation());
                 model = glm::scale(model, glm::vec3(bi.radiusKm));
 
-                // Per-body sun direction.
-                glm::vec3 sunDir = (sunIndex >= 0 && static_cast<int>(i) != sunIndex)
-                    ? glm::normalize(sunRenderPos - renderPos)
-                    : glm::vec3(0.0f, 1.0f, 0.0f);
+                bool isEmissive = (sunIndex >= 0 && static_cast<int>(i) == sunIndex);
+
+                // Per-body sun direction and 1/d² light intensity.
+                glm::vec3 sunDir       = glm::vec3(0.0f, 1.0f, 0.0f);
+                float     lightIntensity = 1.0f;
+                if (sunIndex >= 0 && !isEmissive) {
+                    sunDir = glm::normalize(sunRenderPos - renderPos);
+                    float distAU = glm::length(sunRenderPos - renderPos) / 149'597'870.7f;
+                    lightIntensity = 1.0f / (distAU * distAU);
+                }
 
                 glm::vec3 viewDir = glm::normalize(camera.position() - renderPos);
                 renderer.draw(vp * model, model, sunDir, viewDir,
+                              isEmissive, lightIntensity,
                               descriptorSets[i], *meshes[i]);
             }
 
-            renderer.renderImGui();
             renderer.endFrame();
         }
     }

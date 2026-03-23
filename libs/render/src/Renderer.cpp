@@ -2,6 +2,7 @@
 #include "apeiron/render/Context.h"
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Pipeline.h"
+#include "apeiron/render/TonemapPipeline.h"
 #include "apeiron/render/Mesh.h"
 
 #include <imgui.h>
@@ -15,23 +16,39 @@
 
 namespace apeiron::render {
 
-Renderer::Renderer(const Context&  ctx,
-                   const Swapchain& swapchain,
-                   const Pipeline&  pipeline)
-    : m_ctx(ctx), m_swapchain(swapchain), m_pipeline(pipeline)
+Renderer::Renderer(const Context&         ctx,
+                   const Swapchain&       swapchain,
+                   const Pipeline&        pipeline,
+                   const TonemapPipeline& tonemapPipeline)
+    : m_ctx(ctx), m_swapchain(swapchain),
+      m_pipeline(pipeline), m_tonemapPipeline(tonemapPipeline)
 {
     auto device = ctx.device();
 
-    // ----- Framebuffers -----
-    for (auto view : swapchain.imageViews()) {
-        std::array<vk::ImageView, 2> attachments{view, swapchain.depthImageView()};
+    // ----- HDR framebuffers (one per frame-in-flight) -----
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        std::array<vk::ImageView, 2> attachments{
+            swapchain.hdrImageView(i),
+            swapchain.depthImageView()
+        };
         vk::FramebufferCreateInfo fbInfo{};
         fbInfo.setRenderPass(pipeline.renderPass())
               .setAttachments(attachments)
               .setWidth (swapchain.extent().width)
               .setHeight(swapchain.extent().height)
               .setLayers(1);
-        m_framebuffers.push_back(device.createFramebuffer(fbInfo));
+        m_hdrFramebuffers[i] = device.createFramebuffer(fbInfo);
+    }
+
+    // ----- Tonemap framebuffers (one per swapchain image) -----
+    for (auto view : swapchain.imageViews()) {
+        vk::FramebufferCreateInfo fbInfo{};
+        fbInfo.setRenderPass(tonemapPipeline.renderPass())
+              .setAttachments(view)
+              .setWidth (swapchain.extent().width)
+              .setHeight(swapchain.extent().height)
+              .setLayers(1);
+        m_tonemapFramebuffers.push_back(device.createFramebuffer(fbInfo));
     }
 
     // ----- Command pool -----
@@ -47,14 +64,50 @@ Renderer::Renderer(const Context&  ctx,
              .setCommandBufferCount(kMaxFramesInFlight);
     m_commandBuffers = device.allocateCommandBuffers(allocInfo);
 
-    // ----- Descriptor pool: 4 texture slots × 64 bodies -----
-    vk::DescriptorPoolSize poolSize{};
-    poolSize.setType           (vk::DescriptorType::eCombinedImageSampler)
-            .setDescriptorCount(64 * 4);
+    // ----- Material descriptor pool: 4 texture slots × 64 bodies -----
+    vk::DescriptorPoolSize matPoolSize{};
+    matPoolSize.setType           (vk::DescriptorType::eCombinedImageSampler)
+               .setDescriptorCount(64 * 4);
     vk::DescriptorPoolCreateInfo dpInfo{};
     dpInfo.setMaxSets  (64)
-          .setPoolSizes(poolSize);
+          .setPoolSizes(matPoolSize);
     m_descriptorPool = device.createDescriptorPool(dpInfo);
+
+    // ----- Tonemap descriptor pool + sampler + sets -----
+    vk::SamplerCreateInfo samplerInfo{};
+    samplerInfo.setMagFilter      (vk::Filter::eLinear)
+               .setMinFilter      (vk::Filter::eLinear)
+               .setAddressModeU   (vk::SamplerAddressMode::eClampToEdge)
+               .setAddressModeV   (vk::SamplerAddressMode::eClampToEdge)
+               .setAddressModeW   (vk::SamplerAddressMode::eClampToEdge);
+    m_hdrSampler = device.createSampler(samplerInfo);
+
+    vk::DescriptorPoolSize tmPoolSize{};
+    tmPoolSize.setType           (vk::DescriptorType::eCombinedImageSampler)
+              .setDescriptorCount(kMaxFramesInFlight);
+    vk::DescriptorPoolCreateInfo tmPoolInfo{};
+    tmPoolInfo.setMaxSets  (kMaxFramesInFlight)
+              .setPoolSizes(tmPoolSize);
+    m_tonemapDescPool = device.createDescriptorPool(tmPoolInfo);
+
+    auto layout = tonemapPipeline.descriptorSetLayout();
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        vk::DescriptorSetAllocateInfo dsAlloc{};
+        dsAlloc.setDescriptorPool(m_tonemapDescPool)
+               .setSetLayouts    (layout);
+        m_tonemapDescSets[i] = device.allocateDescriptorSets(dsAlloc)[0];
+
+        vk::DescriptorImageInfo imgInfo{};
+        imgInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+               .setImageView  (swapchain.hdrImageView(i))
+               .setSampler    (m_hdrSampler);
+        vk::WriteDescriptorSet write{};
+        write.setDstSet        (m_tonemapDescSets[i])
+             .setDstBinding    (0)
+             .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+             .setImageInfo     (imgInfo);
+        device.updateDescriptorSets(write, {});
+    }
 
     // ----- Per-frame sync objects -----
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
@@ -81,9 +134,15 @@ Renderer::~Renderer()
         device.destroySemaphore(m_renderFinished[i]);
         device.destroyFence    (m_inFlight[i]);
     }
+
+    device.destroySampler       (m_hdrSampler);
+    device.destroyDescriptorPool(m_tonemapDescPool);
     device.destroyDescriptorPool(m_descriptorPool);
     device.destroyCommandPool   (m_commandPool);
-    for (auto fb : m_framebuffers)
+
+    for (auto fb : m_tonemapFramebuffers)
+        device.destroyFramebuffer(fb);
+    for (auto fb : m_hdrFramebuffers)
         device.destroyFramebuffer(fb);
 }
 
@@ -108,12 +167,12 @@ bool Renderer::beginFrame()
     cmd.begin(vk::CommandBufferBeginInfo{});
 
     std::array<vk::ClearValue, 2> clearValues{};
-    clearValues[0].color        = vk::ClearColorValue{std::array<float,4>{0.01f, 0.01f, 0.02f, 1.0f}};
+    clearValues[0].color        = vk::ClearColorValue{std::array<float,4>{0.0f, 0.0f, 0.0f, 1.0f}};
     clearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
 
     vk::RenderPassBeginInfo rpBegin{};
     rpBegin.setRenderPass (m_pipeline.renderPass())
-           .setFramebuffer(m_framebuffers[m_activeImageIndex])
+           .setFramebuffer(m_hdrFramebuffers[frame])
            .setRenderArea ({vk::Offset2D{0, 0}, m_swapchain.extent()})
            .setClearValues(clearValues);
 
@@ -132,15 +191,20 @@ bool Renderer::beginFrame()
     return true;
 }
 
-void Renderer::draw(const glm::mat4& mvp, const glm::mat4& model,
-                    const glm::vec3& sunDir, const glm::vec3& viewDir,
-                    vk::DescriptorSet descriptorSet, const Mesh& mesh)
+void Renderer::draw(const glm::mat4&  mvp,
+                    const glm::mat4&  model,
+                    const glm::vec3&  sunDir,
+                    const glm::vec3&  viewDir,
+                    bool              isEmissive,
+                    float             lightIntensity,
+                    vk::DescriptorSet descriptorSet,
+                    const Mesh&       mesh)
 {
     // Push constant layout (128 bytes):
     //   offset  0: mat4 mvp            (64 bytes)
-    //   offset 64: vec4 normalCol[2]   (32 bytes — columns 0 & 1; col2 = cross in shader)
-    //   offset 96: vec4 sunDirPad      (16 bytes — xyz=sunDir,  w=unused)
-    //   offset112: vec4 viewDirPad     (16 bytes — xyz=viewDir, w=unused)
+    //   offset 64: vec4 normalCol[2]   (32 bytes)
+    //   offset 96: vec4 sunDirPad      (xyz=sunDir, w=isEmissive flag)
+    //  offset112: vec4 viewDirPad     (xyz=viewDir, w=lightIntensity)
     struct PushConstants {
         glm::mat4 mvp;
         glm::vec4 normalCol[2];
@@ -151,11 +215,11 @@ void Renderer::draw(const glm::mat4& mvp, const glm::mat4& model,
 
     glm::mat3 nm = glm::mat3(model);
     PushConstants pc{};
-    pc.mvp         = mvp;
+    pc.mvp          = mvp;
     pc.normalCol[0] = glm::vec4(nm[0], 0.0f);
     pc.normalCol[1] = glm::vec4(nm[1], 0.0f);
-    pc.sunDirPad   = glm::vec4(sunDir,  0.0f);
-    pc.viewDirPad  = glm::vec4(viewDir, 0.0f);
+    pc.sunDirPad    = glm::vec4(sunDir,  isEmissive ? 1.0f : 0.0f);
+    pc.viewDirPad   = glm::vec4(viewDir, lightIntensity);
 
     auto& cmd = m_commandBuffers[m_currentFrame];
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
@@ -194,8 +258,35 @@ vk::DescriptorSet Renderer::allocateDescriptorSet(
 
 void Renderer::endFrame()
 {
-    int  frame = m_currentFrame;
-    auto& cmd  = m_commandBuffers[frame];
+    int   frame = m_currentFrame;
+    auto& cmd   = m_commandBuffers[frame];
+
+    // ---- End HDR render pass ----
+    cmd.endRenderPass();
+
+    // ---- Tonemap pass ----
+    // The HDR render pass finalLayout + outbound subpass dependency already
+    // transitioned the image to eShaderReadOnlyOptimal and ensured visibility,
+    // so no explicit barrier is needed here.
+    vk::RenderPassBeginInfo tmBegin{};
+    tmBegin.setRenderPass (m_tonemapPipeline.renderPass())
+           .setFramebuffer(m_tonemapFramebuffers[m_activeImageIndex])
+           .setRenderArea ({vk::Offset2D{0, 0}, m_swapchain.extent()});
+
+    cmd.beginRenderPass(tmBegin, vk::SubpassContents::eInline);
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_tonemapPipeline.handle());
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                           m_tonemapPipeline.layout(), 0,
+                           m_tonemapDescSets[frame], {});
+    cmd.pushConstants(m_tonemapPipeline.layout(),
+                      vk::ShaderStageFlagBits::eFragment,
+                      0, sizeof(float), &m_exposure);
+    cmd.draw(3, 1, 0, 0);  // fullscreen triangle, no vertex buffer
+
+    // ImGui renders in the tonemap pass so the UI bypasses tonemapping.
+    if (m_imguiPool)
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
+            static_cast<VkCommandBuffer>(cmd));
 
     cmd.endRenderPass();
     cmd.end();
@@ -222,7 +313,6 @@ void Renderer::initImGui(GLFWwindow* window)
 {
     auto device = m_ctx.device();
 
-    // Dedicated pool for ImGui's font texture and any internal descriptors.
     vk::DescriptorPoolSize poolSize{};
     poolSize.setType(vk::DescriptorType::eCombinedImageSampler)
             .setDescriptorCount(16);
@@ -233,7 +323,6 @@ void Renderer::initImGui(GLFWwindow* window)
     m_imguiPool = device.createDescriptorPool(poolInfo);
 
     ImGui::CreateContext();
-
     ImGui_ImplGlfw_InitForVulkan(window, /*install_callbacks=*/true);
 
     ImGui_ImplVulkan_InitInfo initInfo{};
@@ -245,17 +334,10 @@ void Renderer::initImGui(GLFWwindow* window)
     initInfo.DescriptorPool = static_cast<VkDescriptorPool> (m_imguiPool);
     initInfo.MinImageCount  = 2;
     initInfo.ImageCount     = m_swapchain.imageCount();
-    // Since ImGui 1.92: RenderPass and MSAASamples moved into PipelineInfoMain.
-    initInfo.PipelineInfoMain.RenderPass  = static_cast<VkRenderPass>(m_pipeline.renderPass());
+    // ImGui renders in the tonemap pass — use that render pass here.
+    initInfo.PipelineInfoMain.RenderPass  = static_cast<VkRenderPass>(m_tonemapPipeline.renderPass());
     initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     ImGui_ImplVulkan_Init(&initInfo);
-}
-
-void Renderer::renderImGui()
-{
-    if (!m_imguiPool) return;
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
-        static_cast<VkCommandBuffer>(m_commandBuffers[m_currentFrame]));
 }
 
 } // namespace apeiron::render

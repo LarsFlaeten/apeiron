@@ -12,11 +12,16 @@ namespace apeiron::render {
 class Context;
 class GpuAllocator;
 
-// Owns the VkSwapchainKHR, its per-image colour views, and the shared
-// depth image + view (same dimensions, same lifetime).
+// Owns the VkSwapchainKHR, its per-image colour views, the shared depth
+// image + view, and two RGBA16F HDR offscreen images (one per frame-in-flight)
+// that the main render pass writes into before tonemapping.
 // Framebuffers live in Renderer (they couple these views to a render pass).
 class Swapchain {
 public:
+    // Number of HDR images — must match Renderer::kMaxFramesInFlight.
+    static constexpr int      kHdrCount = 2;
+    static constexpr vk::Format kHdrFormat = vk::Format::eR16G16B16A16Sfloat;
+
     Swapchain(const Context& ctx, GpuAllocator& allocator,
               uint32_t width, uint32_t height);
     ~Swapchain();
@@ -31,8 +36,10 @@ public:
     const std::vector<vk::ImageView>& imageViews()     const { return m_imageViews;     }
     uint32_t                          imageCount()     const { return static_cast<uint32_t>(m_imageViews.size()); }
 
-    vk::ImageView                     depthImageView() const { return m_depthView;       }
-    vk::Format                        depthFormat()    const { return m_depthImage.format(); }
+    vk::ImageView                     depthImageView()      const { return m_depthView;          }
+    vk::Format                        depthFormat()         const { return m_depthImage.format(); }
+
+    vk::ImageView                     hdrImageView(int i)   const { return m_hdrImageViews[i];   }
 
 private:
     vk::Format findDepthFormat() const;
@@ -43,6 +50,9 @@ private:
 
     Image         m_depthImage;
     vk::ImageView m_depthView;
+
+    std::array<Image,         kHdrCount> m_hdrImages;
+    std::array<vk::ImageView, kHdrCount> m_hdrImageViews;
 };
 
 } // namespace apeiron::render

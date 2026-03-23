@@ -15,6 +15,7 @@ add_library(render STATIC
     src/Context.cpp
     src/Swapchain.cpp
     src/Pipeline.cpp
+    src/TonemapPipeline.cpp
     src/Renderer.cpp
     src/GpuAllocator.cpp
     src/Buffer.cpp
