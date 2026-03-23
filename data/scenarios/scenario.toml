@@ -42,3 +42,4 @@ clouds = "../textures/earth/8k_earth_clouds.jpg"
 naif  = "MOON"
 color = [1.0, 1.0, 1.0]
 diffuse = "../textures/moon/moon-4k.png"
+normals = "../textures/moon/moon_normal.jpg"
