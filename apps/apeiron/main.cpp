@@ -148,13 +148,13 @@ int main()
             });
         }
 
-        // Orbit camera: azimuth/elevation around scene origin, Z = ecliptic north.
+        // Orbit camera: azimuth/elevation around the focused body, Z = ecliptic north.
         struct OrbitCamera {
             float azimuthDeg   =   0.0f;
             float elevationDeg =  60.0f;
             float distanceKm   = 1'000'000.0f;
 
-            glm::vec3 position() const {
+            glm::vec3 offset() const {
                 float az = glm::radians(azimuthDeg);
                 float el = glm::radians(elevationDeg);
                 return distanceKm * glm::vec3(
@@ -164,9 +164,16 @@ int main()
             }
         } orbit;
 
+        // Default focus: the observer body (first body matching cfg.observerBody).
+        int selectedBodyIndex = 0;
+        for (int i = 0; i < static_cast<int>(bodyInfos.size()); ++i)
+            if (bodyInfos[i].node->naifName() == cfg.observerBody) { selectedBodyIndex = i; break; }
+
+        glm::vec3 focusRenderPos{0.0f};
+
         apeiron::render::Camera camera(
-            orbit.position(),
-            glm::vec3(0.0f, 0.0f, 0.0f),
+            focusRenderPos + orbit.offset(),
+            focusRenderPos,
             glm::vec3(0.0f, 0.0f, 1.0f),   // Z = ecliptic north
             45.0f,
             static_cast<float>(kWidth) / static_cast<float>(kHeight),
@@ -241,13 +248,27 @@ int main()
                 }
             }
             windowState.scrollDelta = 0.0;
-            camera.setPosition(orbit.position());
+
+            // Focus point: render-space position of the selected body.
+            if (selectedBodyIndex >= 0 && selectedBodyIndex < (int)bodyInfos.size())
+                focusRenderPos = scene.origin().toRenderSpace(
+                    bodyInfos[selectedBodyIndex].node->worldPosition());
+
+            camera.setPosition(focusRenderPos + orbit.offset());
+            camera.setTarget  (focusRenderPos);
 
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
             observerPos = observer.worldPosition(currentEt);
             scene.update(currentEt, observerPos);
+
+            // Recenter the floating origin on the focused body so its render-space
+            // position is (0,0,0).  This keeps all float32 values small and avoids
+            // precision jitter when orbiting a body far from the observer.
+            if (selectedBodyIndex >= 0 && selectedBodyIndex < (int)bodyInfos.size())
+                scene.origin().recenter(
+                    bodyInfos[selectedBodyIndex].node->worldPosition());
 
             // Sun's render-space position (used as light source for all bodies).
             glm::vec3 sunRenderPos{0.0f};
@@ -289,7 +310,7 @@ int main()
             ImGui::Text("  Elevation: %.1f°", orbit.elevationDeg);
 
             ImGui::Separator();
-            ImGui::Text("Bodies");
+            ImGui::Text("Bodies  (click to focus)");
             if (ImGui::BeginTable("bodies", 3,
                                   ImGuiTableFlags_Borders |
                                   ImGuiTableFlags_RowBg   |
@@ -298,11 +319,19 @@ int main()
                 ImGui::TableSetupColumn("Dist from cam (km)");
                 ImGui::TableSetupColumn("Dist from cam (AU)");
                 ImGui::TableHeadersRow();
-                for (auto& bi : bodyInfos) {
+                for (int i = 0; i < static_cast<int>(bodyInfos.size()); ++i) {
+                    auto& bi = bodyInfos[i];
                     glm::vec3 rp   = scene.origin().toRenderSpace(bi.node->worldPosition());
                     float     dist = glm::length(rp - camera.position());
+
                     ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0); ImGui::Text("%s", bi.node->naifName().c_str());
+                    ImGui::TableSetColumnIndex(0);
+                    bool selected = (i == selectedBodyIndex);
+                    if (ImGui::Selectable(bi.node->naifName().c_str(), selected,
+                                         ImGuiSelectableFlags_SpanAllColumns)) {
+                        selectedBodyIndex  = i;
+                        orbit.distanceKm   = bi.radiusKm * 5.0f;
+                    }
                     ImGui::TableSetColumnIndex(1); ImGui::Text("%.0f", dist);
                     ImGui::TableSetColumnIndex(2); ImGui::Text("%.4f", dist / 149'597'870.7f);
                 }
