@@ -143,7 +143,9 @@ Texture::Texture(const Context& ctx, GpuAllocator& allocator,
     int   width{}, height{}, channels{};
     auto* pixels = stbi_load(path.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
     if (!pixels)
-        throw std::runtime_error("Failed to load texture: " + path.string());
+        throw std::runtime_error("Failed to load texture: " + path.string()
+                                 + " — " + stbi_failure_reason()
+                                 + " (supported: JPEG, PNG, BMP, TGA, GIF, PSD, HDR)");
 
     upload(ctx, allocator, pixels, width, height);
     stbi_image_free(pixels);
