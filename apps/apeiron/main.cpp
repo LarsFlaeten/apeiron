@@ -272,6 +272,8 @@ int main()
 
             ImGui::Separator();
             ImGui::Text("Camera");
+            ImGui::Text("  Frame    : %s", cfg.frame.c_str());
+            ImGui::Text("  Focus    : %s", cfg.observerBody.c_str());
             ImGui::Text("  Distance : %.0f km  /  %.4f AU",
                         orbit.distanceKm, orbit.distanceKm / 149'597'870.7f);
             ImGui::Text("  Azimuth  : %.1f°", orbit.azimuthDeg);

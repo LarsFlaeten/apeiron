@@ -54,10 +54,12 @@ void main()
     vec3  color     = diffColor * (0.05 + diff);
 
     // Specular (Blinn-Phong, masked by specular map).
-    float specMask = texture(specularTex, fragUV).r;
-    if (specMask > 0.01 && diff > 0.0) {
+    // Fade out near the terminator using the geometric normal to avoid a hard edge.
+    float specMask  = texture(specularTex, fragUV).r;
+    float specAtten = smoothstep(0.0, 0.1, dot(N_geom, L));
+    if (specMask > 0.01 && specAtten > 0.0) {
         vec3  H    = normalize(L + V);
-        float spec = pow(max(dot(N, H), 0.0), 60.0) * specMask;
+        float spec = pow(max(dot(N, H), 0.0), 60.0) * specMask * specAtten;
         color += vec3(spec * 0.6);
     }
 
