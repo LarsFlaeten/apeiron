@@ -55,8 +55,9 @@ void main()
     vec3 normalSample = texture(normalTex, fragUV).rgb * 2.0 - 1.0;
     vec3 N = normalize(TBN * normalSample);
 
-    // Diffuse (Lambertian), scaled by physical light intensity.
-    float diff      = max(dot(N, L), 0.0);
+    // Diffuse (Lambertian) — use geometric normal so the terminator matches
+    // the cloud layer (normal map detail is reserved for specular only).
+    float diff      = max(dot(N_geom, L), 0.0);
     vec3  diffColor = texture(diffuseTex, fragUV).rgb * fragColor;
     vec3  color     = diffColor * (0.002 + diff * lightIntensity);
 
