@@ -544,9 +544,20 @@ int main()
 
                 // T * R * S: translate to body position, rotate by IAU orientation,
                 // then scale to physical radius.
+                // Screen-space minimum size: clamp so the body always covers at least
+                // 2 pixels in diameter, preventing sub-pixel flickering for distant moons.
+                float distKm = glm::length(renderPos - camera.position());
+                float fovYRad = glm::radians(45.0f);
+                float apparentPixels = (bi.radiusKm / distKm)
+                                     * (static_cast<float>(swapchain.extent().height)
+                                        / std::tan(fovYRad * 0.5f));
+                float sizeScale = (apparentPixels < 2.0f) ? (2.0f / apparentPixels) : 1.0f;
+
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), renderPos);
                 model = model * glm::mat4(bi.node->orientation());
-                model = glm::scale(model, glm::vec3(bi.radiusKm, bi.radiusKm, bi.polarRadiusKm));
+                model = glm::scale(model, glm::vec3(bi.radiusKm  * sizeScale,
+                                                    bi.radiusKm  * sizeScale,
+                                                    bi.polarRadiusKm * sizeScale));
 
                 bool isEmissive = (sunIndex >= 0 && static_cast<int>(i) == sunIndex);
 
