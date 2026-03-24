@@ -160,7 +160,7 @@ std::vector<apeiron::render::StarVertex> loadStars(const std::string& csvPath,
         stars.push_back({ dir, color });
     }
 
-    std::cout << "Loaded " << stars.size() << " stars (mag < " << magLimit << ")\n";
+    std::cout << "Loaded " << stars.size() << " stars (mag < " << magLimit << ")\n" << std::flush;
     return stars;
 }
 
