@@ -222,6 +222,7 @@ void Renderer::draw(const glm::mat4&  mvp,
     pc.viewDirPad   = glm::vec4(viewDir, lightIntensity);
 
     auto& cmd = m_commandBuffers[m_currentFrame];
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline.handle(m_wireframe));
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                            m_pipeline.layout(), 0, descriptorSet, {});
     cmd.pushConstants(m_pipeline.layout(),

@@ -9,7 +9,7 @@ set(SHADER_OUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders")
 file(MAKE_DIRECTORY "${SHADER_OUT_DIR}")
 
 set(SHADER_SPIRV)
-foreach(SHADER triangle.vert triangle.frag tonemap.vert tonemap.frag)
+foreach(SHADER triangle.vert triangle.frag tonemap.vert tonemap.frag star.vert star.frag)
     add_custom_command(
         OUTPUT  "${SHADER_OUT_DIR}/${SHADER}.spv"
         COMMAND ${GLSLC_EXECUTABLE}
@@ -42,11 +42,16 @@ target_link_libraries(apeiron
         tomlplusplus::tomlplusplus
 )
 
+# Expose SPICE headers so main.cpp can call pxform_c for star catalog loading.
+get_target_property(_cspice_inc cspice INTERFACE_INCLUDE_DIRECTORIES)
+target_include_directories(apeiron PRIVATE ${_cspice_inc})
+
 # Bake absolute paths into the binary (avoids working-directory sensitivity).
 target_compile_definitions(apeiron
     PRIVATE
         APEIRON_SHADER_DIR="${SHADER_OUT_DIR}"
         APEIRON_SCENARIO_FILE="${CMAKE_SOURCE_DIR}/data/scenarios/scenario.toml"
+        APEIRON_STAR_CATALOG="${CMAKE_SOURCE_DIR}/data/stars/hygdata_v42.csv"
 )
 
 target_compile_features(apeiron PRIVATE cxx_std_23)

@@ -13,6 +13,7 @@
 #include "apeiron/render/Pipeline.h"
 #include "apeiron/render/TonemapPipeline.h"
 #include "apeiron/render/Renderer.h"
+#include "apeiron/render/StarField.h"
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Texture.h"
 #include "apeiron/render/Vertex.h"
@@ -29,9 +30,13 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cspice/SpiceUsr.h>
+
 #include <cmath>
+#include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -43,6 +48,123 @@
 #ifndef APEIRON_SCENARIO_FILE
 #  error "APEIRON_SCENARIO_FILE not defined"
 #endif
+#ifndef APEIRON_STAR_CATALOG
+#  error "APEIRON_STAR_CATALOG not defined"
+#endif
+
+// ---------------------------------------------------------------------------
+// Star catalog loader
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Map B-V color index to linear RGB.
+glm::vec3 bvToColor(float bv)
+{
+    bv = std::clamp(bv, -0.4f, 2.0f);
+    // Control points: (bv, linear RGB)
+    constexpr struct { float bv; glm::vec3 rgb; } table[] = {
+        { -0.4f, { 0.60f, 0.70f, 1.00f } },  // O/B: blue-white
+        {  0.0f, { 0.90f, 0.95f, 1.00f } },  // A:   white-blue
+        {  0.6f, { 1.00f, 1.00f, 0.85f } },  // G:   yellow-white (Sun ~0.65)
+        {  1.2f, { 1.00f, 0.80f, 0.50f } },  // K:   orange
+        {  2.0f, { 1.00f, 0.50f, 0.20f } },  // M:   red
+    };
+    for (int i = 0; i < 4; ++i) {
+        if (bv <= table[i + 1].bv) {
+            float t = (bv - table[i].bv) / (table[i + 1].bv - table[i].bv);
+            return glm::mix(table[i].rgb, table[i + 1].rgb, t);
+        }
+    }
+    return table[4].rgb;
+}
+
+std::vector<apeiron::render::StarVertex> loadStars(const std::string& csvPath,
+                                                    float              magLimit)
+{
+    // Get the rotation from J2000 equatorial to ECLIPJ2000 via SPICE.
+    // Both frames are inertial so the matrix is constant; et=0 is fine.
+    SpiceDouble m[3][3];
+    pxform_c("J2000", "ECLIPJ2000", 0.0, m);
+    glm::mat3 toEcliptic;
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            toEcliptic[c][r] = static_cast<float>(m[r][c]);  // row→col
+
+    std::ifstream file(csvPath);
+    if (!file) throw std::runtime_error("Cannot open star catalog: " + csvPath);
+
+    // Parse header to find column indices.
+    std::string line;
+    std::getline(file, line);
+    std::vector<std::string> headers;
+    {
+        std::stringstream ss(line);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            // Strip surrounding quotes.
+            if (tok.size() >= 2 && tok.front() == '"' && tok.back() == '"')
+                tok = tok.substr(1, tok.size() - 2);
+            headers.push_back(tok);
+        }
+    }
+    auto colOf = [&](const std::string& name) -> int {
+        for (int i = 0; i < (int)headers.size(); ++i)
+            if (headers[i] == name) return i;
+        throw std::runtime_error("Star catalog missing column: " + name);
+    };
+    int colX   = colOf("x");
+    int colY   = colOf("y");
+    int colZ   = colOf("z");
+    int colMag = colOf("mag");
+    int colCI  = colOf("ci");
+
+    std::vector<apeiron::render::StarVertex> stars;
+    stars.reserve(40'000);
+
+    while (std::getline(file, line)) {
+        std::vector<std::string_view> fields;
+        fields.reserve(40);
+        std::string_view sv(line);
+        std::string_view::size_type start = 0;
+        while (true) {
+            auto comma = sv.find(',', start);
+            fields.push_back(sv.substr(start, comma - start));
+            if (comma == std::string_view::npos) break;
+            start = comma + 1;
+        }
+
+        auto getFloat = [&](int col, float fallback = 0.0f) -> float {
+            if (col >= (int)fields.size() || fields[col].empty()) return fallback;
+            try { return std::stof(std::string(fields[col])); }
+            catch (...) { return fallback; }
+        };
+
+        float mag = getFloat(colMag, 99.0f);
+        if (mag > magLimit) continue;
+
+        float x = getFloat(colX);
+        float y = getFloat(colY);
+        float z = getFloat(colZ);
+        if (x == 0.0f && y == 0.0f && z == 0.0f) continue;  // Sol row
+
+        // HDR brightness: magnitude 1 → 10.0, each step of 1 mag = ×2.512 dimmer.
+        float brightness = 10.0f * std::pow(10.0f, (1.0f - mag) / 2.5f);
+
+        float bv    = getFloat(colCI, 0.6f);  // default to solar G2 if missing
+        glm::vec3 color = bvToColor(bv) * brightness;
+
+        // Rotate equatorial J2000 → ECLIPJ2000 and normalise.
+        glm::vec3 dir = glm::normalize(toEcliptic * glm::vec3(x, y, z));
+
+        stars.push_back({ dir, color });
+    }
+
+    std::cout << "Loaded " << stars.size() << " stars (mag < " << magLimit << ")\n";
+    return stars;
+}
+
+} // namespace
 
 int main()
 {
@@ -179,6 +301,12 @@ int main()
             static_cast<float>(kWidth) / static_cast<float>(kHeight),
             0.1f, 1.0e9f  // must match C_NEAR / C_FAR in triangle.frag
         );
+
+        // Star field — loaded after SPICE kernels are in memory (pxform_c needs them).
+        auto starVertices = loadStars(APEIRON_STAR_CATALOG, 7.5f);
+        apeiron::render::StarField starField(ctx, allocator,
+                                             pipeline.renderPass(), swapchain,
+                                             APEIRON_SHADER_DIR, std::move(starVertices));
 
         // Renderer last — its destructor calls waitIdle before anything else frees.
         apeiron::render::Renderer renderer(ctx, swapchain, pipeline, tonemap);
@@ -344,7 +472,14 @@ int main()
             // --- GPU frame ---
             const glm::mat4 vp = camera.viewProjection();
 
+            // Rotation-only VP for stars (translation zeroed → stars at infinity).
+            glm::mat4 viewRot = camera.viewMatrix();
+            viewRot[3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+            const glm::mat4 vpRot = camera.projectionMatrix() * viewRot;
+
             if (!renderer.beginFrame()) continue;
+
+            starField.draw(renderer.currentCmd(), vpRot);
 
             for (std::size_t i = 0; i < bodyInfos.size(); ++i) {
                 auto& bi = bodyInfos[i];

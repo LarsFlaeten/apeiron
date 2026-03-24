@@ -78,6 +78,9 @@ public:
     void  setExposure(float e) { m_exposure = e; }
     float exposure()     const { return m_exposure; }
 
+    // Access the active command buffer — valid between beginFrame/endFrame.
+    vk::CommandBuffer currentCmd() const { return m_commandBuffers[m_currentFrame]; }
+
 private:
     const Context&         m_ctx;
     const Swapchain&       m_swapchain;
