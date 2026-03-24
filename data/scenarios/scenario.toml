@@ -1,4 +1,4 @@
-# Apeiron scenario — Earth-Moon system
+# Apeiron scenario — Inner solar system
 #
 # Kernel load order: LSK first, then PCK, then SPK.
 
@@ -10,6 +10,9 @@ path = "../kernels/pck/pck00011.tpc"
 
 [[kernels]]
 path = "../kernels/spk/de440s.bsp"
+
+[[kernels]]
+path = "../kernels/spk/mar099s.bsp"
 
 # ---------------------------------------------------------------------------
 
@@ -43,3 +46,18 @@ naif  = "MOON"
 color = [1.0, 1.0, 1.0]
 diffuse = "../textures/moon/moon-4k.png"
 normals = "../textures/moon/moon_normal.jpg"
+
+[[bodies]]
+naif  = "MARS"
+color = [1.0, 1.0, 1.0]
+diffuse = "../textures/mars/8k_mars.jpg"
+
+[[bodies]]
+naif  = "PHOBOS"
+color = [1.0, 1.0, 1.0]
+# diffuse = "../textures/phobos/phobos.jpg"
+
+[[bodies]]
+naif  = "DEIMOS"
+color = [1.0, 1.0, 1.0]
+# diffuse = "../textures/deimos/deimos.jpg"
