@@ -327,6 +327,9 @@ int main()
             double scrollDelta = 0.0;
         } windowState{&renderer};
 
+        bool isFullscreen  = false;
+        int  windowedX = 100, windowedY = 100;
+
         glfwSetWindowUserPointer(window, &windowState);
         glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int) {
             if (action != GLFW_PRESS) return;
@@ -413,6 +416,16 @@ int main()
             ImGui::Begin("Dev View");
             ImGui::Text("%.1f fps  (%.2f ms)", ImGui::GetIO().Framerate,
                         1000.0f / ImGui::GetIO().Framerate);
+            if (ImGui::Checkbox("Fullscreen", &isFullscreen)) {
+                if (isFullscreen) {
+                    glfwGetWindowPos(window, &windowedX, &windowedY);
+                    GLFWmonitor* mon = glfwGetPrimaryMonitor();
+                    const GLFWvidmode* mode = glfwGetVideoMode(mon);
+                    glfwSetWindowMonitor(window, mon, 0, 0, kWidth, kHeight, mode->refreshRate);
+                } else {
+                    glfwSetWindowMonitor(window, nullptr, windowedX, windowedY, kWidth, kHeight, 0);
+                }
+            }
             ImGui::Separator();
 
             ImGui::Text("Simulation");
