@@ -8,4 +8,5 @@ CMakeUserPresets.json
 data/kernels/spk/*.bsp
 
 data/textures/*
+data/stars/*
 
