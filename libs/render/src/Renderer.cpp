@@ -3,6 +3,7 @@
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Pipeline.h"
 #include "apeiron/render/TonemapPipeline.h"
+#include "apeiron/render/BloomPass.h"
 #include "apeiron/render/Mesh.h"
 
 #include <imgui.h>
@@ -19,9 +20,11 @@ namespace apeiron::render {
 Renderer::Renderer(const Context&         ctx,
                    const Swapchain&       swapchain,
                    const Pipeline&        pipeline,
-                   const TonemapPipeline& tonemapPipeline)
+                   const TonemapPipeline& tonemapPipeline,
+                   BloomPass&             bloomPass)
     : m_ctx(ctx), m_swapchain(swapchain),
-      m_pipeline(pipeline), m_tonemapPipeline(tonemapPipeline)
+      m_pipeline(pipeline), m_tonemapPipeline(tonemapPipeline),
+      m_bloomPass(bloomPass)
 {
     auto device = ctx.device();
 
@@ -82,9 +85,10 @@ Renderer::Renderer(const Context&         ctx,
                .setAddressModeW   (vk::SamplerAddressMode::eClampToEdge);
     m_hdrSampler = device.createSampler(samplerInfo);
 
+    // 2 bindings (HDR + bloom) per set.
     vk::DescriptorPoolSize tmPoolSize{};
     tmPoolSize.setType           (vk::DescriptorType::eCombinedImageSampler)
-              .setDescriptorCount(kMaxFramesInFlight);
+              .setDescriptorCount(kMaxFramesInFlight * 2);
     vk::DescriptorPoolCreateInfo tmPoolInfo{};
     tmPoolInfo.setMaxSets  (kMaxFramesInFlight)
               .setPoolSizes(tmPoolSize);
@@ -97,16 +101,25 @@ Renderer::Renderer(const Context&         ctx,
                .setSetLayouts    (layout);
         m_tonemapDescSets[i] = device.allocateDescriptorSets(dsAlloc)[0];
 
-        vk::DescriptorImageInfo imgInfo{};
-        imgInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        // Binding 0: HDR image
+        vk::DescriptorImageInfo hdrInfo{};
+        hdrInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
                .setImageView  (swapchain.hdrImageView(i))
                .setSampler    (m_hdrSampler);
-        vk::WriteDescriptorSet write{};
-        write.setDstSet        (m_tonemapDescSets[i])
-             .setDstBinding    (0)
-             .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-             .setImageInfo     (imgInfo);
-        device.updateDescriptorSets(write, {});
+        // Binding 1: bloom output
+        vk::DescriptorImageInfo bloomInfo{};
+        bloomInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                 .setImageView  (bloomPass.outputImageView(i))
+                 .setSampler    (bloomPass.sampler());
+
+        std::array<vk::WriteDescriptorSet, 2> writes{};
+        writes[0].setDstSet(m_tonemapDescSets[i]).setDstBinding(0)
+                 .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+                 .setImageInfo(hdrInfo);
+        writes[1].setDstSet(m_tonemapDescSets[i]).setDstBinding(1)
+                 .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+                 .setImageInfo(bloomInfo);
+        device.updateDescriptorSets(writes, {});
     }
 
     // ----- Per-frame sync objects -----
@@ -180,18 +193,25 @@ void Renderer::recreateFramebuffers()
         m_tonemapFramebuffers.push_back(device.createFramebuffer(fbInfo));
     }
 
-    // Update tonemap descriptor sets to point at the new HDR image views.
+    // Update tonemap descriptor sets (both bindings).
     for (int i = 0; i < kMaxFramesInFlight; ++i) {
-        vk::DescriptorImageInfo imgInfo{};
-        imgInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        vk::DescriptorImageInfo hdrInfo{};
+        hdrInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
                .setImageView  (m_swapchain.hdrImageView(i))
                .setSampler    (m_hdrSampler);
-        vk::WriteDescriptorSet write{};
-        write.setDstSet        (m_tonemapDescSets[i])
-             .setDstBinding    (0)
-             .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-             .setImageInfo     (imgInfo);
-        device.updateDescriptorSets(write, {});
+        vk::DescriptorImageInfo bloomInfo{};
+        bloomInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                 .setImageView  (m_bloomPass.outputImageView(i))
+                 .setSampler    (m_bloomPass.sampler());
+
+        std::array<vk::WriteDescriptorSet, 2> writes{};
+        writes[0].setDstSet(m_tonemapDescSets[i]).setDstBinding(0)
+                 .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+                 .setImageInfo(hdrInfo);
+        writes[1].setDstSet(m_tonemapDescSets[i]).setDstBinding(1)
+                 .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+                 .setImageInfo(bloomInfo);
+        device.updateDescriptorSets(writes, {});
     }
 }
 
@@ -314,6 +334,9 @@ void Renderer::endFrame()
     // ---- End HDR render pass ----
     cmd.endRenderPass();
 
+    // ---- Bloom passes (threshold + blur) ----
+    m_bloomPass.render(cmd, frame);
+
     // ---- Tonemap pass ----
     // The HDR render pass finalLayout + outbound subpass dependency already
     // transitioned the image to eShaderReadOnlyOptimal and ensured visibility,
@@ -336,9 +359,12 @@ void Renderer::endFrame()
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                            m_tonemapPipeline.layout(), 0,
                            m_tonemapDescSets[frame], {});
+    struct { float exposure; float bloomStrength; } tmpc{
+        m_exposure, m_bloomPass.strength()
+    };
     cmd.pushConstants(m_tonemapPipeline.layout(),
                       vk::ShaderStageFlagBits::eFragment,
-                      0, sizeof(float), &m_exposure);
+                      0, sizeof(tmpc), &tmpc);
     cmd.draw(3, 1, 0, 0);  // fullscreen triangle, no vertex buffer
 
     // ImGui renders in the tonemap pass so the UI bypasses tonemapping.

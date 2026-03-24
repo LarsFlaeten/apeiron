@@ -13,6 +13,7 @@
 #include "apeiron/render/Pipeline.h"
 #include "apeiron/render/TonemapPipeline.h"
 #include "apeiron/render/Renderer.h"
+#include "apeiron/render/BloomPass.h"
 #include "apeiron/render/StarField.h"
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Texture.h"
@@ -148,8 +149,10 @@ std::vector<apeiron::render::StarVertex> loadStars(const std::string& csvPath,
         float z = getFloat(colZ);
         if (x == 0.0f && y == 0.0f && z == 0.0f) continue;  // Sol row
 
-        // HDR brightness: magnitude 1 → 10.0, each step of 1 mag = ×2.512 dimmer.
-        float brightness = 10.0f * std::pow(10.0f, (1.0f - mag) / 2.5f);
+        // HDR brightness: magnitude 1 → 1.0; capped at 2.0 so even Sirius
+        // doesn't produce a bloom box artifact vs the sun (which is ~50).
+        float brightness = std::pow(10.0f, (1.0f - mag) / 2.5f);
+        brightness = std::min(brightness, 2.0f);
 
         float bv    = getFloat(colCI, 0.6f);  // default to solar G2 if missing
         glm::vec3 color = bvToColor(bv) * brightness;
@@ -302,6 +305,9 @@ int main()
             0.1f, 1.0e9f  // must match C_NEAR / C_FAR in triangle.frag
         );
 
+        // Bloom post-process (constructed before Renderer so Renderer can bind its output).
+        apeiron::render::BloomPass bloom(ctx, allocator, swapchain, APEIRON_SHADER_DIR);
+
         // Star field — loaded after SPICE kernels are in memory (pxform_c needs them).
         auto starVertices = loadStars(APEIRON_STAR_CATALOG, 7.5f);
         apeiron::render::StarField starField(ctx, allocator,
@@ -309,7 +315,7 @@ int main()
                                              APEIRON_SHADER_DIR, std::move(starVertices));
 
         // Renderer last — its destructor calls waitIdle before anything else frees.
-        apeiron::render::Renderer renderer(ctx, swapchain, pipeline, tonemap);
+        apeiron::render::Renderer renderer(ctx, swapchain, pipeline, tonemap, bloom);
         renderer.initImGui(window);
 
         // Descriptor sets — allocated from Renderer's pool, freed with it.
@@ -365,6 +371,7 @@ int main()
                     ctx.device().waitIdle();
                     swapchain.recreate(static_cast<uint32_t>(fbW),
                                        static_cast<uint32_t>(fbH));
+                    bloom.recreate(swapchain);
                     renderer.recreateFramebuffers();
                     camera.setAspect(static_cast<float>(fbW) /
                                      static_cast<float>(fbH));
@@ -458,6 +465,20 @@ int main()
             if (ImGui::SliderFloat("Exposure", &exposure, 0.01f, 10.0f,
                                    "%.2f", ImGuiSliderFlags_Logarithmic))
                 renderer.setExposure(exposure);
+
+            ImGui::Separator();
+            ImGui::Text("Bloom");
+            bool bloomEnabled = bloom.strength() > 0.0f;
+            if (ImGui::Checkbox("Bloom enabled", &bloomEnabled))
+                bloom.setStrength(bloomEnabled ? 0.3f : 0.0f);
+            if (bloomEnabled) {
+                float bloomStrength = bloom.strength();
+                if (ImGui::SliderFloat("Strength",  &bloomStrength, 0.0f, 2.0f, "%.2f"))
+                    bloom.setStrength(bloomStrength);
+                float bloomThresh = bloom.threshold();
+                if (ImGui::SliderFloat("Threshold", &bloomThresh,   0.1f, 5.0f, "%.2f"))
+                    bloom.setThreshold(bloomThresh);
+            }
 
             ImGui::Separator();
             ImGui::Text("Camera");

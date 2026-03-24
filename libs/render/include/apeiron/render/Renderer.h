@@ -14,6 +14,7 @@ class Context;
 class Swapchain;
 class Pipeline;
 class TonemapPipeline;
+class BloomPass;
 class Mesh;
 
 // Owns framebuffers, command pool/buffers, and per-frame sync objects.
@@ -33,10 +34,11 @@ class Renderer {
 public:
     static constexpr int kMaxFramesInFlight = 2;
 
-    Renderer(const Context&        ctx,
-             const Swapchain&      swapchain,
-             const Pipeline&       pipeline,
-             const TonemapPipeline& tonemapPipeline);
+    Renderer(const Context&         ctx,
+             const Swapchain&       swapchain,
+             const Pipeline&        pipeline,
+             const TonemapPipeline& tonemapPipeline,
+             BloomPass&             bloomPass);
     ~Renderer();
 
     Renderer(const Renderer&)            = delete;
@@ -90,6 +92,7 @@ private:
     const Swapchain&       m_swapchain;
     const Pipeline&        m_pipeline;
     const TonemapPipeline& m_tonemapPipeline;
+    BloomPass&             m_bloomPass;
 
     // Material descriptor pool (bodies).
     vk::DescriptorPool             m_descriptorPool;

@@ -4,9 +4,11 @@ layout(location = 0) in  vec2 fragUV;
 layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D hdrTex;
+layout(set = 0, binding = 1) uniform sampler2D bloomTex;
 
 layout(push_constant) uniform PC {
     float exposure;
+    float bloomStrength;  // 0 = bloom disabled
 } pc;
 
 // ACES filmic tonemapping approximation (Krzysztof Narkowicz, 2015).
@@ -17,7 +19,7 @@ vec3 aces(vec3 x) {
 
 void main()
 {
-    vec3 hdr     = texture(hdrTex, fragUV).rgb;
-    vec3 exposed = hdr * pc.exposure;
-    outColor     = vec4(aces(exposed), 1.0);
+    vec3 hdr   = texture(hdrTex,   fragUV).rgb;
+    vec3 bloom = texture(bloomTex, fragUV).rgb;
+    outColor = vec4(aces((hdr + bloom * pc.bloomStrength) * pc.exposure), 1.0);
 }

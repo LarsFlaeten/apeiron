@@ -61,21 +61,22 @@ TonemapPipeline::TonemapPipeline(const Context&               ctx,
           .setDependencies(dep);
     m_renderPass = device.createRenderPass(rpInfo);
 
-    // ----- Descriptor set layout: one sampler (HDR texture) -----
-    vk::DescriptorSetLayoutBinding binding{};
-    binding.setBinding        (0)
-           .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
-           .setDescriptorCount(1)
-           .setStageFlags     (vk::ShaderStageFlagBits::eFragment);
+    // ----- Descriptor set layout: binding 0 = HDR, binding 1 = bloom -----
+    std::array<vk::DescriptorSetLayoutBinding, 2> bindings{};
+    for (uint32_t i = 0; i < 2; ++i)
+        bindings[i].setBinding        (i)
+                   .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
+                   .setDescriptorCount(1)
+                   .setStageFlags     (vk::ShaderStageFlagBits::eFragment);
     vk::DescriptorSetLayoutCreateInfo dslInfo{};
-    dslInfo.setBindings(binding);
+    dslInfo.setBindings(bindings);
     m_descriptorSetLayout = device.createDescriptorSetLayout(dslInfo);
 
-    // ----- Pipeline layout: set 0 = HDR sampler, push constant = exposure -----
+    // ----- Pipeline layout: set 0 = HDR+bloom samplers, push = {exposure, bloomStrength} -----
     vk::PushConstantRange pcRange{};
     pcRange.setStageFlags(vk::ShaderStageFlagBits::eFragment)
            .setOffset    (0)
-           .setSize      (sizeof(float));
+           .setSize      (sizeof(float) * 2);  // exposure + bloomStrength
     vk::PipelineLayoutCreateInfo plInfo{};
     plInfo.setSetLayouts       (m_descriptorSetLayout)
           .setPushConstantRanges(pcRange);

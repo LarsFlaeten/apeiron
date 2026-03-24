@@ -16,6 +16,7 @@ add_library(render STATIC
     src/Swapchain.cpp
     src/Pipeline.cpp
     src/TonemapPipeline.cpp
+    src/BloomPass.cpp
     src/StarField.cpp
     src/Renderer.cpp
     src/GpuAllocator.cpp

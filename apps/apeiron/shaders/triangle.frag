@@ -31,7 +31,7 @@ void main()
     // Emissive bodies (the sun): output bright HDR colour, skip all lighting.
     if (pc.sunDirPad.w > 0.5) {
         vec3 diffColor = texture(diffuseTex, fragUV).rgb * fragColor;
-        outColor = vec4(diffColor * 8.0, 1.0);
+        outColor = vec4(diffColor * 50.0, 1.0);
         return;
     }
 
