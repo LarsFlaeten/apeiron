@@ -12,7 +12,7 @@ BodyProperties BodyProperties::queryFromSpice(const std::string& naifName)
     SpiceDouble radii[3] = {};
     bodvrd_c(naifName.c_str(), "RADII", 3, &dim, radii);
     astro::Spice().checkError();
-    return { radii[0] }; // equatorial (a-axis) radius in km
+    return { radii[0], radii[2] }; // equatorial (a-axis), polar (c-axis), km
 }
 
 } // namespace apeiron::universe
