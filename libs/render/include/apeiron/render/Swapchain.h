@@ -29,6 +29,10 @@ public:
     Swapchain(const Swapchain&)            = delete;
     Swapchain& operator=(const Swapchain&) = delete;
 
+    // Destroy and recreate swapchain + all dependent images at a new size.
+    // Caller must ensure the device is idle before calling.
+    void recreate(uint32_t width, uint32_t height);
+
     vk::SwapchainKHR                  handle()         const { return vk::SwapchainKHR(m_vkbSwapchain.swapchain); }
     vk::Format                        imageFormat()    const { return vk::Format(m_vkbSwapchain.image_format);    }
     vk::Extent2D                      extent()         const { return {m_vkbSwapchain.extent.width,
@@ -43,8 +47,12 @@ public:
 
 private:
     vk::Format findDepthFormat() const;
+    void       buildSwapchain(uint32_t width, uint32_t height);
+    void       createImages  (uint32_t width, uint32_t height);
+    void       destroyImages ();
 
     const Context&             m_ctx;
+    GpuAllocator*              m_allocator = nullptr;
     vkb::Swapchain             m_vkbSwapchain{};
     std::vector<vk::ImageView> m_imageViews;
 

@@ -100,13 +100,12 @@ TonemapPipeline::TonemapPipeline(const Context&               ctx,
     vk::PipelineInputAssemblyStateCreateInfo iaState{};
     iaState.setTopology(vk::PrimitiveTopology::eTriangleList);
 
-    auto ext = swapchain.extent();
-    vk::Viewport vp{0.0f, 0.0f,
-                    static_cast<float>(ext.width), static_cast<float>(ext.height),
-                    0.0f, 1.0f};
-    vk::Rect2D scissor{{0, 0}, ext};
+    std::array dynStates{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+    vk::PipelineDynamicStateCreateInfo dynState{};
+    dynState.setDynamicStates(dynStates);
+
     vk::PipelineViewportStateCreateInfo vpState{};
-    vpState.setViewports(vp).setScissors(scissor);
+    vpState.setViewportCount(1).setScissorCount(1);
 
     vk::PipelineRasterizationStateCreateInfo rsState{};
     rsState.setPolygonMode(vk::PolygonMode::eFill)
@@ -131,6 +130,7 @@ TonemapPipeline::TonemapPipeline(const Context&               ctx,
           .setPRasterizationState(&rsState)
           .setPMultisampleState  (&msState)
           .setPColorBlendState   (&cbState)
+          .setPDynamicState      (&dynState)
           .setLayout             (m_layout)
           .setRenderPass         (m_renderPass);
 

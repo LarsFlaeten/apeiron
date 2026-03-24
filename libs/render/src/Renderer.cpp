@@ -146,6 +146,55 @@ Renderer::~Renderer()
         device.destroyFramebuffer(fb);
 }
 
+void Renderer::recreateFramebuffers()
+{
+    auto device = m_ctx.device();
+
+    for (auto fb : m_tonemapFramebuffers) device.destroyFramebuffer(fb);
+    m_tonemapFramebuffers.clear();
+    for (auto fb : m_hdrFramebuffers)     device.destroyFramebuffer(fb);
+
+    // HDR framebuffers (one per frame-in-flight)
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        std::array<vk::ImageView, 2> attachments{
+            m_swapchain.hdrImageView(i),
+            m_swapchain.depthImageView()
+        };
+        vk::FramebufferCreateInfo fbInfo{};
+        fbInfo.setRenderPass(m_pipeline.renderPass())
+              .setAttachments(attachments)
+              .setWidth (m_swapchain.extent().width)
+              .setHeight(m_swapchain.extent().height)
+              .setLayers(1);
+        m_hdrFramebuffers[i] = device.createFramebuffer(fbInfo);
+    }
+
+    // Tonemap framebuffers (one per swapchain image)
+    for (auto view : m_swapchain.imageViews()) {
+        vk::FramebufferCreateInfo fbInfo{};
+        fbInfo.setRenderPass(m_tonemapPipeline.renderPass())
+              .setAttachments(view)
+              .setWidth (m_swapchain.extent().width)
+              .setHeight(m_swapchain.extent().height)
+              .setLayers(1);
+        m_tonemapFramebuffers.push_back(device.createFramebuffer(fbInfo));
+    }
+
+    // Update tonemap descriptor sets to point at the new HDR image views.
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        vk::DescriptorImageInfo imgInfo{};
+        imgInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+               .setImageView  (m_swapchain.hdrImageView(i))
+               .setSampler    (m_hdrSampler);
+        vk::WriteDescriptorSet write{};
+        write.setDstSet        (m_tonemapDescSets[i])
+             .setDstBinding    (0)
+             .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+             .setImageInfo     (imgInfo);
+        device.updateDescriptorSets(write, {});
+    }
+}
+
 bool Renderer::beginFrame()
 {
     auto device = m_ctx.device();
@@ -275,6 +324,14 @@ void Renderer::endFrame()
            .setRenderArea ({vk::Offset2D{0, 0}, m_swapchain.extent()});
 
     cmd.beginRenderPass(tmBegin, vk::SubpassContents::eInline);
+
+    vk::Viewport tmVp{0.f, 0.f,
+        static_cast<float>(m_swapchain.extent().width),
+        static_cast<float>(m_swapchain.extent().height),
+        0.f, 1.f};
+    cmd.setViewport(0, tmVp);
+    cmd.setScissor (0, vk::Rect2D{{0, 0}, m_swapchain.extent()});
+
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_tonemapPipeline.handle());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                            m_tonemapPipeline.layout(), 0,

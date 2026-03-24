@@ -78,6 +78,10 @@ public:
     void  setExposure(float e) { m_exposure = e; }
     float exposure()     const { return m_exposure; }
 
+    // Recreate framebuffers after a swapchain resize.
+    // Call after Swapchain::recreate() with the device idle.
+    void recreateFramebuffers();
+
     // Access the active command buffer — valid between beginFrame/endFrame.
     vk::CommandBuffer currentCmd() const { return m_commandBuffers[m_currentFrame]; }
 

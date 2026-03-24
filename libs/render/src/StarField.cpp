@@ -97,11 +97,12 @@ StarField::StarField(const Context&               ctx,
     vk::PipelineInputAssemblyStateCreateInfo iaState{};
     iaState.setTopology(vk::PrimitiveTopology::ePointList);
 
-    auto ext = swapchain.extent();
-    vk::Viewport vp{0.f, 0.f, static_cast<float>(ext.width), static_cast<float>(ext.height), 0.f, 1.f};
-    vk::Rect2D scissor{{0, 0}, ext};
+    std::array dynStates{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+    vk::PipelineDynamicStateCreateInfo dynState{};
+    dynState.setDynamicStates(dynStates);
+
     vk::PipelineViewportStateCreateInfo vpState{};
-    vpState.setViewports(vp).setScissors(scissor);
+    vpState.setViewportCount(1).setScissorCount(1);
 
     vk::PipelineRasterizationStateCreateInfo rsState{};
     rsState.setPolygonMode(vk::PolygonMode::eFill)
@@ -132,6 +133,7 @@ StarField::StarField(const Context&               ctx,
           .setPMultisampleState  (&msState)
           .setPDepthStencilState (&dsState)
           .setPColorBlendState   (&cbState)
+          .setPDynamicState      (&dynState)
           .setLayout             (m_layout)
           .setRenderPass         (hdrRenderPass);
 

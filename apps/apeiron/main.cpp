@@ -327,7 +327,8 @@ int main()
             double scrollDelta = 0.0;
         } windowState{&renderer};
 
-        bool isFullscreen  = false;
+        bool isFullscreen = false;
+        bool needsResize  = false;
         int  windowedX = 100, windowedY = 100;
 
         glfwSetWindowUserPointer(window, &windowState);
@@ -356,6 +357,20 @@ int main()
 
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
+
+            if (needsResize) {
+                int fbW = 0, fbH = 0;
+                glfwGetFramebufferSize(window, &fbW, &fbH);
+                if (fbW > 0 && fbH > 0) {
+                    ctx.device().waitIdle();
+                    swapchain.recreate(static_cast<uint32_t>(fbW),
+                                       static_cast<uint32_t>(fbH));
+                    renderer.recreateFramebuffers();
+                    camera.setAspect(static_cast<float>(fbW) /
+                                     static_cast<float>(fbH));
+                    needsResize = false;
+                }
+            }
 
             auto  now     = std::chrono::steady_clock::now();
             float frameDt = std::chrono::duration<float>(now - prevFrameTime).count();
@@ -421,10 +436,13 @@ int main()
                     glfwGetWindowPos(window, &windowedX, &windowedY);
                     GLFWmonitor* mon = glfwGetPrimaryMonitor();
                     const GLFWvidmode* mode = glfwGetVideoMode(mon);
-                    glfwSetWindowMonitor(window, mon, 0, 0, kWidth, kHeight, mode->refreshRate);
+                    glfwSetWindowMonitor(window, mon, 0, 0,
+                                        mode->width, mode->height, mode->refreshRate);
                 } else {
-                    glfwSetWindowMonitor(window, nullptr, windowedX, windowedY, kWidth, kHeight, 0);
+                    glfwSetWindowMonitor(window, nullptr,
+                                        windowedX, windowedY, kWidth, kHeight, 0);
                 }
+                needsResize = true;
             }
             ImGui::Separator();
 
