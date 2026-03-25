@@ -190,9 +190,13 @@ int main()
         // =================================================================
         auto cfg = ScenarioConfig::load(APEIRON_SCENARIO_FILE);
 
+        glfwSetWindowTitle(window, "Apeiron — Loading SPICE kernels…");
+        glfwPollEvents();
         auto& pool = apeiron::universe::KernelPool::instance();
-        for (auto& k : cfg.kernels)
+        for (auto& k : cfg.kernels) {
             pool.load(k);
+            glfwPollEvents();
+        }
 
         auto et = astro::EphemerisTime::fromString(cfg.epoch);
 
@@ -247,6 +251,8 @@ int main()
         // All VMA-backed objects (meshes, swapchain depth image) are freed
         // before the allocator is destroyed.
         // =================================================================
+        glfwSetWindowTitle(window, "Apeiron — Initialising GPU…");
+        glfwPollEvents();
         apeiron::render::Context      ctx(window);
         apeiron::render::GpuAllocator allocator(ctx);
         apeiron::render::Swapchain    swapchain(ctx, allocator, kWidth, kHeight);
@@ -258,15 +264,19 @@ int main()
         using Tex = apeiron::render::Texture;
         struct BodyTextures { Tex diffuse, specular, normal, clouds, height; };
 
-        auto load = [&](const std::string& path, Tex fallback) -> Tex {
+        auto load = [&](const std::string& path, Tex fallback, bool linear = false) -> Tex {
             return path.empty() ? std::move(fallback)
-                                : Tex(ctx, allocator, path);
+                                : Tex(ctx, allocator, path, linear);
         };
 
         std::vector<std::unique_ptr<apeiron::render::Mesh>> meshes;
         std::vector<BodyTextures> bodyTextures;
         bodyTextures.reserve(bodyInfos.size());
         for (auto& bi : bodyInfos) {
+            glfwSetWindowTitle(window,
+                ("Apeiron — Loading " + bi.node->naifName() + "…").c_str());
+            glfwPollEvents();
+
             auto [verts, idxs] = apeiron::render::Geometry::makeSphere(
                 1.0f, 64, 64, bi.color);
             meshes.push_back(std::make_unique<apeiron::render::Mesh>(
@@ -276,7 +286,7 @@ int main()
                 load(bi.specularPath,  Tex::makeBlack        (ctx, allocator)),
                 load(bi.normalPath,    Tex::makeNeutralNormal(ctx, allocator)),
                 load(bi.cloudsPath,    Tex::makeBlack        (ctx, allocator)),
-                load(bi.heightmapPath, Tex::makeBlack        (ctx, allocator))
+                load(bi.heightmapPath, Tex::makeBlack        (ctx, allocator), /*linear=*/true)
             });
         }
 
@@ -316,6 +326,8 @@ int main()
         apeiron::render::BloomPass bloom(ctx, allocator, swapchain, APEIRON_SHADER_DIR);
 
         // Star field — loaded after SPICE kernels are in memory (pxform_c needs them).
+        glfwSetWindowTitle(window, "Apeiron — Loading star catalog…");
+        glfwPollEvents();
         auto starVertices = loadStars(APEIRON_STAR_CATALOG, 7.5f);
         apeiron::render::StarField starField(ctx, allocator,
                                              pipeline.renderPass(), swapchain,
@@ -324,6 +336,7 @@ int main()
         // Renderer last — its destructor calls waitIdle before anything else frees.
         apeiron::render::Renderer renderer(ctx, swapchain, pipeline, tonemap, bloom);
         renderer.initImGui(window);
+        glfwSetWindowTitle(window, "Apeiron");
 
         // Descriptor sets — allocated from Renderer's pool, freed with it.
         std::vector<vk::DescriptorSet> descriptorSets;
