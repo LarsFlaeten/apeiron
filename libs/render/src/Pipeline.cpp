@@ -202,12 +202,14 @@ Pipeline::Pipeline(const Context&               ctx,
             .setDescriptorCount(1)
             .setStageFlags     (vk::ShaderStageFlagBits::eFragment);
     }
-    // Binding 4: heightmap — sampled in the tessellation evaluation shader.
+    // Binding 4: heightmap — sampled in TES (vertex displacement) and
+    // in the fragment shader (per-pixel displaced normal).
     samplerBindings[4]
         .setBinding        (4)
         .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
         .setDescriptorCount(1)
-        .setStageFlags     (vk::ShaderStageFlagBits::eTessellationEvaluation);
+        .setStageFlags     (vk::ShaderStageFlagBits::eTessellationEvaluation |
+                            vk::ShaderStageFlagBits::eFragment);
     vk::DescriptorSetLayoutCreateInfo dslInfo{};
     dslInfo.setBindings(samplerBindings);
     m_descriptorSetLayout = device.createDescriptorSetLayout(dslInfo);

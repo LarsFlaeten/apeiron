@@ -9,6 +9,7 @@ layout(set = 0, binding = 0) uniform sampler2D diffuseTex;
 layout(set = 0, binding = 1) uniform sampler2D specularTex;
 layout(set = 0, binding = 2) uniform sampler2D normalTex;
 layout(set = 0, binding = 3) uniform sampler2D cloudsTex;
+layout(set = 0, binding = 4) uniform sampler2D heightTex;
 
 layout(push_constant) uniform PC {
     mat4 mvp;
@@ -45,11 +46,30 @@ void main()
     mat3 normalMat = mat3(c0, c1, cross(c0, c1));
 
     // TBN for equirectangular sphere (poles at ±Z, u=longitude, v=latitude).
-    float phi = fragUV.x * 2.0 * PI;
-    vec3 N_geom = normalize(fragNormal);
-    vec3 T      = normalize(normalMat * vec3(-sin(phi), cos(phi), 0.0));
-    vec3 B      = normalize(cross(N_geom, T));
-    mat3 TBN    = mat3(T, B, N_geom);
+    float phi    = fragUV.x * 2.0 * PI;
+    float lat    = (fragUV.y - 0.5) * PI;
+    float cosLat = cos(lat);
+    vec3 N_geom  = normalize(fragNormal);
+    vec3 T       = normalize(normalMat * vec3(-sin(phi), cos(phi), 0.0));
+    vec3 B       = normalize(cross(N_geom, T));
+
+    // Per-pixel displaced geometric normal from heightmap gradient.
+    // Computed here (not in TES) so the result is per-pixel, avoiding the
+    // terminator banding caused by linear interpolation of per-vertex normals.
+    float dispScale = pc.normalCol0.w;
+    if (dispScale > 0.0) {
+        const float eps = 1.0 / 8192.0;
+        float h  = texture(heightTex, fragUV).r;
+        float hU = texture(heightTex, fragUV + vec2(eps, 0.0)).r;
+        float hV = texture(heightTex, fragUV + vec2(0.0, eps)).r;
+        float arcU = 2.0 * PI * eps * max(cosLat, 0.001);
+        float arcV = PI * eps;
+        N_geom = normalize(N_geom
+            - T * ((hU - h) * dispScale / arcU)
+            - B * ((hV - h) * dispScale / arcV));
+        B = normalize(cross(N_geom, T));
+    }
+    mat3 TBN = mat3(T, B, N_geom);
 
     // Perturb normal from normal map (tangent-space, OpenGL convention).
     vec3 normalSample = texture(normalTex, fragUV).rgb * 2.0 - 1.0;
