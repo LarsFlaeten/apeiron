@@ -25,7 +25,7 @@ float edgeLevel(vec4 p0, vec4 p1)
     if (p0.w <= 0.0 && p1.w <= 0.0) return 1.0;
     vec2 ndc0 = p0.xy / max(p0.w, 1e-4);
     vec2 ndc1 = p1.xy / max(p1.w, 1e-4);
-    return clamp(length(ndc1 - ndc0) / 0.002, 1.0, 64.0);
+    return clamp(length(ndc1 - ndc0) / 0.01, 1.0, 16.0);
 }
 
 void main()
