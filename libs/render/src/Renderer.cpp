@@ -67,10 +67,10 @@ Renderer::Renderer(const Context&         ctx,
              .setCommandBufferCount(kMaxFramesInFlight);
     m_commandBuffers = device.allocateCommandBuffers(allocInfo);
 
-    // ----- Material descriptor pool: 4 texture slots × 64 bodies -----
+    // ----- Material descriptor pool: 5 texture slots × 64 bodies -----
     vk::DescriptorPoolSize matPoolSize{};
     matPoolSize.setType           (vk::DescriptorType::eCombinedImageSampler)
-               .setDescriptorCount(64 * 4);
+               .setDescriptorCount(64 * 5);
     vk::DescriptorPoolCreateInfo dpInfo{};
     dpInfo.setMaxSets  (64)
           .setPoolSizes(matPoolSize);
@@ -266,12 +266,13 @@ void Renderer::draw(const glm::mat4&  mvp,
                     const glm::vec3&  viewDir,
                     bool              isEmissive,
                     float             lightIntensity,
+                    float             displaceScale,
                     vk::DescriptorSet descriptorSet,
                     const Mesh&       mesh)
 {
     // Push constant layout (128 bytes):
     //   offset  0: mat4 mvp            (64 bytes)
-    //   offset 64: vec4 normalCol[2]   (32 bytes)
+    //   offset 64: vec4 normalCol[2]   (32 bytes) — [0].w = displaceScale
     //   offset 96: vec4 sunDirPad      (xyz=sunDir, w=isEmissive flag)
     //  offset112: vec4 viewDirPad     (xyz=viewDir, w=lightIntensity)
     struct PushConstants {
@@ -285,7 +286,7 @@ void Renderer::draw(const glm::mat4&  mvp,
     glm::mat3 nm = glm::mat3(model);
     PushConstants pc{};
     pc.mvp          = mvp;
-    pc.normalCol[0] = glm::vec4(nm[0], 0.0f);
+    pc.normalCol[0] = glm::vec4(nm[0], displaceScale);
     pc.normalCol[1] = glm::vec4(nm[1], 0.0f);
     pc.sunDirPad    = glm::vec4(sunDir,  isEmissive ? 1.0f : 0.0f);
     pc.viewDirPad   = glm::vec4(viewDir, lightIntensity);
@@ -295,15 +296,17 @@ void Renderer::draw(const glm::mat4&  mvp,
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                            m_pipeline.layout(), 0, descriptorSet, {});
     cmd.pushConstants(m_pipeline.layout(),
-                      vk::ShaderStageFlagBits::eVertex |
+                      vk::ShaderStageFlagBits::eVertex              |
+                      vk::ShaderStageFlagBits::eTessellationControl |
+                      vk::ShaderStageFlagBits::eTessellationEvaluation |
                       vk::ShaderStageFlagBits::eFragment,
                       0, sizeof(PushConstants), &pc);
     mesh.draw(cmd);
 }
 
 vk::DescriptorSet Renderer::allocateDescriptorSet(
-    const std::array<vk::ImageView, 4>& views,
-    const std::array<vk::Sampler,   4>& samplers)
+    const std::array<vk::ImageView, 5>& views,
+    const std::array<vk::Sampler,   5>& samplers)
 {
     auto layout = m_pipeline.descriptorSetLayout();
     vk::DescriptorSetAllocateInfo allocInfo{};
@@ -311,9 +314,9 @@ vk::DescriptorSet Renderer::allocateDescriptorSet(
              .setSetLayouts    (layout);
     auto sets = m_ctx.device().allocateDescriptorSets(allocInfo);
 
-    std::array<vk::DescriptorImageInfo, 4> imgInfos{};
-    std::array<vk::WriteDescriptorSet,  4> writes{};
-    for (uint32_t i = 0; i < 4; ++i) {
+    std::array<vk::DescriptorImageInfo, 5> imgInfos{};
+    std::array<vk::WriteDescriptorSet,  5> writes{};
+    for (uint32_t i = 0; i < 5; ++i) {
         imgInfos[i].setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
                    .setImageView  (views[i])
                    .setSampler    (samplers[i]);

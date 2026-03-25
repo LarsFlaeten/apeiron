@@ -51,6 +51,8 @@ normals = "../textures/moon/moon_normal.jpg"
 naif  = "MARS"
 color = [1.0, 1.0, 1.0]
 diffuse = "../textures/mars/8k_mars.jpg"
+normals = "../textures/mars/MarsNormal.png"
+displacement = "../textures/mars/Mars_MGS_MOLA_8k_height.png"
 
 [[bodies]]
 naif  = "PHOBOS"

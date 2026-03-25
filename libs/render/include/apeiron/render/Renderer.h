@@ -59,14 +59,15 @@ public:
               const glm::vec3&  viewDir,
               bool              isEmissive,
               float             lightIntensity,
+              float             displaceScale,
               vk::DescriptorSet descriptorSet,
               const Mesh&       mesh);
 
-    // Allocate and write a descriptor set for 4 material texture slots:
-    // [0]=diffuse  [1]=specular  [2]=normals  [3]=clouds
+    // Allocate and write a descriptor set for 5 material texture slots:
+    // [0]=diffuse  [1]=specular  [2]=normals  [3]=clouds  [4]=heightmap
     vk::DescriptorSet allocateDescriptorSet(
-        const std::array<vk::ImageView, 4>& views,
-        const std::array<vk::Sampler,   4>& samplers);
+        const std::array<vk::ImageView, 5>& views,
+        const std::array<vk::Sampler,   5>& samplers);
 
     // End both passes, submit, and present.
     void endFrame();

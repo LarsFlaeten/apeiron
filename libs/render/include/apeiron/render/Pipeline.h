@@ -33,9 +33,11 @@ public:
 
 private:
     vk::ShaderModule loadShader(const std::filesystem::path& spvPath);
-    vk::Pipeline     buildPipeline(vk::PolygonMode            polygonMode,
-                                   vk::ShaderModule           vert,
-                                   vk::ShaderModule           frag);
+    vk::Pipeline     buildPipeline(vk::PolygonMode  polygonMode,
+                                   vk::ShaderModule vert,
+                                   vk::ShaderModule tesc,
+                                   vk::ShaderModule tese,
+                                   vk::ShaderModule frag);
 
     const Context&          m_ctx;
     vk::DescriptorSetLayout m_descriptorSetLayout;

@@ -46,11 +46,15 @@ vk::ShaderModule Pipeline::loadShader(const std::filesystem::path& spvPath)
 
 vk::Pipeline Pipeline::buildPipeline(vk::PolygonMode  polygonMode,
                                       vk::ShaderModule vert,
+                                      vk::ShaderModule tesc,
+                                      vk::ShaderModule tese,
                                       vk::ShaderModule frag)
 {
-    std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
-    stages[0].setStage(vk::ShaderStageFlagBits::eVertex)  .setModule(vert).setPName("main");
-    stages[1].setStage(vk::ShaderStageFlagBits::eFragment).setModule(frag).setPName("main");
+    std::array<vk::PipelineShaderStageCreateInfo, 4> stages{};
+    stages[0].setStage(vk::ShaderStageFlagBits::eVertex)                 .setModule(vert).setPName("main");
+    stages[1].setStage(vk::ShaderStageFlagBits::eTessellationControl)    .setModule(tesc).setPName("main");
+    stages[2].setStage(vk::ShaderStageFlagBits::eTessellationEvaluation) .setModule(tese).setPName("main");
+    stages[3].setStage(vk::ShaderStageFlagBits::eFragment)               .setModule(frag).setPName("main");
 
     auto binding    = Vertex::bindingDescription();
     auto attributes = Vertex::attributeDescriptions();
@@ -59,7 +63,10 @@ vk::Pipeline Pipeline::buildPipeline(vk::PolygonMode  polygonMode,
                .setVertexAttributeDescriptions(attributes);
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);
+    inputAssembly.setTopology(vk::PrimitiveTopology::ePatchList);
+
+    vk::PipelineTessellationStateCreateInfo tessState{};
+    tessState.setPatchControlPoints(3);
 
     std::array dynStates{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
     vk::PipelineDynamicStateCreateInfo dynamicState{};
@@ -93,18 +100,19 @@ vk::Pipeline Pipeline::buildPipeline(vk::PolygonMode  polygonMode,
                 .setStencilTestEnable     (vk::False);
 
     vk::GraphicsPipelineCreateInfo info{};
-    info.setStages             (stages)
-        .setPVertexInputState  (&vertexInput)
-        .setPInputAssemblyState(&inputAssembly)
-        .setPViewportState     (&viewportState)
-        .setPRasterizationState(&rasterizer)
-        .setPMultisampleState  (&multisampling)
-        .setPColorBlendState   (&colorBlend)
-        .setPDepthStencilState (&depthStencil)
-        .setPDynamicState      (&dynamicState)
-        .setLayout             (m_layout)
-        .setRenderPass         (m_renderPass)
-        .setSubpass            (0);
+    info.setStages               (stages)
+        .setPVertexInputState    (&vertexInput)
+        .setPInputAssemblyState  (&inputAssembly)
+        .setPTessellationState   (&tessState)
+        .setPViewportState       (&viewportState)
+        .setPRasterizationState  (&rasterizer)
+        .setPMultisampleState    (&multisampling)
+        .setPColorBlendState     (&colorBlend)
+        .setPDepthStencilState   (&depthStencil)
+        .setPDynamicState        (&dynamicState)
+        .setLayout               (m_layout)
+        .setRenderPass           (m_renderPass)
+        .setSubpass              (0);
 
     auto [result, pipeline] = m_ctx.device().createGraphicsPipeline(nullptr, info);
     if (result != vk::Result::eSuccess)
@@ -185,8 +193,8 @@ Pipeline::Pipeline(const Context&               ctx,
     rpInfo.setAttachments(attachments).setSubpasses(subpass).setDependencies(deps);
     m_renderPass = device.createRenderPass(rpInfo);
 
-    // ----- Descriptor set layout (set 0): diffuse, specular, normals, clouds -----
-    std::array<vk::DescriptorSetLayoutBinding, 4> samplerBindings{};
+    // ----- Descriptor set layout (set 0): diffuse, specular, normals, clouds, heightmap -----
+    std::array<vk::DescriptorSetLayoutBinding, 5> samplerBindings{};
     for (uint32_t i = 0; i < 4; ++i) {
         samplerBindings[i]
             .setBinding        (i)
@@ -194,6 +202,12 @@ Pipeline::Pipeline(const Context&               ctx,
             .setDescriptorCount(1)
             .setStageFlags     (vk::ShaderStageFlagBits::eFragment);
     }
+    // Binding 4: heightmap — sampled in the tessellation evaluation shader.
+    samplerBindings[4]
+        .setBinding        (4)
+        .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
+        .setDescriptorCount(1)
+        .setStageFlags     (vk::ShaderStageFlagBits::eTessellationEvaluation);
     vk::DescriptorSetLayoutCreateInfo dslInfo{};
     dslInfo.setBindings(samplerBindings);
     m_descriptorSetLayout = device.createDescriptorSetLayout(dslInfo);
@@ -202,7 +216,9 @@ Pipeline::Pipeline(const Context&               ctx,
     // 128 bytes: mat4 mvp + mat3 normalMat (as 3×vec4) + vec3 sunDir (+ pad).
     // sunDir is read in the fragment shader, so both stages need access.
     vk::PushConstantRange pcRange{};
-    pcRange.setStageFlags(vk::ShaderStageFlagBits::eVertex |
+    pcRange.setStageFlags(vk::ShaderStageFlagBits::eVertex              |
+                          vk::ShaderStageFlagBits::eTessellationControl |
+                          vk::ShaderStageFlagBits::eTessellationEvaluation |
                           vk::ShaderStageFlagBits::eFragment)
            .setOffset(0)
            .setSize(sizeof(glm::mat4) * 2);
@@ -214,12 +230,16 @@ Pipeline::Pipeline(const Context&               ctx,
 
     // ----- Shaders (loaded once, shared by both pipelines) -----
     auto vertModule = loadShader(shaderDir / "triangle.vert.spv");
+    auto tescModule = loadShader(shaderDir / "triangle.tesc.spv");
+    auto teseModule = loadShader(shaderDir / "triangle.tese.spv");
     auto fragModule = loadShader(shaderDir / "triangle.frag.spv");
 
-    m_fillPipeline      = buildPipeline(vk::PolygonMode::eFill, vertModule, fragModule);
-    m_wireframePipeline = buildPipeline(vk::PolygonMode::eLine, vertModule, fragModule);
+    m_fillPipeline      = buildPipeline(vk::PolygonMode::eFill, vertModule, tescModule, teseModule, fragModule);
+    m_wireframePipeline = buildPipeline(vk::PolygonMode::eLine, vertModule, tescModule, teseModule, fragModule);
 
     device.destroyShaderModule(vertModule);
+    device.destroyShaderModule(tescModule);
+    device.destroyShaderModule(teseModule);
     device.destroyShaderModule(fragModule);
 }
 

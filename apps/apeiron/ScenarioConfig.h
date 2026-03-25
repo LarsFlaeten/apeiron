@@ -13,6 +13,7 @@ struct BodyConfig {
     std::string specularPath;
     std::string normalPath;
     std::string cloudsPath;
+    std::string heightmapPath;
 };
 
 struct ScenarioConfig {

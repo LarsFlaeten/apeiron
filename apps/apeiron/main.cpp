@@ -211,6 +211,8 @@ int main()
             std::string specularPath;
             std::string normalPath;
             std::string cloudsPath;
+            std::string heightmapPath;
+            float       displaceScale = 0.0f;  // fraction of radiusKm; 0 = no displacement
         };
         std::vector<BodyInfo> bodyInfos;
 
@@ -226,7 +228,8 @@ int main()
                                    static_cast<float>(props.radiusKm),
                                    static_cast<float>(props.polarRadiusKm),
                                    bc.color, bc.diffusePath, bc.specularPath,
-                                   bc.normalPath, bc.cloudsPath });
+                                   bc.normalPath, bc.cloudsPath, bc.heightmapPath,
+                                   0.0f });
             if (bc.naif == "SUN") sunIndex = i;
         }
 
@@ -253,7 +256,7 @@ int main()
         // Meshes and textures declared after allocator — destroyed before allocator.
         // Textures declared before renderer so they outlive it (destroyed after renderer).
         using Tex = apeiron::render::Texture;
-        struct BodyTextures { Tex diffuse, specular, normal, clouds; };
+        struct BodyTextures { Tex diffuse, specular, normal, clouds, height; };
 
         auto load = [&](const std::string& path, Tex fallback) -> Tex {
             return path.empty() ? std::move(fallback)
@@ -269,10 +272,11 @@ int main()
             meshes.push_back(std::make_unique<apeiron::render::Mesh>(
                 allocator, verts, idxs));
             bodyTextures.push_back({
-                load(bi.diffusePath,  Tex::makeWhite        (ctx, allocator)),
-                load(bi.specularPath, Tex::makeBlack        (ctx, allocator)),
-                load(bi.normalPath,   Tex::makeNeutralNormal(ctx, allocator)),
-                load(bi.cloudsPath,   Tex::makeBlack        (ctx, allocator))
+                load(bi.diffusePath,   Tex::makeWhite        (ctx, allocator)),
+                load(bi.specularPath,  Tex::makeBlack        (ctx, allocator)),
+                load(bi.normalPath,    Tex::makeNeutralNormal(ctx, allocator)),
+                load(bi.cloudsPath,    Tex::makeBlack        (ctx, allocator)),
+                load(bi.heightmapPath, Tex::makeBlack        (ctx, allocator))
             });
         }
 
@@ -326,9 +330,11 @@ int main()
         for (auto& bt : bodyTextures)
             descriptorSets.push_back(renderer.allocateDescriptorSet(
                 {bt.diffuse.imageView(), bt.specular.imageView(),
-                 bt.normal.imageView(),  bt.clouds.imageView()},
+                 bt.normal.imageView(),  bt.clouds.imageView(),
+                 bt.height.imageView()},
                 {bt.diffuse.sampler(),   bt.specular.sampler(),
-                 bt.normal.sampler(),    bt.clouds.sampler()}));
+                 bt.normal.sampler(),    bt.clouds.sampler(),
+                 bt.height.sampler()}));
 
         // Window state shared between callbacks.
         struct WindowState {
@@ -470,6 +476,12 @@ int main()
                 renderer.setExposure(exposure);
 
             ImGui::Separator();
+            ImGui::Text("Displacement");
+            // displaceScale is in fractions of body radius — 0.006 ≈ 20 km on Mars.
+            ImGui::SliderFloat("Displace scale", &bodyInfos[selectedBodyIndex].displaceScale,
+                               0.0f, 0.02f, "%.4f");
+
+            ImGui::Separator();
             ImGui::Text("Bloom");
             bool bloomEnabled = bloom.strength() > 0.0f;
             if (ImGui::Checkbox("Bloom enabled", &bloomEnabled))
@@ -571,8 +583,11 @@ int main()
                 }
 
                 glm::vec3 viewDir = glm::normalize(camera.position() - renderPos);
+                // Disable displacement when the size-clamping scale is active
+                // (body is sub-pixel) to avoid amplifying the effect.
+                float dispScale = (sizeScale > 1.0f) ? 0.0f : bi.displaceScale;
                 renderer.draw(vp * model, model, sunDir, viewDir,
-                              isEmissive, lightIntensity,
+                              isEmissive, lightIntensity, dispScale,
                               descriptorSets[i], *meshes[i]);
             }
 

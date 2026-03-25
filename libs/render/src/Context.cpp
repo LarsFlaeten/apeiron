@@ -43,7 +43,8 @@ Context::Context(GLFWwindow* window)
 
     // --- Physical device ---
     VkPhysicalDeviceFeatures requiredFeatures{};
-    requiredFeatures.fillModeNonSolid = VK_TRUE; // needed for wireframe rendering
+    requiredFeatures.fillModeNonSolid   = VK_TRUE; // needed for wireframe rendering
+    requiredFeatures.tessellationShader = VK_TRUE; // needed for displacement mapping
 
     vkb::PhysicalDeviceSelector selector(m_vkbInstance);
     auto physResult = selector
