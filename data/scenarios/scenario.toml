@@ -44,8 +44,8 @@ clouds = "../textures/earth/8k_earth_clouds.jpg"
 [[bodies]]
 naif  = "MOON"
 color = [1.0, 1.0, 1.0]
-diffuse = "../textures/moon/moon-4k.png"
-normals = "../textures/moon/moon_normal.jpg"
+diffuse = "../textures/moon/8k_moon.jpg"
+# displacement = "../textures/moon/lola_8k_height.png"   # add once LOLA DEM is processed
 
 [[bodies]]
 naif  = "MARS"
