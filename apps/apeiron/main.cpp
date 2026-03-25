@@ -208,8 +208,9 @@ int main()
         // Plain body info — no GPU resources, safe to declare here.
         struct BodyInfo {
             apeiron::universe::CelestialBody* node;
-            float     radiusKm;       // equatorial
-            float     polarRadiusKm;  // polar (c-axis)
+            float     radiusKm;       // equatorial a-axis
+            float     bRadiusKm;      // equatorial b-axis (equals radiusKm for oblate spheroids)
+            float     polarRadiusKm;  // polar c-axis
             glm::vec3 color;
             std::string diffusePath;
             std::string specularPath;
@@ -230,6 +231,7 @@ int main()
                                         "SOLAR SYSTEM BARYCENTER", cfg.frame);
             bodyInfos.push_back({ &node,
                                    static_cast<float>(props.radiusKm),
+                                   static_cast<float>(props.bRadiusKm),
                                    static_cast<float>(props.polarRadiusKm),
                                    bc.color, bc.diffusePath, bc.specularPath,
                                    bc.normalPath, bc.cloudsPath, bc.heightmapPath,
@@ -580,8 +582,8 @@ int main()
 
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), renderPos);
                 model = model * glm::mat4(bi.node->orientation());
-                model = glm::scale(model, glm::vec3(bi.radiusKm  * sizeScale,
-                                                    bi.radiusKm  * sizeScale,
+                model = glm::scale(model, glm::vec3(bi.radiusKm   * sizeScale,
+                                                    bi.bRadiusKm  * sizeScale,
                                                     bi.polarRadiusKm * sizeScale));
 
                 bool isEmissive = (sunIndex >= 0 && static_cast<int>(i) == sunIndex);
