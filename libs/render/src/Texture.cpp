@@ -60,7 +60,7 @@ static void transitionImageLayout(vk::CommandBuffer cmd, vk::Image image,
 // ---------------------------------------------------------------------------
 
 void Texture::upload(const Context& ctx, GpuAllocator& allocator,
-                     const uint8_t* pixels, int width, int height)
+                     const uint8_t* pixels, int width, int height, bool linear)
 {
     m_ctx = &ctx;
 
@@ -72,10 +72,15 @@ void Texture::upload(const Context& ctx, GpuAllocator& allocator,
                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
     staging.upload(pixels, imageSize);
 
+    // sRGB format lets the GPU decode gamma on read — correct for colour textures.
+    // Linear (Unorm) is required for data textures (heightmaps, masks) so values
+    // reach the shader unmodified.
+    auto fmt = linear ? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb;
+
     m_image = Image(allocator.handle(),
                     vk::Extent2D{static_cast<uint32_t>(width),
                                  static_cast<uint32_t>(height)},
-                    vk::Format::eR8G8B8A8Srgb,
+                    fmt,
                     vk::ImageUsageFlagBits::eTransferDst |
                     vk::ImageUsageFlagBits::eSampled);
 
@@ -105,11 +110,11 @@ void Texture::upload(const Context& ctx, GpuAllocator& allocator,
                               vk::ImageLayout::eShaderReadOnlyOptimal);
     });
 
-    // ImageView
+    // ImageView — must use the same format as the image.
     vk::ImageViewCreateInfo viewInfo{};
     viewInfo.setImage   (m_image.handle())
             .setViewType(vk::ImageViewType::e2D)
-            .setFormat  (vk::Format::eR8G8B8A8Srgb);
+            .setFormat  (fmt);
     viewInfo.subresourceRange
         .setAspectMask    (vk::ImageAspectFlagBits::eColor)
         .setBaseMipLevel  (0)
@@ -138,17 +143,41 @@ void Texture::upload(const Context& ctx, GpuAllocator& allocator,
 // ---------------------------------------------------------------------------
 
 Texture::Texture(const Context& ctx, GpuAllocator& allocator,
-                 const std::filesystem::path& path)
+                 const std::filesystem::path& path, bool linear)
 {
-    int   width{}, height{}, channels{};
-    auto* pixels = stbi_load(path.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
-    if (!pixels)
-        throw std::runtime_error("Failed to load texture: " + path.string()
-                                 + " — " + stbi_failure_reason()
-                                 + " (supported: JPEG, PNG, BMP, TGA, GIF, PSD, HDR)");
+    int width{}, height{}, channels{};
 
-    upload(ctx, allocator, pixels, width, height);
-    stbi_image_free(pixels);
+    // Detect whether the source image has 16-bit channels.
+    // If so, load as 16-bit and normalize each channel to 8-bit so the full
+    // dynamic range maps to 0–255 rather than being truncated to the high byte.
+    // This is important for heightmaps stored as 16-bit grayscale PNGs.
+    std::vector<uint8_t> converted;
+    uint8_t* pixels = nullptr;
+
+    if (stbi_is_16_bit(path.string().c_str())) {
+        auto* px16 = stbi_load_16(path.string().c_str(),
+                                   &width, &height, &channels, STBI_rgb_alpha);
+        if (!px16)
+            throw std::runtime_error("Failed to load 16-bit texture: " + path.string()
+                                     + " — " + stbi_failure_reason());
+        const int n = width * height * 4;
+        converted.resize(n);
+        for (int i = 0; i < n; ++i)
+            converted[i] = static_cast<uint8_t>(px16[i] >> 8);
+        stbi_image_free(px16);
+        pixels = converted.data();
+    } else {
+        pixels = stbi_load(path.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+        if (!pixels)
+            throw std::runtime_error("Failed to load texture: " + path.string()
+                                     + " — " + stbi_failure_reason()
+                                     + " (supported: JPEG, PNG, BMP, TGA, GIF, PSD, HDR)");
+    }
+
+    upload(ctx, allocator, pixels, width, height, linear);
+
+    if (converted.empty())   // only free if stbi allocated it
+        stbi_image_free(pixels);
 }
 
 Texture Texture::makeWhite(const Context& ctx, GpuAllocator& allocator)

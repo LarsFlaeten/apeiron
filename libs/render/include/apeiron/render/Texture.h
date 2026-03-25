@@ -15,8 +15,10 @@ class GpuAllocator;
 class Texture {
 public:
     // Load from an image file (JPEG, PNG, etc.) via stb_image.
+    // Pass linear=true for data textures (heightmaps, masks) that must not
+    // have sRGB gamma applied by the sampler hardware.
     Texture(const Context& ctx, GpuAllocator& allocator,
-            const std::filesystem::path& path);
+            const std::filesystem::path& path, bool linear = false);
 
     static Texture makeWhite        (const Context& ctx, GpuAllocator& allocator); // diffuse fallback
     static Texture makeBlack        (const Context& ctx, GpuAllocator& allocator); // specular/clouds fallback
@@ -37,7 +39,7 @@ private:
     Texture() = default;
 
     void upload(const Context& ctx, GpuAllocator& allocator,
-                const uint8_t* pixels, int width, int height);
+                const uint8_t* pixels, int width, int height, bool linear = false);
 
     const Context* m_ctx{};
     Image          m_image;
