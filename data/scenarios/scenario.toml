@@ -65,6 +65,26 @@ normals = "../textures/mars/MarsNormal.png"
 displacement = "../textures/mars/Mars_MGS_MOLA_8k_height.png"
 
 [[bodies]]
+naif  = "JUPITER"
+color = [1.0, 1.0, 1.0]
+diffuse = "../textures/jupiter/8k_jupiter.jpg"
+
+[[bodies]]
+naif  = "SATURN"
+color = [1.0, 1.0, 1.0]
+diffuse = "../textures/saturn/8k_saturn.jpg"
+
+[[bodies]]
+naif  = "URANUS"
+color = [1.0, 1.0, 1.0]
+diffuse = "../textures/uranus/2k_uranus.jpg"
+
+[[bodies]]
+naif  = "NEPTUNE"
+color = [1.0, 1.0, 1.0]
+diffuse = "../textures/neptune/2k_neptune.jpg"
+
+[[bodies]]
 naif  = "PHOBOS"
 color = [1.0, 1.0, 1.0]
 mesh  = "../meshes/phobos/phobos_gaskell_64.obj"
