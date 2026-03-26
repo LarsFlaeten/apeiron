@@ -52,7 +52,10 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
                 std::filesystem::path p(*val);
                 return (p.is_absolute() ? p : std::filesystem::weakly_canonical(baseDir / p)).string();
             };
-            bc.meshPath      = resolvePath("mesh");
+            bc.meshPath         = resolvePath("mesh");
+            bc.ringTexturePath  = resolvePath("ring_texture");
+            bc.ringInnerRadius  = (*t)["ring_inner_radius"].value_or(0.0f);
+            bc.ringOuterRadius  = (*t)["ring_outer_radius"].value_or(0.0f);
             bc.diffusePath   = resolvePath("diffuse");
             bc.specularPath  = resolvePath("specular");
             bc.normalPath    = resolvePath("normals");

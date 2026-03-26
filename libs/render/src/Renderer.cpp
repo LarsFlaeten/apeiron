@@ -304,6 +304,40 @@ void Renderer::draw(const glm::mat4&  mvp,
     mesh.draw(cmd);
 }
 
+void Renderer::drawRing(const glm::mat4&  mvp,
+                        const glm::mat4&  model,
+                        const glm::vec3&  sunDir,
+                        float             lightIntensity,
+                        vk::DescriptorSet descriptorSet,
+                        const Mesh&       mesh)
+{
+    struct PushConstants {
+        glm::mat4 mvp;
+        glm::vec4 normalCol[2];
+        glm::vec4 sunDirPad;
+        glm::vec4 viewDirPad;
+    };
+    static_assert(sizeof(PushConstants) == 128);
+
+    glm::mat3 nm = glm::mat3(model);
+    PushConstants pc{};
+    pc.mvp          = mvp;
+    pc.normalCol[0] = glm::vec4(nm[0], 0.0f);
+    pc.normalCol[1] = glm::vec4(nm[1], 0.0f);
+    pc.sunDirPad    = glm::vec4(sunDir, 0.0f);
+    pc.viewDirPad   = glm::vec4(0.0f, 0.0f, 0.0f, lightIntensity);
+
+    auto& cmd = m_commandBuffers[m_currentFrame];
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline.ringHandle());
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                           m_pipeline.layout(), 0, descriptorSet, {});
+    cmd.pushConstants(m_pipeline.layout(),
+                      vk::ShaderStageFlagBits::eVertex |
+                      vk::ShaderStageFlagBits::eFragment,
+                      0, sizeof(PushConstants), &pc);
+    mesh.draw(cmd);
+}
+
 vk::DescriptorSet Renderer::allocateDescriptorSet(
     const std::array<vk::ImageView, 5>& views,
     const std::array<vk::Sampler,   5>& samplers)

@@ -212,13 +212,16 @@ int main()
             float     bRadiusKm;      // equatorial b-axis (equals radiusKm for oblate spheroids)
             float     polarRadiusKm;  // polar c-axis
             glm::vec3 color;
-            std::string meshPath;     // empty = procedural sphere
+            std::string meshPath;          // empty = procedural sphere
             std::string diffusePath;
             std::string specularPath;
             std::string normalPath;
             std::string cloudsPath;
             std::string heightmapPath;
-            float       displaceScale = 0.0f;  // fraction of radiusKm; 0 = no displacement
+            float       displaceScale = 0.0f;
+            std::string ringTexturePath;   // empty = no ring
+            float       ringInnerRadius = 0.0f;  // in body radii
+            float       ringOuterRadius = 0.0f;
         };
         std::vector<BodyInfo> bodyInfos;
 
@@ -238,7 +241,8 @@ int main()
                                    bc.color, bc.meshPath,
                                    bc.diffusePath, bc.specularPath,
                                    bc.normalPath, bc.cloudsPath, bc.heightmapPath,
-                                   0.0f });
+                                   0.0f,
+                                   bc.ringTexturePath, bc.ringInnerRadius, bc.ringOuterRadius });
             if (bc.naif == "SUN") sunIndex = i;
         }
 
@@ -294,6 +298,21 @@ int main()
                 load(bi.cloudsPath,    Tex::makeBlack        (ctx, allocator)),
                 load(bi.heightmapPath, Tex::makeBlack        (ctx, allocator), /*linear=*/true)
             });
+        }
+
+        // Ring resources — parallel to bodyInfos; null unique_ptr = no ring.
+        std::vector<std::unique_ptr<apeiron::render::Mesh>> ringMeshes(bodyInfos.size());
+        std::vector<std::unique_ptr<Tex>>                   ringTextures(bodyInfos.size());
+        for (std::size_t i = 0; i < bodyInfos.size(); ++i) {
+            auto& bi = bodyInfos[i];
+            if (bi.ringTexturePath.empty()) continue;
+            glfwSetWindowTitle(window,
+                ("Apeiron — Loading " + bi.node->naifName() + " rings…").c_str());
+            glfwPollEvents();
+            auto [verts, idxs] = apeiron::render::Geometry::makeRing(
+                bi.ringInnerRadius, bi.ringOuterRadius, 256);
+            ringMeshes[i]   = std::make_unique<apeiron::render::Mesh>(allocator, verts, idxs);
+            ringTextures[i] = std::make_unique<Tex>(ctx, allocator, bi.ringTexturePath);
         }
 
         // Orbit camera: azimuth/elevation around the focused body, Z = ecliptic north.
@@ -354,6 +373,16 @@ int main()
                 {bt.diffuse.sampler(),   bt.specular.sampler(),
                  bt.normal.sampler(),    bt.clouds.sampler(),
                  bt.height.sampler()}));
+
+        // Ring descriptor sets — null handle where body has no ring.
+        std::vector<vk::DescriptorSet> ringDescSets(bodyInfos.size());
+        for (std::size_t i = 0; i < bodyInfos.size(); ++i) {
+            if (!ringTextures[i]) continue;
+            auto& rt = *ringTextures[i];
+            ringDescSets[i] = renderer.allocateDescriptorSet(
+                {rt.imageView(), rt.imageView(), rt.imageView(), rt.imageView(), rt.imageView()},
+                {rt.sampler(),   rt.sampler(),   rt.sampler(),   rt.sampler(),   rt.sampler()});
+        }
 
         // Window state shared between callbacks.
         struct WindowState {
@@ -611,6 +640,15 @@ int main()
                 renderer.draw(vp * model, model, sunDir, viewDir,
                               isEmissive, lightIntensity, dispScale,
                               descriptorSets[i], *meshes[i]);
+
+                // Draw ring after the planet so depth occlusion is correct.
+                if (ringMeshes[i]) {
+                    glm::mat4 ringModel = glm::translate(glm::mat4(1.0f), renderPos);
+                    ringModel = ringModel * glm::mat4(bi.node->orientation());
+                    ringModel = glm::scale(ringModel, glm::vec3(bi.radiusKm * sizeScale));
+                    renderer.drawRing(vp * ringModel, ringModel, sunDir, lightIntensity,
+                                      ringDescSets[i], *ringMeshes[i]);
+                }
             }
 
             renderer.endFrame();

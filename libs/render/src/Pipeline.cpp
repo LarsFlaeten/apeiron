@@ -121,6 +121,90 @@ vk::Pipeline Pipeline::buildPipeline(vk::PolygonMode  polygonMode,
 }
 
 // ---------------------------------------------------------------------------
+// buildRingPipeline — flat annulus, no tessellation, alpha blending.
+// Shares the same VkPipelineLayout so descriptor sets and push constants are
+// fully compatible with the body pipelines.
+// ---------------------------------------------------------------------------
+
+vk::Pipeline Pipeline::buildRingPipeline(vk::ShaderModule vert,
+                                          vk::ShaderModule frag)
+{
+    std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
+    stages[0].setStage(vk::ShaderStageFlagBits::eVertex)  .setModule(vert).setPName("main");
+    stages[1].setStage(vk::ShaderStageFlagBits::eFragment).setModule(frag).setPName("main");
+
+    auto binding    = Vertex::bindingDescription();
+    auto attributes = Vertex::attributeDescriptions();
+    vk::PipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.setVertexBindingDescriptions  (binding)
+               .setVertexAttributeDescriptions(attributes);
+
+    vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);
+
+    std::array dynStates{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+    vk::PipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.setDynamicStates(dynStates);
+
+    vk::PipelineViewportStateCreateInfo viewportState{};
+    viewportState.setViewportCount(1).setScissorCount(1);
+
+    vk::PipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.setPolygonMode(vk::PolygonMode::eFill)
+              .setCullMode   (vk::CullModeFlagBits::eNone)   // rings are double-sided
+              .setFrontFace  (vk::FrontFace::eClockwise)
+              .setLineWidth  (1.0f);
+
+    vk::PipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.setRasterizationSamples(vk::SampleCountFlagBits::e1);
+
+    // Alpha blending: standard src-alpha / one-minus-src-alpha.
+    vk::PipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment
+        .setBlendEnable        (vk::True)
+        .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+        .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+        .setColorBlendOp       (vk::BlendOp::eAdd)
+        .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+        .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+        .setAlphaBlendOp       (vk::BlendOp::eAdd)
+        .setColorWriteMask(
+            vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+            vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+
+    vk::PipelineColorBlendStateCreateInfo colorBlend{};
+    colorBlend.setAttachments(blendAttachment);
+
+    // Depth test on so the ring is occluded by Saturn when viewed from behind;
+    // depth write on since the flat annulus has no self-overlapping fragments.
+    vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.setDepthTestEnable       (vk::True)
+                .setDepthWriteEnable      (vk::True)
+                .setDepthCompareOp        (vk::CompareOp::eLess)
+                .setDepthBoundsTestEnable (vk::False)
+                .setStencilTestEnable     (vk::False);
+
+    vk::GraphicsPipelineCreateInfo info{};
+    info.setStages              (stages)
+        .setPVertexInputState   (&vertexInput)
+        .setPInputAssemblyState (&inputAssembly)
+        .setPViewportState      (&viewportState)
+        .setPRasterizationState (&rasterizer)
+        .setPMultisampleState   (&multisampling)
+        .setPColorBlendState    (&colorBlend)
+        .setPDepthStencilState  (&depthStencil)
+        .setPDynamicState       (&dynamicState)
+        .setLayout              (m_layout)
+        .setRenderPass          (m_renderPass)
+        .setSubpass             (0);
+
+    auto [result, pipeline] = m_ctx.device().createGraphicsPipeline(nullptr, info);
+    if (result != vk::Result::eSuccess)
+        throw std::runtime_error("Failed to create ring graphics pipeline");
+    return pipeline;
+}
+
+// ---------------------------------------------------------------------------
 // Constructor / destructor
 // ---------------------------------------------------------------------------
 
@@ -243,11 +327,18 @@ Pipeline::Pipeline(const Context&               ctx,
     device.destroyShaderModule(tescModule);
     device.destroyShaderModule(teseModule);
     device.destroyShaderModule(fragModule);
+
+    auto ringVertModule = loadShader(shaderDir / "ring.vert.spv");
+    auto ringFragModule = loadShader(shaderDir / "ring.frag.spv");
+    m_ringPipeline = buildRingPipeline(ringVertModule, ringFragModule);
+    device.destroyShaderModule(ringVertModule);
+    device.destroyShaderModule(ringFragModule);
 }
 
 Pipeline::~Pipeline()
 {
     auto device = m_ctx.device();
+    device.destroyPipeline           (m_ringPipeline);
     device.destroyPipeline           (m_wireframePipeline);
     device.destroyPipeline           (m_fillPipeline);
     device.destroyPipelineLayout     (m_layout);

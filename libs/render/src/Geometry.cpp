@@ -171,4 +171,40 @@ loadObj(const std::filesystem::path& path, glm::vec3 color)
     return {vertices, indices};
 }
 
+std::pair<std::vector<Vertex>, std::vector<uint32_t>>
+makeRing(float innerRadius, float outerRadius, uint32_t sectors)
+{
+    std::vector<Vertex>   vertices;
+    std::vector<uint32_t> indices;
+    vertices.reserve((sectors + 1) * 2);
+    indices.reserve(sectors * 6);
+
+    constexpr float tau = 2.0f * std::numbers::pi_v<float>;
+    const glm::vec3 normal{0.0f, 0.0f, 1.0f};
+    const glm::vec3 white {1.0f, 1.0f, 1.0f};
+
+    for (uint32_t s = 0; s <= sectors; ++s) {
+        float phi = tau * static_cast<float>(s) / static_cast<float>(sectors);
+        float c = std::cos(phi), ss = std::sin(phi);
+
+        // Inner vertex: u=0
+        vertices.push_back({glm::vec3(innerRadius * c, innerRadius * ss, 0.0f),
+                            normal, white, glm::vec2(0.0f, 0.5f)});
+        // Outer vertex: u=1
+        vertices.push_back({glm::vec3(outerRadius * c, outerRadius * ss, 0.0f),
+                            normal, white, glm::vec2(1.0f, 0.5f)});
+    }
+
+    for (uint32_t s = 0; s < sectors; ++s) {
+        uint32_t a = s * 2;      // inner  s
+        uint32_t b = a + 1;      // outer  s
+        uint32_t c = a + 2;      // inner  s+1
+        uint32_t d = a + 3;      // outer  s+1
+        indices.push_back(a); indices.push_back(b); indices.push_back(c);
+        indices.push_back(c); indices.push_back(b); indices.push_back(d);
+    }
+
+    return {vertices, indices};
+}
+
 } // namespace apeiron::render::Geometry

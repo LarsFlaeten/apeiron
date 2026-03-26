@@ -10,7 +10,10 @@ struct BodyConfig {
     std::string naif;         // NAIF body name used for position, e.g. "JUPITER BARYCENTER"
     std::string radiiNaif;    // NAIF name used for PCK radius lookup; defaults to naif if empty
     glm::vec3   color;        // RGB [0,1] tint multiplied on top of all textures
-    std::string meshPath;     // optional OBJ shape model; empty = procedural sphere
+    std::string meshPath;          // optional OBJ shape model; empty = procedural sphere
+    std::string ringTexturePath;   // empty = no ring
+    float       ringInnerRadius = 0.0f;  // in body radii
+    float       ringOuterRadius = 0.0f;
     std::string diffusePath;
     std::string specularPath;
     std::string normalPath;

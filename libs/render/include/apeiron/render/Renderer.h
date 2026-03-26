@@ -63,6 +63,15 @@ public:
               vk::DescriptorSet descriptorSet,
               const Mesh&       mesh);
 
+    // Record one ring draw (alpha-blended flat annulus).
+    // Call after draw() for the parent body so depth occlusion is correct.
+    void drawRing(const glm::mat4&  mvp,
+                  const glm::mat4&  model,
+                  const glm::vec3&  sunDir,
+                  float             lightIntensity,
+                  vk::DescriptorSet descriptorSet,
+                  const Mesh&       mesh);
+
     // Allocate and write a descriptor set for 5 material texture slots:
     // [0]=diffuse  [1]=specular  [2]=normals  [3]=clouds  [4]=heightmap
     vk::DescriptorSet allocateDescriptorSet(

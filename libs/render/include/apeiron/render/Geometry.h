@@ -30,4 +30,13 @@ std::pair<std::vector<Vertex>, std::vector<uint32_t>>
 loadObj(const std::filesystem::path& path,
         glm::vec3                    color);
 
+// Generates a flat annular ring in the XY plane (Z = 0) suitable for planet
+// rings.  innerRadius and outerRadius are in the same units as makeSphere
+// (i.e. body radii when passed to the renderer and scaled by the model matrix).
+// UV: u = 0 at inner edge, u = 1 at outer edge; v = 0.5 (texture is radial).
+std::pair<std::vector<Vertex>, std::vector<uint32_t>>
+makeRing(float    innerRadius,
+         float    outerRadius,
+         uint32_t sectors);
+
 } // namespace apeiron::render::Geometry

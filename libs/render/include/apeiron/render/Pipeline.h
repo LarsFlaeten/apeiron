@@ -31,6 +31,9 @@ public:
         return wireframe ? m_wireframePipeline : m_fillPipeline;
     }
 
+    // Alpha-blended pipeline for rings (no tessellation, triangle list).
+    vk::Pipeline ringHandle() const { return m_ringPipeline; }
+
 private:
     vk::ShaderModule loadShader(const std::filesystem::path& spvPath);
     vk::Pipeline     buildPipeline(vk::PolygonMode  polygonMode,
@@ -38,6 +41,8 @@ private:
                                    vk::ShaderModule tesc,
                                    vk::ShaderModule tese,
                                    vk::ShaderModule frag);
+    vk::Pipeline     buildRingPipeline(vk::ShaderModule vert,
+                                       vk::ShaderModule frag);
 
     const Context&          m_ctx;
     vk::DescriptorSetLayout m_descriptorSetLayout;
@@ -45,6 +50,7 @@ private:
     vk::PipelineLayout      m_layout;
     vk::Pipeline            m_fillPipeline;
     vk::Pipeline            m_wireframePipeline;
+    vk::Pipeline            m_ringPipeline;
 };
 
 } // namespace apeiron::render
