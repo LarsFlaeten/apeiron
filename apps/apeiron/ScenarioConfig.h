@@ -7,7 +7,8 @@
 
 // Parsed contents of a scenario TOML file.
 struct BodyConfig {
-    std::string naif;         // NAIF body name, e.g. "EARTH"
+    std::string naif;         // NAIF body name used for position, e.g. "JUPITER BARYCENTER"
+    std::string radiiNaif;    // NAIF name used for PCK radius lookup; defaults to naif if empty
     glm::vec3   color;        // RGB [0,1] tint multiplied on top of all textures
     std::string meshPath;     // optional OBJ shape model; empty = procedural sphere
     std::string diffusePath;

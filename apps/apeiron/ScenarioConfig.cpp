@@ -37,7 +37,8 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
             auto* t = elem.as_table();
             if (!t) continue;
             BodyConfig bc;
-            bc.naif = (*t)["naif"].value_or(std::string(""));
+            bc.naif      = (*t)["naif"].value_or(std::string(""));
+            bc.radiiNaif = (*t)["radii_naif"].value_or(std::string(""));
             if (auto* col = (*t)["color"].as_array(); col && col->size() == 3) {
                 bc.color.r = col->get(0)->value_or(1.0f);
                 bc.color.g = col->get(1)->value_or(1.0f);

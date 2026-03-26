@@ -227,7 +227,8 @@ int main()
 
         for (int i = 0; i < static_cast<int>(cfg.bodies.size()); ++i) {
             auto& bc    = cfg.bodies[i];
-            auto  props = apeiron::universe::BodyProperties::queryFromSpice(bc.naif);
+            auto  props = apeiron::universe::BodyProperties::queryFromSpice(
+                              bc.radiiNaif.empty() ? bc.naif : bc.radiiNaif);
             auto& node  = scene.addBody(bc.naif, bc.naif, props.radiusKm,
                                         "SOLAR SYSTEM BARYCENTER", cfg.frame);
             bodyInfos.push_back({ &node,

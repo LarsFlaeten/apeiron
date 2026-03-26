@@ -65,22 +65,26 @@ normals = "../textures/mars/MarsNormal.png"
 displacement = "../textures/mars/Mars_MGS_MOLA_8k_height.png"
 
 [[bodies]]
-naif  = "JUPITER"
+naif       = "JUPITER BARYCENTER"
+radii_naif = "JUPITER"
 color = [1.0, 1.0, 1.0]
 diffuse = "../textures/jupiter/8k_jupiter.jpg"
 
 [[bodies]]
-naif  = "SATURN"
+naif       = "SATURN BARYCENTER"
+radii_naif = "SATURN"
 color = [1.0, 1.0, 1.0]
 diffuse = "../textures/saturn/8k_saturn.jpg"
 
 [[bodies]]
-naif  = "URANUS"
+naif       = "URANUS BARYCENTER"
+radii_naif = "URANUS"
 color = [1.0, 1.0, 1.0]
 diffuse = "../textures/uranus/2k_uranus.jpg"
 
 [[bodies]]
-naif  = "NEPTUNE"
+naif       = "NEPTUNE BARYCENTER"
+radii_naif = "NEPTUNE"
 color = [1.0, 1.0, 1.0]
 diffuse = "../textures/neptune/2k_neptune.jpg"
 
