@@ -33,6 +33,16 @@ color = [1.0, 0.92, 0.23]
 # diffuse = "textures/sun.jpg"
 
 [[bodies]]
+naif  = "MERCURY"
+color = [1.0, 1.0, 1.0]
+diffuse = "../textures/mercury/8k_mercury.jpg"
+
+[[bodies]]
+naif  = "VENUS"
+color = [1.0, 1.0, 1.0]
+diffuse = "../textures/venus/8k_venus_surface.jpg"
+
+[[bodies]]
 naif  = "EARTH"
 color = [1.0, 1.0, 1.0]   # tint is white so texture shows unmodified
 diffuse = "../textures/earth/8k_earth_daymap.jpg"
@@ -57,9 +67,11 @@ displacement = "../textures/mars/Mars_MGS_MOLA_8k_height.png"
 [[bodies]]
 naif  = "PHOBOS"
 color = [1.0, 1.0, 1.0]
+mesh  = "../meshes/phobos/phobos_gaskell_64.obj"
 # diffuse = "../textures/phobos/phobos.jpg"
 
 [[bodies]]
 naif  = "DEIMOS"
 color = [1.0, 1.0, 1.0]
+mesh  = "../meshes/deimos/deimos_g_167m_spc_obj_0000n00000_v002.obj"
 # diffuse = "../textures/deimos/deimos.jpg"
