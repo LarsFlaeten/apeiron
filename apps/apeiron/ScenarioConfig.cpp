@@ -51,6 +51,7 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
                 std::filesystem::path p(*val);
                 return (p.is_absolute() ? p : std::filesystem::weakly_canonical(baseDir / p)).string();
             };
+            bc.meshPath      = resolvePath("mesh");
             bc.diffusePath   = resolvePath("diffuse");
             bc.specularPath  = resolvePath("specular");
             bc.normalPath    = resolvePath("normals");

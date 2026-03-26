@@ -1,8 +1,15 @@
 #include "apeiron/render/Geometry.h"
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+
 #include <glm/glm.hpp>
-#include <numbers>
+#include <glm/gtc/constants.hpp>
+#include <algorithm>
 #include <cmath>
+#include <iostream>
+#include <numbers>
+#include <stdexcept>
 
 namespace apeiron::render::Geometry {
 
@@ -57,6 +64,110 @@ makeSphere(float radius, uint32_t rings, uint32_t sectors, glm::vec3 color)
         }
     }
 
+    return {vertices, indices};
+}
+
+std::pair<std::vector<Vertex>, std::vector<uint32_t>>
+loadObj(const std::filesystem::path& path, glm::vec3 color)
+{
+    tinyobj::ObjReaderConfig cfg;
+    cfg.triangulate = true;
+
+    tinyobj::ObjReader reader;
+    if (!reader.ParseFromFile(path.string(), cfg))
+        throw std::runtime_error("OBJ load failed: " + path.string()
+                                 + "\n" + reader.Error());
+    if (!reader.Warning().empty())
+        std::cerr << "OBJ warning (" << path.filename().string() << "): "
+                  << reader.Warning() << "\n";
+
+    auto& attrib = reader.GetAttrib();
+    auto& shapes = reader.GetShapes();
+
+    const bool hasSrcNormals = !attrib.normals.empty();
+    const bool hasSrcUVs     = !attrib.texcoords.empty();
+
+    // Flatten all shapes into independent triangle vertices (no dedup).
+    // Shape models are small enough that the redundancy doesn't matter.
+    std::vector<glm::vec3> positions;
+    std::vector<glm::vec3> normals;
+    std::vector<glm::vec2> uvs;
+    positions.reserve(attrib.vertices.size());
+
+    for (auto& shape : shapes) {
+        for (auto& idx : shape.mesh.indices) {
+            positions.push_back({
+                attrib.vertices[3 * idx.vertex_index + 0],
+                attrib.vertices[3 * idx.vertex_index + 1],
+                attrib.vertices[3 * idx.vertex_index + 2]
+            });
+            if (hasSrcNormals && idx.normal_index >= 0) {
+                normals.push_back({
+                    attrib.normals[3 * idx.normal_index + 0],
+                    attrib.normals[3 * idx.normal_index + 1],
+                    attrib.normals[3 * idx.normal_index + 2]
+                });
+            } else {
+                normals.emplace_back(0.0f, 0.0f, 0.0f);  // filled below
+            }
+            if (hasSrcUVs && idx.texcoord_index >= 0) {
+                uvs.push_back({
+                    attrib.texcoords[2 * idx.texcoord_index + 0],
+                    1.0f - attrib.texcoords[2 * idx.texcoord_index + 1]  // flip V
+                });
+            } else {
+                uvs.emplace_back(0.0f, 0.0f);  // filled below
+            }
+        }
+    }
+
+    const auto n = positions.size();
+    if (n == 0)
+        throw std::runtime_error("OBJ file contains no geometry: " + path.string());
+
+    // Centre at centroid, then scale to unit bounding sphere.
+    glm::vec3 centroid{0.0f};
+    for (auto& p : positions) centroid += p;
+    centroid /= static_cast<float>(n);
+    for (auto& p : positions) p -= centroid;
+
+    float maxDist = 0.0f;
+    for (auto& p : positions) maxDist = std::max(maxDist, glm::length(p));
+    if (maxDist > 0.0f)
+        for (auto& p : positions) p /= maxDist;
+
+    // Compute flat face normals for any vertex that lacks one.
+    if (!hasSrcNormals) {
+        for (size_t i = 0; i + 2 < n; i += 3) {
+            glm::vec3 fn = glm::normalize(
+                glm::cross(positions[i + 1] - positions[i],
+                           positions[i + 2] - positions[i]));
+            normals[i] = normals[i + 1] = normals[i + 2] = fn;
+        }
+    }
+
+    // Generate equirectangular spherical UVs (poles along ±Z) where absent.
+    if (!hasSrcUVs) {
+        constexpr float pi = std::numbers::pi_v<float>;
+        for (size_t i = 0; i < n; ++i) {
+            glm::vec3 nd = glm::normalize(positions[i]);
+            float u = std::atan2(nd.y, nd.x) / (2.0f * pi);
+            if (u < 0.0f) u += 1.0f;
+            float v = std::acos(std::clamp(nd.z, -1.0f, 1.0f)) / pi;
+            uvs[i] = {u, v};
+        }
+    }
+
+    // Assemble Vertex array with a trivial sequential index buffer.
+    std::vector<Vertex>   vertices(n);
+    std::vector<uint32_t> indices(n);
+    for (size_t i = 0; i < n; ++i) {
+        vertices[i] = { positions[i], glm::normalize(normals[i]), color, uvs[i] };
+        indices[i]  = static_cast<uint32_t>(i);
+    }
+
+    std::cout << "Loaded OBJ " << path.filename().string()
+              << ": " << (n / 3) << " triangles\n" << std::flush;
     return {vertices, indices};
 }
 

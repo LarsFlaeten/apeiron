@@ -9,6 +9,7 @@
         "vulkan-memory-allocator",
         "tomlplusplus",
         "stb",
+        "tinyobjloader",
         {
             "name": "imgui",
             "features": ["vulkan-binding", "glfw-binding"]

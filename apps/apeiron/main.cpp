@@ -212,6 +212,7 @@ int main()
             float     bRadiusKm;      // equatorial b-axis (equals radiusKm for oblate spheroids)
             float     polarRadiusKm;  // polar c-axis
             glm::vec3 color;
+            std::string meshPath;     // empty = procedural sphere
             std::string diffusePath;
             std::string specularPath;
             std::string normalPath;
@@ -233,7 +234,8 @@ int main()
                                    static_cast<float>(props.radiusKm),
                                    static_cast<float>(props.bRadiusKm),
                                    static_cast<float>(props.polarRadiusKm),
-                                   bc.color, bc.diffusePath, bc.specularPath,
+                                   bc.color, bc.meshPath,
+                                   bc.diffusePath, bc.specularPath,
                                    bc.normalPath, bc.cloudsPath, bc.heightmapPath,
                                    0.0f });
             if (bc.naif == "SUN") sunIndex = i;
@@ -279,8 +281,9 @@ int main()
                 ("Apeiron — Loading " + bi.node->naifName() + "…").c_str());
             glfwPollEvents();
 
-            auto [verts, idxs] = apeiron::render::Geometry::makeSphere(
-                1.0f, 64, 64, bi.color);
+            auto [verts, idxs] = bi.meshPath.empty()
+                ? apeiron::render::Geometry::makeSphere(1.0f, 64, 64, bi.color)
+                : apeiron::render::Geometry::loadObj(bi.meshPath, bi.color);
             meshes.push_back(std::make_unique<apeiron::render::Mesh>(
                 allocator, verts, idxs));
             bodyTextures.push_back({
@@ -582,9 +585,12 @@ int main()
 
                 glm::mat4 model = glm::translate(glm::mat4(1.0f), renderPos);
                 model = model * glm::mat4(bi.node->orientation());
-                model = glm::scale(model, glm::vec3(bi.radiusKm   * sizeScale,
-                                                    bi.bRadiusKm  * sizeScale,
-                                                    bi.polarRadiusKm * sizeScale));
+                // OBJ meshes already encode the true shape; scale uniformly by the
+                // a-axis radius.  Procedural spheres need per-axis scaling for oblate bodies.
+                glm::vec3 bodyScale = bi.meshPath.empty()
+                    ? glm::vec3(bi.radiusKm, bi.bRadiusKm, bi.polarRadiusKm)
+                    : glm::vec3(bi.radiusKm);
+                model = glm::scale(model, bodyScale * sizeScale);
 
                 bool isEmissive = (sunIndex >= 0 && static_cast<int>(i) == sunIndex);
 

@@ -9,6 +9,7 @@
 struct BodyConfig {
     std::string naif;         // NAIF body name, e.g. "EARTH"
     glm::vec3   color;        // RGB [0,1] tint multiplied on top of all textures
+    std::string meshPath;     // optional OBJ shape model; empty = procedural sphere
     std::string diffusePath;
     std::string specularPath;
     std::string normalPath;

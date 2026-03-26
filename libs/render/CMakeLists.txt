@@ -3,6 +3,7 @@ find_package(glfw3  CONFIG REQUIRED)
 find_package(vk-bootstrap CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(Stb REQUIRED)
+find_package(tinyobjloader CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(glm CONFIG QUIET)
 if(NOT TARGET glm::glm)
@@ -45,6 +46,7 @@ target_link_libraries(render
 )
 
 target_include_directories(render PRIVATE ${Stb_INCLUDE_DIR})
+target_link_libraries(render PRIVATE tinyobjloader::tinyobjloader)
 
 target_compile_features(render PUBLIC cxx_std_23)
 
