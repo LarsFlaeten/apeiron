@@ -1,0 +1,67 @@
+#version 450
+
+// Precomputes the transmittance LUT (256×64, RGBA32F).
+//
+// Parameterisation (all in local space where atmosphere sphere = radius 1.0):
+//   texel.x → u = normalised altitude  [0 = ground (r=Rg), 1 = top of atm (r=1)]
+//   texel.y → v = cos(view zenith)     [0 = straight down (mu=-1), 1 = straight up (mu=+1)]
+//
+// Each texel stores RGB transmittance T(r,mu) — the fraction of radiance that
+// survives a ray from altitude r in direction mu to the top of the atmosphere.
+// Alpha is always 1.  The three channels correspond to the three Rayleigh
+// scattering wavelength bands (R≈680nm, G≈550nm, B≈440nm); Mie is achromatic.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D u_lut;
+
+// All lengths in "local units" where the atmosphere sphere has radius 1.0.
+// groundRadius = Rg/Ra  (e.g. 6360/6460 ≈ 0.9845 for Earth)
+// betaR / betaM are in "per unit" = km^-1 × atmosphereRadius_km
+// scaleH values are in "per unit" = km / atmosphereRadius_km
+layout(push_constant) uniform PC {
+    vec4  rayleighH;   // xyz = β_R (per unit, RGB), w = H_R (per unit)
+    vec4  miePack;     // x = β_M scattering, y = β_M extinction (per unit), z = H_M (per unit)
+    float groundRadius; // Rg in local units
+    int   numSamples;
+    vec2  _pad;
+} pc;
+
+// Distance from a point at radius r along direction mu (cos zenith) to the
+// top of the atmosphere (ra = 1.0).  Returns 0 if ray aims below the ground.
+float distToAtmTop(float r, float mu) {
+    float disc = r * r * (mu * mu - 1.0) + 1.0;   // Ra = 1.0
+    return max(0.0, -r * mu + sqrt(max(disc, 0.0)));
+}
+
+// Optical depth (Rayleigh + Mie extinction) integrated from (r, mu) to the
+// top of the atmosphere.  Returned as vec3 so Rayleigh is per-wavelength.
+vec3 opticalDepthToTop(float r, float mu) {
+    float dist = distToAtmTop(r, mu);
+    float dx   = dist / float(pc.numSamples);
+    vec3  od   = vec3(0.0);
+    for (int i = 0; i < pc.numSamples; ++i) {
+        float d  = (float(i) + 0.5) * dx;
+        float ri = sqrt(r * r + d * d + 2.0 * r * mu * d);
+        float h  = max(0.0, ri - pc.groundRadius);
+        od += pc.rayleighH.xyz * exp(-h / pc.rayleighH.w)  * dx   // Rayleigh
+            + vec3(pc.miePack.y) * exp(-h / pc.miePack.z)  * dx;  // Mie extinction
+    }
+    return od;
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz    = imageSize(u_lut);
+    if (coord.x >= sz.x || coord.y >= sz.y) return;
+
+    float u  = (float(coord.x) + 0.5) / float(sz.x);   // altitude ratio [0,1]
+    float v  = (float(coord.y) + 0.5) / float(sz.y);   // (mu+1)/2       [0,1]
+
+    float h  = u * (1.0 - pc.groundRadius);             // height above ground (local)
+    float r  = pc.groundRadius + h;
+    float mu = v * 2.0 - 1.0;                           // cos zenith [-1,+1]
+
+    vec3 transmittance = exp(-opticalDepthToTop(r, mu));
+    imageStore(u_lut, coord, vec4(transmittance, 1.0));
+}

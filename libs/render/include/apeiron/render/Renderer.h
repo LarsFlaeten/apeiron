@@ -15,6 +15,7 @@ class Swapchain;
 class Pipeline;
 class TonemapPipeline;
 class BloomPass;
+class AtmospherePipeline;
 class Mesh;
 
 // Owns framebuffers, command pool/buffers, and per-frame sync objects.
@@ -34,11 +35,12 @@ class Renderer {
 public:
     static constexpr int kMaxFramesInFlight = 2;
 
-    Renderer(const Context&         ctx,
-             const Swapchain&       swapchain,
-             const Pipeline&        pipeline,
-             const TonemapPipeline& tonemapPipeline,
-             BloomPass&             bloomPass);
+    Renderer(const Context&          ctx,
+             const Swapchain&        swapchain,
+             const Pipeline&         pipeline,
+             const TonemapPipeline&  tonemapPipeline,
+             BloomPass&              bloomPass,
+             const AtmospherePipeline& atmospherePipeline);
     ~Renderer();
 
     Renderer(const Renderer&)            = delete;
@@ -73,11 +75,32 @@ public:
                   vk::DescriptorSet descriptorSet,
                   const Mesh&       mesh);
 
+    // Record one atmosphere shell draw.
+    // cameraLocal / sunDirLocal must be in local space (atmosphere sphere = radius 1).
+    // All beta/scaleH parameters are in "per unit" (= km^-1 × atmosphereRadius_km).
+    void drawAtmosphere(const glm::mat4&  mvp,
+                        const glm::vec3&  cameraLocal,
+                        float             groundRatio,
+                        const glm::vec3&  sunDirLocal,
+                        float             lightIntensity,
+                        const glm::vec3&  betaR,
+                        float             scaleHR,
+                        float             betaM,
+                        float             betaMext,
+                        float             scaleHM,
+                        float             mieG,
+                        vk::DescriptorSet descriptorSet,
+                        const Mesh&       mesh);
+
     // Allocate and write a descriptor set for 5 material texture slots:
     // [0]=diffuse  [1]=specular  [2]=normals  [3]=clouds  [4]=heightmap
     vk::DescriptorSet allocateDescriptorSet(
         const std::array<vk::ImageView, 5>& views,
         const std::array<vk::Sampler,   5>& samplers);
+
+    // Allocate a descriptor set for the atmosphere pipeline (binding 0 = transmittance LUT).
+    vk::DescriptorSet allocateAtmosphereDescriptorSet(vk::ImageView lutView,
+                                                      vk::Sampler   lutSampler);
 
     // End both passes, submit, and present.
     void endFrame();
@@ -99,14 +122,17 @@ public:
     vk::CommandBuffer currentCmd() const { return m_commandBuffers[m_currentFrame]; }
 
 private:
-    const Context&         m_ctx;
-    const Swapchain&       m_swapchain;
-    const Pipeline&        m_pipeline;
-    const TonemapPipeline& m_tonemapPipeline;
-    BloomPass&             m_bloomPass;
+    const Context&             m_ctx;
+    const Swapchain&           m_swapchain;
+    const Pipeline&            m_pipeline;
+    const TonemapPipeline&     m_tonemapPipeline;
+    BloomPass&                 m_bloomPass;
+    const AtmospherePipeline&  m_atmospherePipeline;
 
     // Material descriptor pool (bodies).
     vk::DescriptorPool             m_descriptorPool;
+    // Atmosphere descriptor pool (one set per planet with atmosphere).
+    vk::DescriptorPool             m_atmosphereDescPool;
     // Tonemap descriptor pool + per-frame sets (HDR sampler).
     vk::DescriptorPool             m_tonemapDescPool;
     std::array<vk::DescriptorSet,  kMaxFramesInFlight> m_tonemapDescSets;

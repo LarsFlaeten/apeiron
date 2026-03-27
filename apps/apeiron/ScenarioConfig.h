@@ -5,6 +5,18 @@
 #include <string>
 #include <vector>
 
+// Physical parameters for one planetary atmosphere.
+// All lengths in km; scattering coefficients in km^-1.
+struct AtmosphereConfig {
+    float     atmosphereRadius = 0.0f;   // km  (planet surface + thickness)
+    glm::vec3 rayleigh;                  // β_R km^-1, RGB wavelength channels
+    float     rayleighScaleH  = 8.0f;   // H_R km
+    float     mieScattering   = 0.0f;   // β_M km^-1
+    float     mieExtinction   = 0.0f;   // β_Mext km^-1
+    float     mieScaleH       = 1.2f;   // H_M km
+    float     mieG            = 0.76f;  // Henyey-Greenstein asymmetry
+};
+
 // Parsed contents of a scenario TOML file.
 struct BodyConfig {
     std::string naif;         // NAIF body name used for position, e.g. "JUPITER BARYCENTER"
@@ -19,6 +31,8 @@ struct BodyConfig {
     std::string normalPath;
     std::string cloudsPath;
     std::string heightmapPath;
+    bool              hasAtmosphere = false;
+    AtmosphereConfig  atmosphere;
 };
 
 struct ScenarioConfig {

@@ -27,6 +27,8 @@ add_library(render STATIC
     src/Image.cpp
     src/Geometry.cpp
     src/Texture.cpp
+    src/AtmospherePrecompute.cpp
+    src/AtmospherePipeline.cpp
 )
 
 target_include_directories(render

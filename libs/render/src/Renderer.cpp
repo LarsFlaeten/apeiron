@@ -4,6 +4,7 @@
 #include "apeiron/render/Pipeline.h"
 #include "apeiron/render/TonemapPipeline.h"
 #include "apeiron/render/BloomPass.h"
+#include "apeiron/render/AtmospherePipeline.h"
 #include "apeiron/render/Mesh.h"
 
 #include <imgui.h>
@@ -17,14 +18,15 @@
 
 namespace apeiron::render {
 
-Renderer::Renderer(const Context&         ctx,
-                   const Swapchain&       swapchain,
-                   const Pipeline&        pipeline,
-                   const TonemapPipeline& tonemapPipeline,
-                   BloomPass&             bloomPass)
+Renderer::Renderer(const Context&            ctx,
+                   const Swapchain&          swapchain,
+                   const Pipeline&           pipeline,
+                   const TonemapPipeline&    tonemapPipeline,
+                   BloomPass&                bloomPass,
+                   const AtmospherePipeline& atmospherePipeline)
     : m_ctx(ctx), m_swapchain(swapchain),
       m_pipeline(pipeline), m_tonemapPipeline(tonemapPipeline),
-      m_bloomPass(bloomPass)
+      m_bloomPass(bloomPass), m_atmospherePipeline(atmospherePipeline)
 {
     auto device = ctx.device();
 
@@ -75,6 +77,15 @@ Renderer::Renderer(const Context&         ctx,
     dpInfo.setMaxSets  (64)
           .setPoolSizes(matPoolSize);
     m_descriptorPool = device.createDescriptorPool(dpInfo);
+
+    // ----- Atmosphere descriptor pool: 1 LUT sampler × up to 8 bodies -----
+    vk::DescriptorPoolSize atmPoolSize{};
+    atmPoolSize.setType           (vk::DescriptorType::eCombinedImageSampler)
+               .setDescriptorCount(8);
+    vk::DescriptorPoolCreateInfo atmDpInfo{};
+    atmDpInfo.setMaxSets  (8)
+             .setPoolSizes(atmPoolSize);
+    m_atmosphereDescPool = device.createDescriptorPool(atmDpInfo);
 
     // ----- Tonemap descriptor pool + sampler + sets -----
     vk::SamplerCreateInfo samplerInfo{};
@@ -150,6 +161,7 @@ Renderer::~Renderer()
 
     device.destroySampler       (m_hdrSampler);
     device.destroyDescriptorPool(m_tonemapDescPool);
+    device.destroyDescriptorPool(m_atmosphereDescPool);
     device.destroyDescriptorPool(m_descriptorPool);
     device.destroyCommandPool   (m_commandPool);
 
@@ -339,6 +351,75 @@ void Renderer::drawRing(const glm::mat4&  mvp,
                       vk::ShaderStageFlagBits::eFragment,
                       0, sizeof(PushConstants), &pc);
     mesh.draw(cmd);
+}
+
+void Renderer::drawAtmosphere(const glm::mat4&  mvp,
+                              const glm::vec3&  cameraLocal,
+                              float             groundRatio,
+                              const glm::vec3&  sunDirLocal,
+                              float             lightIntensity,
+                              const glm::vec3&  betaR,
+                              float             scaleHR,
+                              float             betaM,
+                              float             betaMext,
+                              float             scaleHM,
+                              float             mieG,
+                              vk::DescriptorSet descriptorSet,
+                              const Mesh&       mesh)
+{
+    // Push constant layout (128 bytes):
+    //   offset   0 — mat4 mvp            (64 bytes)
+    //   offset  64 — vec4 cameraLocalGr  (xyz=camera local, w=groundRatio)
+    //   offset  80 — vec4 sunDirLight    (xyz=sun dir local, w=lightIntensity)
+    //   offset  96 — vec4 rayleighBeta   (xyz=β_R per unit, w=H_R per unit)
+    //   offset 112 — vec4 miePack        (x=β_M, y=β_Mext, z=H_M, w=mieG)
+    struct PushConstants {
+        glm::mat4 mvp;
+        glm::vec4 cameraLocalGr;
+        glm::vec4 sunDirLight;
+        glm::vec4 rayleighBeta;
+        glm::vec4 miePack;
+    };
+    static_assert(sizeof(PushConstants) == 128);
+
+    PushConstants pc{};
+    pc.mvp           = mvp;
+    pc.cameraLocalGr = glm::vec4(cameraLocal,  groundRatio);
+    pc.sunDirLight   = glm::vec4(sunDirLocal,  lightIntensity);
+    pc.rayleighBeta  = glm::vec4(betaR,        scaleHR);
+    pc.miePack       = glm::vec4(betaM, betaMext, scaleHM, mieG);
+
+    auto& cmd = m_commandBuffers[m_currentFrame];
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_atmospherePipeline.handle());
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                           m_atmospherePipeline.layout(), 0, descriptorSet, {});
+    cmd.pushConstants(m_atmospherePipeline.layout(),
+                      vk::ShaderStageFlagBits::eVertex |
+                      vk::ShaderStageFlagBits::eFragment,
+                      0, sizeof(PushConstants), &pc);
+    mesh.draw(cmd);
+}
+
+vk::DescriptorSet Renderer::allocateAtmosphereDescriptorSet(vk::ImageView lutView,
+                                                            vk::Sampler   lutSampler)
+{
+    auto layout = m_atmospherePipeline.descriptorSetLayout();
+    vk::DescriptorSetAllocateInfo allocInfo{};
+    allocInfo.setDescriptorPool(m_atmosphereDescPool)
+             .setSetLayouts    (layout);
+    auto sets = m_ctx.device().allocateDescriptorSets(allocInfo);
+
+    vk::DescriptorImageInfo imgInfo{};
+    imgInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+           .setImageView  (lutView)
+           .setSampler    (lutSampler);
+    vk::WriteDescriptorSet write{};
+    write.setDstSet        (sets[0])
+         .setDstBinding    (0)
+         .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+         .setImageInfo     (imgInfo);
+    m_ctx.device().updateDescriptorSets(write, {});
+    return sets[0];
 }
 
 vk::DescriptorSet Renderer::allocateDescriptorSet(

@@ -14,6 +14,8 @@
 #include "apeiron/render/TonemapPipeline.h"
 #include "apeiron/render/Renderer.h"
 #include "apeiron/render/BloomPass.h"
+#include "apeiron/render/AtmospherePrecompute.h"
+#include "apeiron/render/AtmospherePipeline.h"
 #include "apeiron/render/StarField.h"
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Texture.h"
@@ -222,6 +224,8 @@ int main()
             std::string ringTexturePath;   // empty = no ring
             float       ringInnerRadius = 0.0f;  // in body radii
             float       ringOuterRadius = 0.0f;
+            bool              hasAtmosphere = false;
+            AtmosphereConfig  atmosphere;
         };
         std::vector<BodyInfo> bodyInfos;
 
@@ -242,7 +246,8 @@ int main()
                                    bc.diffusePath, bc.specularPath,
                                    bc.normalPath, bc.cloudsPath, bc.heightmapPath,
                                    0.0f,
-                                   bc.ringTexturePath, bc.ringInnerRadius, bc.ringOuterRadius });
+                                   bc.ringTexturePath, bc.ringInnerRadius, bc.ringOuterRadius,
+                                   bc.hasAtmosphere, bc.atmosphere });
             if (bc.naif == "SUN") sunIndex = i;
         }
 
@@ -350,6 +355,39 @@ int main()
         // Bloom post-process (constructed before Renderer so Renderer can bind its output).
         apeiron::render::BloomPass bloom(ctx, allocator, swapchain, APEIRON_SHADER_DIR);
 
+        // Atmosphere pipeline (shares HDR render pass with body pipeline).
+        apeiron::render::AtmospherePipeline atmospherePipeline(
+            ctx, pipeline.renderPass(), APEIRON_SHADER_DIR);
+
+        // Atmosphere LUT precomputation (per-planet; null where no atmosphere).
+        using AtmPre = apeiron::render::AtmospherePrecompute;
+        std::vector<std::unique_ptr<AtmPre>> atmPrecompute(bodyInfos.size());
+        for (std::size_t i = 0; i < bodyInfos.size(); ++i) {
+            auto& bi = bodyInfos[i];
+            if (!bi.hasAtmosphere) continue;
+            glfwSetWindowTitle(window,
+                ("Apeiron — Precomputing " + bi.node->naifName() + " atmosphere…").c_str());
+            glfwPollEvents();
+            auto& a = bi.atmosphere;
+            atmPrecompute[i] = std::make_unique<AtmPre>(ctx, allocator,
+                APEIRON_SHADER_DIR,
+                AtmPre::Params{
+                    bi.radiusKm,
+                    a.atmosphereRadius,
+                    a.rayleigh,
+                    a.rayleighScaleH,
+                    a.mieScattering,
+                    a.mieExtinction,
+                    a.mieScaleH,
+                    a.mieG
+                });
+        }
+
+        // Unit-sphere mesh used for all atmosphere shells (lower resolution than bodies).
+        auto [atmVerts, atmIdxs] = apeiron::render::Geometry::makeSphere(
+            1.0f, 64, 32, glm::vec3(1.0f));
+        apeiron::render::Mesh atmShellMesh(allocator, atmVerts, atmIdxs);
+
         // Star field — loaded after SPICE kernels are in memory (pxform_c needs them).
         glfwSetWindowTitle(window, "Apeiron — Loading star catalog…");
         glfwPollEvents();
@@ -359,7 +397,8 @@ int main()
                                              APEIRON_SHADER_DIR, std::move(starVertices));
 
         // Renderer last — its destructor calls waitIdle before anything else frees.
-        apeiron::render::Renderer renderer(ctx, swapchain, pipeline, tonemap, bloom);
+        apeiron::render::Renderer renderer(ctx, swapchain, pipeline, tonemap, bloom,
+                                           atmospherePipeline);
         renderer.initImGui(window);
         glfwSetWindowTitle(window, "Apeiron");
 
@@ -382,6 +421,27 @@ int main()
             ringDescSets[i] = renderer.allocateDescriptorSet(
                 {rt.imageView(), rt.imageView(), rt.imageView(), rt.imageView(), rt.imageView()},
                 {rt.sampler(),   rt.sampler(),   rt.sampler(),   rt.sampler(),   rt.sampler()});
+        }
+
+        // Atmosphere descriptor sets — null handle where body has no atmosphere.
+        std::vector<vk::DescriptorSet> atmDescSets(bodyInfos.size());
+        for (std::size_t i = 0; i < bodyInfos.size(); ++i) {
+            if (!atmPrecompute[i]) continue;
+            auto& ap = *atmPrecompute[i];
+            atmDescSets[i] = renderer.allocateAtmosphereDescriptorSet(
+                ap.lutView(), ap.lutSampler());
+        }
+
+        // Register transmittance LUTs with ImGui for the inspector window.
+        // ImGui_ImplVulkan_AddTexture returns a VkDescriptorSet castable to ImTextureID.
+        std::vector<VkDescriptorSet> atmLutImGuiSets(bodyInfos.size(), VK_NULL_HANDLE);
+        for (std::size_t i = 0; i < bodyInfos.size(); ++i) {
+            if (!atmPrecompute[i]) continue;
+            auto& ap = *atmPrecompute[i];
+            atmLutImGuiSets[i] = ImGui_ImplVulkan_AddTexture(
+                static_cast<VkSampler>   (ap.lutSampler()),
+                static_cast<VkImageView> (ap.lutView()),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
 
         // Window state shared between callbacks.
@@ -592,6 +652,43 @@ int main()
             }
             ImGui::End();
 
+            // ---- Atmosphere LUT inspector ----
+            bool anyAtm = false;
+            for (auto& ap : atmPrecompute) if (ap) { anyAtm = true; break; }
+            if (anyAtm) {
+                ImGui::Begin("Atmosphere LUTs");
+                for (std::size_t i = 0; i < bodyInfos.size(); ++i) {
+                    if (!atmPrecompute[i]) continue;
+                    auto& bi = bodyInfos[i];
+                    ImGui::Text("%s transmittance LUT (256×64)",
+                                bi.node->naifName().c_str());
+                    ImGui::Text("Rg=%.0f km  Ra=%.0f km  betaR_B=%.4e km⁻¹",
+                                bi.radiusKm,
+                                atmPrecompute[i]->params().atmosphereRadius,
+                                atmPrecompute[i]->params().rayleigh.b);
+                    // Display LUT (u=altitude, v=cosZenith).
+                    // Width stretched to panel width; height proportional.
+                    float panelW = ImGui::GetContentRegionAvail().x;
+                    float lutH   = panelW * (64.0f / 256.0f);
+                    if (atmLutImGuiSets[i] != VK_NULL_HANDLE) {
+                        ImGui::Image(
+                            reinterpret_cast<ImTextureID>(atmLutImGuiSets[i]),
+                            ImVec2(panelW, lutH));
+                        if (ImGui::IsItemHovered()) {
+                            ImVec2 uv = ImGui::GetMousePos();
+                            ImVec2 itemPos = ImGui::GetItemRectMin();
+                            ImVec2 itemSz  = ImGui::GetItemRectSize();
+                            float u = (uv.x - itemPos.x) / itemSz.x;
+                            float v = (uv.y - itemPos.y) / itemSz.y;
+                            ImGui::SetTooltip("alt=%.2f  cosZ=%.2f\n(u=%.3f  v=%.3f)",
+                                              u, v * 2.0f - 1.0f, u, v);
+                        }
+                    }
+                    ImGui::Separator();
+                }
+                ImGui::End();
+            }
+
             ImGui::Render();
 
             // --- GPU frame ---
@@ -658,6 +755,42 @@ int main()
                     ringModel = glm::scale(ringModel, glm::vec3(bi.radiusKm * sizeScale));
                     renderer.drawRing(vp * ringModel, ringModel, sunDir, viewDir,
                                       lightIntensity, ringDescSets[i], *ringMeshes[i]);
+                }
+
+                // Draw atmosphere shell after the planet body (depth test culls occluded
+                // fragments).  Skip when the size-clamping scale is active; atmosphere
+                // would be grossly wrong at sub-pixel distances anyway.
+                if (atmPrecompute[i] && sizeScale <= 1.0f) {
+                    auto& ap  = *atmPrecompute[i];
+                    float Ra  = ap.params().atmosphereRadius;   // km
+
+                    // Build the atmosphere model matrix (scaled to Ra, not bi.radiusKm).
+                    glm::mat4 atmModel = glm::translate(glm::mat4(1.0f), renderPos);
+                    atmModel = atmModel * glm::mat4(bi.node->orientation());
+                    atmModel = glm::scale(atmModel, glm::vec3(Ra));
+
+                    // Transform camera and sun direction to local space (atm sphere = radius 1).
+                    glm::mat4 invAtm  = glm::inverse(atmModel);
+                    glm::vec3 camLocal = glm::vec3(invAtm * glm::vec4(camera.position(), 1.0f));
+                    glm::vec3 sunLocal = glm::normalize(
+                        glm::vec3(invAtm * glm::vec4(sunDir, 0.0f)));
+
+                    // Convert Bruneton km parameters to local units (per unit = per Ra km).
+                    auto& a = ap.params();
+                    glm::vec3 betaR = a.rayleigh * Ra;
+                    float scaleHR   = a.rayleighScaleH / Ra;
+                    float betaM     = a.mieScattering  * Ra;
+                    float betaMext  = a.mieExtinction  * Ra;
+                    float scaleHM   = a.mieScaleH      / Ra;
+                    float groundRatio = bi.radiusKm / Ra;
+
+                    renderer.drawAtmosphere(
+                        vp * atmModel,
+                        camLocal, groundRatio,
+                        sunLocal, lightIntensity,
+                        betaR, scaleHR,
+                        betaM, betaMext, scaleHM, a.mieG,
+                        atmDescSets[i], atmShellMesh);
                 }
             }
 

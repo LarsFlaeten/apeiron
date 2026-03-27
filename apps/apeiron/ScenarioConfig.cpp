@@ -61,6 +61,23 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
             bc.normalPath    = resolvePath("normals");
             bc.cloudsPath    = resolvePath("clouds");
             bc.heightmapPath = resolvePath("displacement");
+
+            // Optional atmosphere sub-table.
+            if (auto* atm = (*t)["atmosphere"].as_table()) {
+                bc.hasAtmosphere = true;
+                bc.atmosphere.atmosphereRadius = (*atm)["radius_km"].value_or(0.0f);
+                if (auto* rgb = (*atm)["rayleigh_rgb"].as_array(); rgb && rgb->size() == 3) {
+                    bc.atmosphere.rayleigh.r = rgb->get(0)->value_or(0.0f);
+                    bc.atmosphere.rayleigh.g = rgb->get(1)->value_or(0.0f);
+                    bc.atmosphere.rayleigh.b = rgb->get(2)->value_or(0.0f);
+                }
+                bc.atmosphere.rayleighScaleH = (*atm)["rayleigh_scale_h"].value_or(8.0f);
+                bc.atmosphere.mieScattering  = (*atm)["mie_scattering"].value_or(0.0f);
+                bc.atmosphere.mieExtinction  = (*atm)["mie_extinction"].value_or(0.0f);
+                bc.atmosphere.mieScaleH      = (*atm)["mie_scale_h"].value_or(1.2f);
+                bc.atmosphere.mieG           = (*atm)["mie_g"].value_or(0.76f);
+            }
+
             cfg.bodies.push_back(bc);
         }
     }

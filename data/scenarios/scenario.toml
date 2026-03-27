@@ -50,6 +50,15 @@ specular = "../textures/earth/8k_earth_specular_map.jpg"
 normals = "../textures/earth/8k_earth_normal_map.jpg"
 clouds = "../textures/earth/8k_earth_clouds.jpg"
 
+# Bruneton single-scattering atmosphere (Bruneton 2017, Table 1; km^-1).
+atmosphere.radius_km        = 6460.0
+atmosphere.rayleigh_rgb     = [5.802e-3, 13.558e-3, 33.1e-3]
+atmosphere.rayleigh_scale_h = 8.0
+atmosphere.mie_scattering   = 3.996e-3
+atmosphere.mie_extinction   = 4.440e-3
+atmosphere.mie_scale_h      = 1.2
+atmosphere.mie_g            = 0.76
+
 
 [[bodies]]
 naif  = "MOON"
