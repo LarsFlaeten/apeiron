@@ -519,7 +519,7 @@ int main()
             ImGui::Separator();
             ImGui::Text("Rendering");
             float exposure = renderer.exposure();
-            if (ImGui::SliderFloat("Exposure", &exposure, 0.01f, 10.0f,
+            if (ImGui::SliderFloat("Exposure", &exposure, 0.01f, 1000.0f,
                                    "%.2f", ImGuiSliderFlags_Logarithmic))
                 renderer.setExposure(exposure);
 
