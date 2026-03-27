@@ -19,12 +19,12 @@ layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D u_lut;
 // groundRadius = Rg/Ra  (e.g. 6360/6460 ≈ 0.9845 for Earth)
 // betaR / betaM are in "per unit" = km^-1 × atmosphereRadius_km
 // scaleH values are in "per unit" = km / atmosphereRadius_km
+// Matches ComputePC in AtmospherePrecompute.cpp exactly (48 bytes).
 layout(push_constant) uniform PC {
-    vec4  rayleighH;   // xyz = β_R (per unit, RGB), w = H_R (per unit)
-    vec4  miePack;     // x = β_M scattering, y = β_M extinction (per unit), z = H_M (per unit)
-    float groundRadius; // Rg in local units
-    int   numSamples;
-    vec2  _pad;
+    vec4 rayleighH;  // xyz = β_R (per unit, RGB),          w = H_R (per unit)
+    vec4 miePack;    // x = β_M scat, y = β_M ext (per unit), z = H_M (per unit), w = groundRatio (Rg/Ra)
+    int  numSamples;
+    int  _pad[3];
 } pc;
 
 // Distance from a point at radius r along direction mu (cos zenith) to the
@@ -43,7 +43,7 @@ vec3 opticalDepthToTop(float r, float mu) {
     for (int i = 0; i < pc.numSamples; ++i) {
         float d  = (float(i) + 0.5) * dx;
         float ri = sqrt(r * r + d * d + 2.0 * r * mu * d);
-        float h  = max(0.0, ri - pc.groundRadius);
+        float h  = max(0.0, ri - pc.miePack.w);
         od += pc.rayleighH.xyz * exp(-h / pc.rayleighH.w)  * dx   // Rayleigh
             + vec3(pc.miePack.y) * exp(-h / pc.miePack.z)  * dx;  // Mie extinction
     }
@@ -58,8 +58,8 @@ void main() {
     float u  = (float(coord.x) + 0.5) / float(sz.x);   // altitude ratio [0,1]
     float v  = (float(coord.y) + 0.5) / float(sz.y);   // (mu+1)/2       [0,1]
 
-    float h  = u * (1.0 - pc.groundRadius);             // height above ground (local)
-    float r  = pc.groundRadius + h;
+    float h  = u * (1.0 - pc.miePack.w);             // height above ground (local)
+    float r  = pc.miePack.w + h;
     float mu = v * 2.0 - 1.0;                           // cos zenith [-1,+1]
 
     vec3 transmittance = exp(-opticalDepthToTop(r, mu));
