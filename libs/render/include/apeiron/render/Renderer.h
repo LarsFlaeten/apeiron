@@ -68,6 +68,7 @@ public:
     void drawRing(const glm::mat4&  mvp,
                   const glm::mat4&  model,
                   const glm::vec3&  sunDir,
+                  const glm::vec3&  viewDir,
                   float             lightIntensity,
                   vk::DescriptorSet descriptorSet,
                   const Mesh&       mesh);

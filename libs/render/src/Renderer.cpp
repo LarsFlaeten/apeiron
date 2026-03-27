@@ -307,6 +307,7 @@ void Renderer::draw(const glm::mat4&  mvp,
 void Renderer::drawRing(const glm::mat4&  mvp,
                         const glm::mat4&  model,
                         const glm::vec3&  sunDir,
+                        const glm::vec3&  viewDir,
                         float             lightIntensity,
                         vk::DescriptorSet descriptorSet,
                         const Mesh&       mesh)
@@ -324,8 +325,8 @@ void Renderer::drawRing(const glm::mat4&  mvp,
     pc.mvp          = mvp;
     pc.normalCol[0] = glm::vec4(nm[0], 0.0f);
     pc.normalCol[1] = glm::vec4(nm[1], 0.0f);
-    pc.sunDirPad    = glm::vec4(sunDir, 0.0f);
-    pc.viewDirPad   = glm::vec4(0.0f, 0.0f, 0.0f, lightIntensity);
+    pc.sunDirPad    = glm::vec4(sunDir,  0.0f);
+    pc.viewDirPad   = glm::vec4(viewDir, lightIntensity);
 
     auto& cmd = m_commandBuffers[m_currentFrame];
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline.ringHandle());

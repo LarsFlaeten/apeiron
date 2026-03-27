@@ -19,6 +19,7 @@ layout(location = 0) out vec2  fragUV;
 layout(location = 1) out vec3  fragNormal;
 layout(location = 2) out float fragLightIntensity;
 layout(location = 3) out vec3  fragSunDir;
+layout(location = 4) out vec3  fragViewDir;
 
 void main()
 {
@@ -34,4 +35,5 @@ void main()
 
     fragLightIntensity = pc.viewDirPad.w;
     fragSunDir         = pc.sunDirPad.xyz;
+    fragViewDir        = pc.viewDirPad.xyz;
 }

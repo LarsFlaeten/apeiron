@@ -572,8 +572,18 @@ int main()
                     bool selected = (i == selectedBodyIndex);
                     if (ImGui::Selectable(bi.node->naifName().c_str(), selected,
                                          ImGuiSelectableFlags_SpanAllColumns)) {
-                        selectedBodyIndex  = i;
-                        orbit.distanceKm   = bi.radiusKm * 5.0f;
+                        selectedBodyIndex = i;
+                        orbit.distanceKm  = bi.radiusKm * 5.0f;
+                        // Auto-exposure: normalise so a body at 1 AU looks like Earth.
+                        // lightIntensity = 1/d², so exposure ∝ d².
+                        if (sunIndex >= 0 && i != sunIndex) {
+                            glm::vec3 bPos = scene.origin().toRenderSpace(
+                                bi.node->worldPosition());
+                            glm::vec3 sPos = scene.origin().toRenderSpace(
+                                bodyInfos[sunIndex].node->worldPosition());
+                            float dAU = glm::length(bPos - sPos) / 149'597'870.7f;
+                            renderer.setExposure(std::clamp(dAU * dAU, 0.01f, 1000.0f));
+                        }
                     }
                     ImGui::TableSetColumnIndex(1); ImGui::Text("%.0f", dist);
                     ImGui::TableSetColumnIndex(2); ImGui::Text("%.4f", dist / 149'597'870.7f);
@@ -646,8 +656,8 @@ int main()
                     glm::mat4 ringModel = glm::translate(glm::mat4(1.0f), renderPos);
                     ringModel = ringModel * glm::mat4(bi.node->orientation());
                     ringModel = glm::scale(ringModel, glm::vec3(bi.radiusKm * sizeScale));
-                    renderer.drawRing(vp * ringModel, ringModel, sunDir, lightIntensity,
-                                      ringDescSets[i], *ringMeshes[i]);
+                    renderer.drawRing(vp * ringModel, ringModel, sunDir, viewDir,
+                                      lightIntensity, ringDescSets[i], *ringMeshes[i]);
                 }
             }
 
