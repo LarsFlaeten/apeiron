@@ -332,7 +332,9 @@ void Renderer::drawRing(const glm::mat4&  mvp,
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                            m_pipeline.layout(), 0, descriptorSet, {});
     cmd.pushConstants(m_pipeline.layout(),
-                      vk::ShaderStageFlagBits::eVertex |
+                      vk::ShaderStageFlagBits::eVertex              |
+                      vk::ShaderStageFlagBits::eTessellationControl |
+                      vk::ShaderStageFlagBits::eTessellationEvaluation |
                       vk::ShaderStageFlagBits::eFragment,
                       0, sizeof(PushConstants), &pc);
     mesh.draw(cmd);
