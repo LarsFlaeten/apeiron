@@ -28,6 +28,7 @@ public:
 
     void setPosition(const glm::vec3& pos)    { m_position = pos;    }
     void setTarget  (const glm::vec3& target) { m_target   = target; }
+    void setUp      (const glm::vec3& up)     { m_up       = up;     }
     void setAspect  (float aspect)            { m_aspect   = aspect; }
 
     const glm::vec3& position() const { return m_position; }

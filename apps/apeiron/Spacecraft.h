@@ -8,6 +8,8 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <optional>
+#include <cstddef>
 
 // ---------------------------------------------------------------------------
 // Spacecraft
@@ -56,6 +58,12 @@ public:
     double altitudeKm(double bodyRadiusKm) const
         { return glm::length(m_state.P.r) - bodyRadiusKm; }
 
+    // Parent-child hierarchy.
+    // When set, this spacecraft is docked to another; physics is driven by parent.
+    void setParent(size_t idx)  { m_parentId = idx; }
+    void clearParent()          { m_parentId.reset(); }
+    std::optional<size_t> parentId() const { return m_parentId; }
+
 private:
     double          m_massKg;
     astro::State    m_state;
@@ -64,4 +72,6 @@ private:
 
     // Adaptive step hint carried between update() calls.
     astro::TimeDelta m_dtHint;
+
+    std::optional<size_t> m_parentId;
 };
