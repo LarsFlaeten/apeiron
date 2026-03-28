@@ -118,6 +118,25 @@ Earth (from Bruneton 2017, Table 1):
 These are specified in `data/scenarios/scenario.toml` under the
 `atmosphere` sub-table of each `[[bodies]]` entry.
 
+Mars (thin CO₂ + iron-oxide dust, nominal clear-sky loading):
+
+| parameter | value | unit |
+|---|---|---|
+| `Rg` | ~3389.5 | km (from SPICE PCK) |
+| `Ra` | 3489.5 | km (100 km thick) |
+| `β_R` | (20.0, 8.0, 2.0) × 10⁻³ | km⁻¹ — **red-dominant** to approximate dust |
+| `H_R` | 10.0 | km (CO₂ scale height) |
+| `β_M scattering` | 4.0 × 10⁻³ | km⁻¹ |
+| `β_M extinction` | 4.4 × 10⁻³ | km⁻¹ |
+| `H_M` | 10.0 | km (aerosol scale height) |
+| `g` | 0.70 | — |
+
+Note: Mars dust particles (iron oxide) selectively absorb blue light, giving the
+characteristic reddish sky.  Our single-scatter model cannot represent wavelength-
+dependent Mie absorption, so the dust effect is approximated through a red-biased
+`β_R` (inverting the usual λ⁻⁴ channel weighting).  This is visually convincing
+for orbit viewing but not physically rigorous.
+
 ---
 
 ## Pipeline architecture
