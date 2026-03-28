@@ -99,6 +99,7 @@ All physics is **C++ namespaced** under `apeiron::astro`, `apeiron::universe`, `
 | Language | C++23 |
 | Build | CMake (monorepo) + vcpkg |
 | Ephemeris | NASA/NAIF CSPICE |
+| Astrodynamics | [astro](https://github.com/LarsFlaeten/astro) — in-house library: time systems (UTC/TDB/TT), coordinate frames (ICRF, ecliptic, body-fixed), SPICE integration, propagators |
 | Math | GLM |
 | Renderer | Vulkan (Vulkan-Hpp, vk-bootstrap, VMA) |
 | Windowing | GLFW |
