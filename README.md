@@ -2,7 +2,7 @@
 
 *ἄπειρον* — Anaximander's word for the boundless, unlimited substrate of the universe.
 
-Apeiron is a physically-correct space simulator built from first principles: real ephemeris, real orbital mechanics, and physically-based rendering. The long-term north star is a **hardware-in-the-loop spacecraft simulator** where a LEON3 processor emulation (the chip family used in real ESA missions) runs actual GNC software against a live simulated solar system.
+Apeiron is a physically-correct space simulator built from first principles: real ephemeris, real orbital mechanics, and physically-based rendering.
 
 ---
 
@@ -139,6 +139,7 @@ Shaders are compiled from GLSL to SPIR-V at build time by `glslc`; paths are bak
 | Gas giant atmospheres | Layered cloud-deck model; different from rocky-planet Bruneton |
 | Venus atmosphere | Extremely thick CO₂; needs higher integration step count |
 | Galilean moons | Requires large SPK satellite kernel (~1.1 GB) |
+| Orbital mechanics | Maneuvering, navigation |
 | Spacecraft module | Modular physical object system |
 | LEON3 HIL integration | OBC emulator running real GNC software against live sim |
 
