@@ -2,7 +2,7 @@
 
 *ἄπειρον* — Anaximander's word for the boundless, unlimited substrate of the universe.
 
-Apeiron is a physically-correct space simulator built from first principles: real ephemeris, real orbital mechanics, and physically-based rendering.
+Apeiron is a physically-correct space simulator built from first principles: real ephemeris data, physically-based rendering, and — eventually — a full orbital mechanics engine for spacecraft navigation and maneuver planning. The goal is a simulator where every number means something: planetary positions from SPICE kernels, atmospheric scattering from measured optical parameters, and orbital burns computed against real dynamics.
 
 ---
 
@@ -139,8 +139,11 @@ Shaders are compiled from GLSL to SPIR-V at build time by `glslc`; paths are bak
 | Gas giant atmospheres | Layered cloud-deck model; different from rocky-planet Bruneton |
 | Venus atmosphere | Extremely thick CO₂; needs higher integration step count |
 | Galilean moons | Requires large SPK satellite kernel (~1.1 GB) |
-| Orbital mechanics | Maneuvering, navigation |
-| Spacecraft module | Modular physical object system |
+| Orbital mechanics — propagator | Keplerian / N-body propagation for spacecraft state vectors |
+| Orbital mechanics — maneuvers | Delta-v planning, Hohmann transfers, burn execution |
+| Orbital mechanics — navigation | Orbit determination from simulated sensor data |
+| Orbital mechanics — rendezvous | Proximity operations, docking guidance |
+| Spacecraft module | Modular physical object system (mass, inertia, engines, sensors) |
 | LEON3 HIL integration | OBC emulator running real GNC software against live sim |
 
 ---
