@@ -73,6 +73,20 @@ diffuse = "../textures/mars/8k_mars.jpg"
 normals = "../textures/mars/MarsNormal.png"
 displacement = "../textures/mars/Mars_MGS_MOLA_8k_height.png"
 
+# Thin CO₂ atmosphere with iron-oxide dust loading.
+# β_R channels are red-dominant to approximate dust-reddened Mars scattering.
+# Values are intentionally small so the atmosphere stays optically thin even
+# at limb-grazing angles (~370 km path); otherwise high-β_red kills T_P_sun.red
+# and the limb ends up blue (same mechanism as Earth sunsets, but inverted).
+# Mie dust is increased to compensate for weak Rayleigh brightness.
+atmosphere.radius_km        = 3489.5
+atmosphere.rayleigh_rgb     = [5.0e-3, 1.5e-3, 0.3e-3]
+atmosphere.rayleigh_scale_h = 10.0
+atmosphere.mie_scattering   = 8.0e-3
+atmosphere.mie_extinction   = 9.0e-3
+atmosphere.mie_scale_h      = 8.0
+atmosphere.mie_g            = 0.70
+
 [[bodies]]
 naif       = "JUPITER BARYCENTER"
 radii_naif = "JUPITER"
