@@ -103,9 +103,46 @@ Key render subsystems:
 
 Deliberately last — designed once the world exists and real use cases are visible.
 
-- Modular physical object model (mass, inertia, surface properties)
-- Component system for props: landing gear, lights, engines, etc.
-- Easy to define a new spacecraft with physical properties
+#### Physical object model
+- Mass, centre of mass, inertia tensor per spacecraft
+- Component system: engine pods, RCS clusters, landing legs, docking ports, sensors
+- Per-spacecraft `.toml` sidecar manifest with Apeiron-specific properties (mass, CoM, named nodes for ports and engines, collision mesh)
+
+#### Asset pipeline
+OpenSCAD (parametric concept) → Blender (surface detail, PBR materials) → glTF 2.0 / `.glb` (runtime format, loaded via **fastgltf**)
+
+#### Docking standard
+All Apeiron spacecraft use **IDSS** (International Docking System Standard) ports, matching the real-world standard used by Crew Dragon, Starliner, and Gateway.
+- Two-phase docking: soft capture (3-petal ring) → hard capture (mechanical hooks)
+- Active / passive role negotiation per port
+- Supports power, data, and air transfer post-mate
+
+#### Assets
+
+Three vehicles are planned, plus a hull-integrated drone cradle:
+
+| Asset | File | Purpose |
+|---|---|---|
+| SpaceX Crew Dragon | `dragon2.glb` | Placeholder — orbital mechanics and renderer bringup |
+| Custom multirole ship | `apeiron_ship.glb` | Long-term primary vessel (reentry, hover, landing, docking, elevator) |
+| Utility drone / ROV | `apeiron_drone.glb` | Close-proximity inspection, manipulation, relay |
+| Drone Cradle Interface | (part of ship glTF) | Hull-integrated stow, charge, and launch system for drone |
+
+Parametric OpenSCAD concept models: `apeiron_ship.scad`, `apeiron_drone.scad`.
+
+Key design decisions for the custom ship:
+- **Lifting body**, no wings; 18 m × 11 m × 5.5 m default dimensions
+- **No cockpit** — flush camera clusters, crew inside hull
+- **Four articulating engine pods** — fold back for orbit, swing down for hover (toed out 12°)
+- **Six RCS clusters** for full 6-DOF vacuum authority
+- **Dorsal IDSS port** (passive, load-bearing) — space elevator and station docking
+- **Nose IDSS port** (active) — ship-to-ship docking only
+- **Belly** reserved for ceramic heat shield and landing legs; no ventral port
+
+The drone is Astrobee-sized (32×32×20 cm), cold-gas N₂ RCS, ~8 m/s ΔV, LIDAR-guided
+autonomous return to its DCI cradle. The DCI is fully flush with the hull when closed.
+
+See `docs/design/spacecraft.md` for full design rationale, sidecar manifest format, and build-out order.
 
 ---
 
@@ -134,6 +171,7 @@ Deliberately last — designed once the world exists and real use cases are visi
 | Windowing | GLFW or SDL3 |
 | Atmosphere | Bruneton precomputed scattering (ported to Vulkan) |
 | Star catalog | HYG Database |
+| glTF loader | fastgltf |
 | Testing | Catch2 |
 
 ---

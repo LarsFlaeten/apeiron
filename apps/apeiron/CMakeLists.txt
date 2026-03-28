@@ -31,6 +31,7 @@ find_package(tomlplusplus CONFIG REQUIRED)
 add_executable(apeiron
     main.cpp
     ScenarioConfig.cpp
+    Spacecraft.cpp
 )
 
 add_dependencies(apeiron apeiron_shaders)

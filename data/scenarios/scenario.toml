@@ -1,4 +1,7 @@
-# Apeiron scenario — Inner solar system
+# Apeiron scenario — spacecraft playground
+#
+# Stripped to Earth + Moon only for fast iteration during spacecraft bringup.
+# Other bodies are commented out — uncomment to restore the full solar system.
 #
 # Kernel load order: LSK first, then PCK, then SPK.
 
@@ -11,8 +14,8 @@ path = "../kernels/pck/pck00011.tpc"
 [[kernels]]
 path = "../kernels/spk/de440s.bsp"
 
-[[kernels]]
-path = "../kernels/spk/mar099s.bsp"
+# [[kernels]]
+# path = "../kernels/spk/mar099s.bsp"
 
 # ---------------------------------------------------------------------------
 
@@ -22,7 +25,6 @@ target = "SUN"
 frame  = "ECLIPJ2000"
 
 [time]
-# First quarter moon — Moon is ~90° from Sun, visible to the right of Earth.
 epoch  = "2025-07-03T12:00:00"
 
 # ---------------------------------------------------------------------------
@@ -30,25 +32,14 @@ epoch  = "2025-07-03T12:00:00"
 [[bodies]]
 naif  = "SUN"
 color = [1.0, 0.92, 0.23]
-# diffuse = "textures/sun.jpg"
-
-[[bodies]]
-naif  = "MERCURY"
-color = [1.0, 1.0, 1.0]
-diffuse = "../textures/mercury/8k_mercury.jpg"
-
-[[bodies]]
-naif  = "VENUS"
-color = [1.0, 1.0, 1.0]
-diffuse = "../textures/venus/8k_venus_surface.jpg"
 
 [[bodies]]
 naif  = "EARTH"
-color = [1.0, 1.0, 1.0]   # tint is white so texture shows unmodified
-diffuse = "../textures/earth/8k_earth_daymap.jpg"
+color = [1.0, 1.0, 1.0]
+diffuse  = "../textures/earth/8k_earth_daymap.jpg"
 specular = "../textures/earth/8k_earth_specular_map.jpg"
-normals = "../textures/earth/8k_earth_normal_map.jpg"
-clouds = "../textures/earth/8k_earth_clouds.jpg"
+normals  = "../textures/earth/8k_earth_normal_map.jpg"
+clouds   = "../textures/earth/8k_earth_clouds.jpg"
 
 # Bruneton single-scattering atmosphere (Bruneton 2017, Table 1; km^-1).
 atmosphere.radius_km        = 6460.0
@@ -59,69 +50,72 @@ atmosphere.mie_extinction   = 4.440e-3
 atmosphere.mie_scale_h      = 1.2
 atmosphere.mie_g            = 0.76
 
-
 [[bodies]]
 naif  = "MOON"
 color = [1.0, 1.0, 1.0]
-diffuse = "../textures/moon/8k_moon.jpg"
+diffuse      = "../textures/moon/8k_moon.jpg"
 displacement = "../textures/moon/lola_8k_height.png"
 
-[[bodies]]
-naif  = "MARS"
-color = [1.0, 1.0, 1.0]
-diffuse = "../textures/mars/8k_mars.jpg"
-normals = "../textures/mars/MarsNormal.png"
-displacement = "../textures/mars/Mars_MGS_MOLA_8k_height.png"
+# ---------------------------------------------------------------------------
+# Commented out during spacecraft bringup — uncomment to restore.
 
-# Thin CO₂ atmosphere with iron-oxide dust loading.
-# β_R channels are red-dominant to approximate dust-reddened Mars scattering.
-# Values are intentionally small so the atmosphere stays optically thin even
-# at limb-grazing angles (~370 km path); otherwise high-β_red kills T_P_sun.red
-# and the limb ends up blue (same mechanism as Earth sunsets, but inverted).
-# Mie dust is increased to compensate for weak Rayleigh brightness.
-atmosphere.radius_km        = 3489.5
-atmosphere.rayleigh_rgb     = [5.0e-3, 1.5e-3, 0.3e-3]
-atmosphere.rayleigh_scale_h = 10.0
-atmosphere.mie_scattering   = 8.0e-3
-atmosphere.mie_extinction   = 9.0e-3
-atmosphere.mie_scale_h      = 8.0
-atmosphere.mie_g            = 0.70
+# [[bodies]]
+# naif  = "MERCURY"
+# color = [1.0, 1.0, 1.0]
+# diffuse = "../textures/mercury/8k_mercury.jpg"
 
-[[bodies]]
-naif       = "JUPITER BARYCENTER"
-radii_naif = "JUPITER"
-color = [1.0, 1.0, 1.0]
-diffuse = "../textures/jupiter/8k_jupiter.jpg"
+# [[bodies]]
+# naif  = "VENUS"
+# color = [1.0, 1.0, 1.0]
+# diffuse = "../textures/venus/8k_venus_surface.jpg"
 
-[[bodies]]
-naif       = "SATURN BARYCENTER"
-radii_naif = "SATURN"
-color = [1.0, 1.0, 1.0]
-diffuse           = "../textures/saturn/8k_saturn.jpg"
-ring_texture      = "../textures/saturn/8k_saturn_ring_alpha.png"
-ring_inner_radius = 1.11
-ring_outer_radius = 2.35
+# [[bodies]]
+# naif  = "MARS"
+# color = [1.0, 1.0, 1.0]
+# diffuse      = "../textures/mars/8k_mars.jpg"
+# normals      = "../textures/mars/MarsNormal.png"
+# displacement = "../textures/mars/Mars_MGS_MOLA_8k_height.png"
+# atmosphere.radius_km        = 3489.5
+# atmosphere.rayleigh_rgb     = [5.0e-3, 1.5e-3, 0.3e-3]
+# atmosphere.rayleigh_scale_h = 10.0
+# atmosphere.mie_scattering   = 8.0e-3
+# atmosphere.mie_extinction   = 9.0e-3
+# atmosphere.mie_scale_h      = 8.0
+# atmosphere.mie_g            = 0.70
 
-[[bodies]]
-naif       = "URANUS BARYCENTER"
-radii_naif = "URANUS"
-color = [1.0, 1.0, 1.0]
-diffuse = "../textures/uranus/2k_uranus.jpg"
+# [[bodies]]
+# naif       = "JUPITER BARYCENTER"
+# radii_naif = "JUPITER"
+# color = [1.0, 1.0, 1.0]
+# diffuse = "../textures/jupiter/8k_jupiter.jpg"
 
-[[bodies]]
-naif       = "NEPTUNE BARYCENTER"
-radii_naif = "NEPTUNE"
-color = [1.0, 1.0, 1.0]
-diffuse = "../textures/neptune/2k_neptune.jpg"
+# [[bodies]]
+# naif       = "SATURN BARYCENTER"
+# radii_naif = "SATURN"
+# color = [1.0, 1.0, 1.0]
+# diffuse           = "../textures/saturn/8k_saturn.jpg"
+# ring_texture      = "../textures/saturn/8k_saturn_ring_alpha.png"
+# ring_inner_radius = 1.11
+# ring_outer_radius = 2.35
 
-[[bodies]]
-naif  = "PHOBOS"
-color = [1.0, 1.0, 1.0]
-mesh  = "../meshes/phobos/phobos_gaskell_64.obj"
-# diffuse = "../textures/phobos/phobos.jpg"
+# [[bodies]]
+# naif       = "URANUS BARYCENTER"
+# radii_naif = "URANUS"
+# color = [1.0, 1.0, 1.0]
+# diffuse = "../textures/uranus/2k_uranus.jpg"
 
-[[bodies]]
-naif  = "DEIMOS"
-color = [1.0, 1.0, 1.0]
-mesh  = "../meshes/deimos/deimos_g_167m_spc_obj_0000n00000_v002.obj"
-# diffuse = "../textures/deimos/deimos.jpg"
+# [[bodies]]
+# naif       = "NEPTUNE BARYCENTER"
+# radii_naif = "NEPTUNE"
+# color = [1.0, 1.0, 1.0]
+# diffuse = "../textures/neptune/2k_neptune.jpg"
+
+# [[bodies]]
+# naif  = "PHOBOS"
+# color = [1.0, 1.0, 1.0]
+# mesh  = "../meshes/phobos/phobos_gaskell_64.obj"
+
+# [[bodies]]
+# naif  = "DEIMOS"
+# color = [1.0, 1.0, 1.0]
+# mesh  = "../meshes/deimos/deimos_g_167m_spc_obj_0000n00000_v002.obj"

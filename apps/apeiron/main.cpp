@@ -29,9 +29,11 @@
 
 #include "astro/Time.h"
 #include "ScenarioConfig.h"
+#include "Spacecraft.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <cspice/SpiceUsr.h>
 
@@ -260,6 +262,49 @@ int main()
             if (bi.node->naifName() == "EARTH") { earthRadius = bi.radiusKm; break; }
 
         // =================================================================
+        // Spacecraft — physics only, no GPU resources
+        // Coordinate system: Earth-centred ECLIPJ2000 (km, km/s).
+        // =================================================================
+
+        // Earth's GM (km³/s²) and attractor at origin of ECI frame.
+        constexpr double kGM_Earth = 398600.4418;
+        astro::Attractor earthAttractor{ glm::dvec3(0.0), kGM_Earth };
+
+        // Circular LEO at 400 km altitude (r = earthRadius + 400 km).
+        const double orbitRadius = static_cast<double>(earthRadius) + 400.0;
+        const double circularV   = std::sqrt(kGM_Earth / orbitRadius);
+
+        // Mothership: starts at +X, velocity along +Y (prograde, ecliptic plane).
+        // Mass ~12 500 kg (Crew Dragon placeholder), inertia rough sphere estimate.
+        const double msMass = 12519.0;
+        const double msI    = 0.4 * msMass * 4.5 * 4.5 * 1e-6; // kg·m² → rough
+        astro::State msState;
+        msState.P.r = glm::dvec3(orbitRadius, 0.0, 0.0);
+        msState.P.v = glm::dvec3(0.0, circularV, 0.0);
+        msState.R.q = glm::dquat(1.0, 0.0, 0.0, 0.0);
+        msState.R.w = glm::dvec3(0.0);
+
+        Spacecraft mothership(msMass, glm::dmat3(msI), msState);
+        mothership.addAttractor(earthAttractor);
+
+        // Drone: 100 m ahead in along-track (+Y), same velocity.
+        // Mass 8.5 kg, roughly a 0.32 m cube.
+        const double droneMass = 8.5;
+        const double droneI    = (1.0/6.0) * droneMass * 0.32 * 0.32; // kg·m² solid box
+        astro::State droneState;
+        droneState.P.r = msState.P.r + glm::dvec3(0.0, 0.0001, 0.0); // +100 m in Y
+        droneState.P.v = msState.P.v;
+        droneState.R.q = glm::dquat(1.0, 0.0, 0.0, 0.0);
+        droneState.R.w = glm::dvec3(0.0);
+
+        Spacecraft drone(droneMass, glm::dmat3(droneI), droneState);
+        drone.addAttractor(earthAttractor);
+
+        // Physics fixed-step accumulator (10 Hz simulation).
+        constexpr double kPhysStep   = 0.1;  // seconds
+        double           physAccum   = 0.0;
+
+        // =================================================================
         // GPU stack — destruction order is reverse of declaration order:
         //   renderer → meshes → camera → pipeline → swapchain → allocator → ctx
         // All VMA-backed objects (meshes, swapchain depth image) are freed
@@ -340,6 +385,10 @@ int main()
         int selectedBodyIndex = 0;
         for (int i = 0; i < static_cast<int>(bodyInfos.size()); ++i)
             if (bodyInfos[i].node->naifName() == cfg.observerBody) { selectedBodyIndex = i; break; }
+
+        // When non-null, the camera focuses on this world position instead of a body.
+        // Set by clicking spacecraft buttons in ImGui; cleared when a body is clicked.
+        const Spacecraft* focusedSpacecraft = nullptr;
 
         glm::vec3 focusRenderPos{0.0f};
 
@@ -444,11 +493,16 @@ int main()
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
 
+        // Input mode: camera orbit vs. drone RCS control.
+        enum class InputMode { Camera, Drone };
+        InputMode inputMode = InputMode::Camera;
+
         // Window state shared between callbacks.
         struct WindowState {
             apeiron::render::Renderer* renderer;
-            double scrollDelta = 0.0;
-        } windowState{&renderer};
+            double     scrollDelta = 0.0;
+            InputMode* inputMode   = nullptr;
+        } windowState{&renderer, 0.0, &inputMode};
 
         bool isFullscreen = false;
         bool needsResize  = false;
@@ -460,8 +514,11 @@ int main()
             auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w));
             if (key == GLFW_KEY_ESCAPE)
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
-            else if (key == GLFW_KEY_W)
+            else if (key == GLFW_KEY_GRAVE_ACCENT)   // ` toggles wireframe
                 s->renderer->setWireframe(!s->renderer->wireframe());
+            else if (key == GLFW_KEY_TAB)            // Tab toggles input mode
+                *s->inputMode = (*s->inputMode == InputMode::Camera)
+                              ? InputMode::Drone : InputMode::Camera;
         });
         glfwSetScrollCallback(window, [](GLFWwindow* w, double, double yoff) {
             auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w));
@@ -519,10 +576,17 @@ int main()
             }
             windowState.scrollDelta = 0.0;
 
-            // Focus point: render-space position of the selected body.
-            if (selectedBodyIndex >= 0 && selectedBodyIndex < (int)bodyInfos.size())
+            // Focus point: spacecraft takes priority, otherwise selected body.
+            if (focusedSpacecraft) {
+                glm::dvec3 earthWorld(0.0);
+                for (auto& bi : bodyInfos)
+                    if (bi.node->naifName() == "EARTH") { earthWorld = bi.node->worldPosition(); break; }
+                focusRenderPos = scene.origin().toRenderSpace(
+                    earthWorld + focusedSpacecraft->position());
+            } else if (selectedBodyIndex >= 0 && selectedBodyIndex < (int)bodyInfos.size()) {
                 focusRenderPos = scene.origin().toRenderSpace(
                     bodyInfos[selectedBodyIndex].node->worldPosition());
+            }
 
             camera.setPosition(focusRenderPos + orbit.offset());
             camera.setTarget  (focusRenderPos);
@@ -530,15 +594,60 @@ int main()
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
+            // ---- Drone RCS input (Tab to toggle mode) ----
+            // Translation: WASD = body X/Z, QE = body Y.
+            // Rotation:    IJKL = pitch/yaw, UO = roll.
+            // All forces/torques zeroed each frame; keys set them while held.
+            {
+                constexpr double kThrust = 1.0;      // N per axis (cold-gas RCS)
+                constexpr double kTorque = 0.01;     // N·m per axis
+
+                glm::dvec3 dForce(0.0), dTorque(0.0);
+
+                if (inputMode == InputMode::Drone && !ImGui::GetIO().WantCaptureKeyboard) {
+                    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) dForce.z -= kThrust;
+                    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) dForce.z += kThrust;
+                    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) dForce.x -= kThrust;
+                    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) dForce.x += kThrust;
+                    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) dForce.y += kThrust;
+                    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) dForce.y -= kThrust;
+
+                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) dTorque.x += kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) dTorque.x -= kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) dTorque.y += kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) dTorque.y -= kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) dTorque.z += kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) dTorque.z -= kTorque;
+                }
+
+                drone.setBodyForce(dForce);
+                drone.setBodyTorque(dTorque);
+            }
+
+            // ---- Fixed-step spacecraft physics ----
+            // Spacecraft physics runs at wall-clock time, not simulation speed —
+            // drone control doesn't make sense at 3600×.
+            // Cap accumulator to 5 steps max to avoid spiral-of-death on slow frames.
+            physAccum = std::min(physAccum + frameDt, kPhysStep * 5.0);
+            while (physAccum >= kPhysStep) {
+                mothership.update(kPhysStep, currentEt);
+                drone.update(kPhysStep, currentEt);
+                physAccum -= kPhysStep;
+            }
+
             observerPos = observer.worldPosition(currentEt);
             scene.update(currentEt, observerPos);
 
-            // Recenter the floating origin on the focused body so its render-space
-            // position is (0,0,0).  This keeps all float32 values small and avoids
-            // precision jitter when orbiting a body far from the observer.
-            if (selectedBodyIndex >= 0 && selectedBodyIndex < (int)bodyInfos.size())
+            // Recenter the floating origin on the focus target.
+            if (focusedSpacecraft) {
+                glm::dvec3 earthWorld(0.0);
+                for (auto& bi : bodyInfos)
+                    if (bi.node->naifName() == "EARTH") { earthWorld = bi.node->worldPosition(); break; }
+                scene.origin().recenter(earthWorld + focusedSpacecraft->position());
+            } else if (selectedBodyIndex >= 0 && selectedBodyIndex < (int)bodyInfos.size()) {
                 scene.origin().recenter(
                     bodyInfos[selectedBodyIndex].node->worldPosition());
+            }
 
             // Sun's render-space position (used as light source for all bodies).
             glm::vec3 sunRenderPos{0.0f};
@@ -604,6 +713,35 @@ int main()
             }
 
             ImGui::Separator();
+            ImGui::Text("Spacecraft  [Tab = %s mode]",
+                        inputMode == InputMode::Drone ? "DRONE" : "CAMERA");
+            if (ImGui::Button("Focus Mothership")) {
+                focusedSpacecraft = &mothership;
+                orbit.distanceKm  = 0.1f;   // start 100 m away
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Focus Drone")) {
+                focusedSpacecraft = &drone;
+                orbit.distanceKm  = 0.02f;  // start 20 m away
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Unfocus")) focusedSpacecraft = nullptr;
+
+            ImGui::Text("  Mothership  alt %.1f km  v %.3f km/s",
+                        mothership.altitudeKm(earthRadius),
+                        glm::length(mothership.velocity()));
+            ImGui::Text("  Drone       alt %.1f km  v %.3f km/s",
+                        drone.altitudeKm(earthRadius),
+                        glm::length(drone.velocity()));
+            {
+                glm::dvec3 sep = drone.position() - mothership.position();
+                ImGui::Text("  Separation  %.1f m", glm::length(sep) * 1000.0);
+            }
+            if (inputMode == InputMode::Drone)
+                ImGui::TextColored({1,1,0,1},
+                    "  DRONE CTRL  WASD/QE=translate  IJKL/UO=rotate");
+
+            ImGui::Separator();
             ImGui::Text("Camera");
             ImGui::Text("  Frame    : %s", cfg.frame.c_str());
             ImGui::Text("  Focus    : %s", cfg.observerBody.c_str());
@@ -632,7 +770,8 @@ int main()
                     bool selected = (i == selectedBodyIndex);
                     if (ImGui::Selectable(bi.node->naifName().c_str(), selected,
                                          ImGuiSelectableFlags_SpanAllColumns)) {
-                        selectedBodyIndex = i;
+                        selectedBodyIndex  = i;
+                        focusedSpacecraft = nullptr;   // body click clears SC focus
                         orbit.distanceKm  = bi.radiusKm * 5.0f;
                         // Auto-exposure: normalise so a body at 1 AU looks like Earth.
                         // lightIntensity = 1/d², so exposure ∝ d².
@@ -792,6 +931,40 @@ int main()
                         betaM, betaMext, scaleHM, a.mieG,
                         atmDescSets[i], atmShellMesh);
                 }
+            }
+
+            // ---- Draw spacecraft (placeholder: small emissive spheres) ----
+            // Spacecraft positions are in Earth-centred ECI (km).
+            // Convert to render space by finding Earth's world position and adding offset.
+            {
+                glm::dvec3 earthWorld(0.0);
+                for (auto& bi : bodyInfos)
+                    if (bi.node->naifName() == "EARTH") { earthWorld = bi.node->worldPosition(); break; }
+
+                // Compute sun direction at Earth (reuse sunRenderPos).
+                glm::vec3 scSunDir = (sunIndex >= 0)
+                    ? glm::normalize(sunRenderPos - scene.origin().toRenderSpace(earthWorld))
+                    : glm::vec3(0.0f, 1.0f, 0.0f);
+
+                // Helper: draw one spacecraft as a sphere at its physical size.
+                auto drawSC = [&](const Spacecraft& sc, float physRadiusKm) {
+                    glm::dvec3 worldPos = earthWorld + sc.position();
+                    glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
+
+                    glm::mat4 rot = glm::mat4(glm::mat3(glm::mat3_cast(glm::fquat(sc.attitude()))));
+                    glm::mat4 model = glm::translate(glm::mat4(1.0f), rp);
+                    model = model * rot;
+                    model = glm::scale(model, glm::vec3(physRadiusKm));
+
+                    glm::vec3 viewDir = glm::normalize(camera.position() - rp);
+                    renderer.draw(vp * model, model, scSunDir, viewDir,
+                                  /*emissive=*/true, 1.0f, 0.0f,
+                                  descriptorSets[0],
+                                  *meshes[0]);
+                };
+
+                drawSC(mothership, 0.01f);   // ~10 m physical radius
+                drawSC(drone,      0.002f);  //  ~2 m physical radius
             }
 
             renderer.endFrame();

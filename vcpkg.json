@@ -10,6 +10,7 @@
         "tomlplusplus",
         "stb",
         "tinyobjloader",
+        "fastgltf",
         {
             "name": "imgui",
             "features": ["vulkan-binding", "glfw-binding"]

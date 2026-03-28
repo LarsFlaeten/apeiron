@@ -144,7 +144,12 @@ Shaders are compiled from GLSL to SPIR-V at build time by `glslc`; paths are bak
 | Orbital mechanics — maneuvers | Delta-v planning, Hohmann transfers, burn execution |
 | Orbital mechanics — navigation | Orbit determination from simulated sensor data |
 | Orbital mechanics — rendezvous | Proximity operations, docking guidance |
-| Spacecraft module | Modular physical object system (mass, inertia, engines, sensors) |
+| Spacecraft — Dragon placeholder | Load Crew Dragon glTF; validate renderer and orbital mechanics |
+| Spacecraft — custom ship | Lifting-body multirole vessel: reentry, hover, landing, docking, space elevator (see `docs/design/spacecraft.md`) |
+| Spacecraft — IDSS docking | Soft + hard capture simulation; active/passive role negotiation |
+| Spacecraft — articulation | Engine pod swing, landing leg deploy via glTF animation or runtime bone control |
+| Utility drone / ROV | Astrobee-sized cold-gas vehicle for inspection and proximity ops |
+| Drone Cradle Interface (DCI) | Flush hull mount: hatch animation, latch/release, 28V charge, SpaceWire data |
 | LEON3 HIL integration | OBC emulator running real GNC software against live sim |
 
 ---
