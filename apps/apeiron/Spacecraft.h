@@ -58,6 +58,14 @@ public:
     double altitudeKm(double bodyRadiusKm) const
         { return glm::length(m_state.P.r) - bodyRadiusKm; }
 
+    // Render interpolation.
+    // Call saveSnapshot() once before the physics sub-step loop each frame,
+    // then renderPosition/renderAttitude(alpha) where alpha = physAccum / kPhysStep.
+    // This blends the last completed step with the current state for smooth rendering.
+    void       saveSnapshot() { m_snapPos = m_state.P.r; m_snapAtt = m_state.R.q; }
+    glm::dvec3 renderPosition(double alpha) const { return glm::mix(m_snapPos, m_state.P.r, alpha); }
+    glm::dquat renderAttitude(double alpha) const { return glm::slerp(m_snapAtt, m_state.R.q, alpha); }
+
     // Parent-child hierarchy.
     // When set, this spacecraft is docked to another; physics is driven by parent.
     void setParent(size_t idx)  { m_parentId = idx; }
@@ -74,4 +82,8 @@ private:
     astro::TimeDelta m_dtHint;
 
     std::optional<size_t> m_parentId;
+
+    // Snapshot taken before each frame's physics loop (for render interpolation).
+    glm::dvec3 m_snapPos{0.0};
+    glm::dquat m_snapAtt{1.0, 0.0, 0.0, 0.0};
 };

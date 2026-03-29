@@ -277,7 +277,7 @@ int main()
         // Player ship: starts at +X, velocity along +Y (prograde, ecliptic plane).
         // Mass ~12 500 kg (Crew Dragon placeholder), inertia rough sphere estimate.
         const double shipMass = 12519.0;
-        const double shipI    = 0.4 * shipMass * 4.5 * 4.5 * 1e-6;
+        const double shipI    = 0.4 * shipMass * 4.5 * 4.5;  // kg·m²  (solid sphere, r=4.5 m)
         astro::State shipState;
         shipState.P.r = glm::dvec3(orbitRadius, 0.0, 0.0);
         shipState.P.v = glm::dvec3(0.0, circularV, 0.0);
@@ -291,8 +291,8 @@ int main()
         // Index of the spacecraft the player controls / camera follows.
         const size_t playerIdx = 0;
 
-        // Physics fixed-step accumulator (10 Hz simulation).
-        constexpr double kPhysStep   = 0.1;  // seconds
+        // Physics fixed-step accumulator (100 Hz simulation).
+        constexpr double kPhysStep   = 0.01;  // seconds
         double           physAccum   = 0.0;
 
         // =================================================================
@@ -615,6 +615,9 @@ int main()
             // ---- Fixed-step spacecraft physics ----
             // Runs at wall-clock time (not simulation speed) so controls feel right.
             // Cap accumulator to 5 steps max to avoid spiral-of-death on slow frames.
+            // Snapshot taken before the loop; alpha used by renderer to interpolate.
+            for (auto& sc : spacecraft)
+                sc->saveSnapshot();
             physAccum = std::min(physAccum + static_cast<double>(frameDt), kPhysStep * 5.0);
             while (physAccum >= kPhysStep) {
                 for (auto& sc : spacecraft)
@@ -622,6 +625,7 @@ int main()
                         sc->update(kPhysStep, currentEt);
                 physAccum -= kPhysStep;
             }
+            const double renderAlpha = physAccum / kPhysStep;
 
             observerPos = observer.worldPosition(currentEt);
             scene.update(currentEt, observerPos);
@@ -645,10 +649,10 @@ int main()
             // ---- Nav camera: chase-cam rigidly offset from player ship body frame ----
             if (viewMode == ViewMode::Nav) {
                 auto& ship = *spacecraft[playerIdx];
-                glm::vec3 shipRp = scene.origin().toRenderSpace(earthWorld + ship.position());
+                glm::vec3 shipRp = scene.origin().toRenderSpace(
+                    earthWorld + ship.renderPosition(renderAlpha));
 
-                // Build rotation matrix from spacecraft attitude (body → inertial).
-                glm::mat3 rot = glm::mat3_cast(glm::fquat(ship.attitude()));
+                glm::mat3 rot = glm::mat3_cast(glm::fquat(ship.renderAttitude(renderAlpha)));
                 glm::vec3 fwd = rot * glm::vec3(0.0f, 0.0f,  1.0f);  // body +Z = forward
                 glm::vec3 up  = rot * glm::vec3(0.0f, 1.0f,  0.0f);  // body +Y = up
 
@@ -945,10 +949,10 @@ int main()
                 constexpr float kShipRadiusKm = 0.01f;  // ~10 m placeholder sphere
 
                 for (auto& sc : spacecraft) {
-                    glm::dvec3 worldPos = earthWorld + sc->position();
+                    glm::dvec3 worldPos = earthWorld + sc->renderPosition(renderAlpha);
                     glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
 
-                    glm::mat4 rot   = glm::mat4(glm::mat3(glm::mat3_cast(glm::fquat(sc->attitude()))));
+                    glm::mat4 rot   = glm::mat4(glm::mat3(glm::mat3_cast(glm::fquat(sc->renderAttitude(renderAlpha)))));
                     glm::mat4 model = glm::translate(glm::mat4(1.0f), rp);
                     model = model * rot;
                     model = glm::scale(model, glm::vec3(kShipRadiusKm));
