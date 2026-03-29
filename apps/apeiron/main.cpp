@@ -665,10 +665,9 @@ int main()
                 glm::vec3 fwd = rot * glm::vec3(1.0f, 0.0f, 0.0f);  // body +X = forward
                 glm::vec3 up  = rot * glm::vec3(0.0f, 0.0f, 1.0f);  // body +Z = up
 
-                // 50 m behind, 5 m above the ship centre.
-                glm::vec3 camPos = shipRp - fwd * 0.05f + up * 0.005f;
-                camera.setPosition(camPos);
-                camera.setTarget  (shipRp + fwd * 0.1f);
+                // Bow camera: placed at the ship centre, looking forward along +X body.
+                camera.setPosition(shipRp);
+                camera.setTarget  (shipRp + fwd);
                 camera.setUp      (up);
             }
 
