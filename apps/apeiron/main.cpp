@@ -593,19 +593,21 @@ int main()
                 glm::dvec3 shipForce(0.0), shipTorque(0.0);
 
                 if (viewMode == ViewMode::Nav && !ImGui::GetIO().WantCaptureKeyboard) {
-                    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) shipForce.z -= kThrust;
-                    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) shipForce.z += kThrust;
-                    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) shipForce.x -= kThrust;
-                    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) shipForce.x += kThrust;
-                    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) shipForce.y += kThrust;
-                    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) shipForce.y -= kThrust;
+                    // Translation: x=fwd, y=port, z=up
+                    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) shipForce.x += kThrust;  // fwd
+                    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) shipForce.x -= kThrust;  // aft
+                    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) shipForce.y += kThrust;  // port
+                    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) shipForce.y -= kThrust;  // stbd
+                    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) shipForce.z += kThrust;  // up
+                    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) shipForce.z -= kThrust;  // down
 
-                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) shipTorque.x += kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.x -= kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) shipTorque.y += kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) shipTorque.y -= kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.z -= kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) shipTorque.z += kTorque;
+                    // Rotation: pitch=Y, yaw=Z, roll=X  (right-hand rule)
+                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) shipTorque.y -= kTorque;  // pitch up
+                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.y += kTorque;  // pitch down
+                    if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) shipTorque.z += kTorque;  // yaw left
+                    if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) shipTorque.z -= kTorque;  // yaw right
+                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.x -= kTorque;  // roll left
+                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) shipTorque.x += kTorque;  // roll right
                 }
 
                 spacecraft[playerIdx]->setBodyForce(shipForce);
@@ -653,8 +655,8 @@ int main()
                     earthWorld + ship.renderPosition(renderAlpha));
 
                 glm::mat3 rot = glm::mat3_cast(glm::fquat(ship.renderAttitude(renderAlpha)));
-                glm::vec3 fwd = rot * glm::vec3(0.0f, 0.0f,  1.0f);  // body +Z = forward
-                glm::vec3 up  = rot * glm::vec3(0.0f, 1.0f,  0.0f);  // body +Y = up
+                glm::vec3 fwd = rot * glm::vec3(1.0f, 0.0f, 0.0f);  // body +X = forward
+                glm::vec3 up  = rot * glm::vec3(0.0f, 0.0f, 1.0f);  // body +Z = up
 
                 // 50 m behind, 5 m above the ship centre.
                 glm::vec3 camPos = shipRp - fwd * 0.05f + up * 0.005f;
