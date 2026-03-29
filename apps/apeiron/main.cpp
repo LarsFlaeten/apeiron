@@ -304,6 +304,11 @@ int main()
         OrbitalMFD orbitalMFD;
         orbitalMFD.setContext("EARTH", "ECLIPJ2000");
 
+        // Thruster parameters — adjustable from the Dev view.
+        double mainEngineThrust = 22'000.0;   // N  (SPACE)
+        double rcsThrust        =    400.0;   // N  (WASD/QE)
+        double rcsTorque        =  1'000.0;   // N·m (IJKL/UO)
+
         // Physics fixed-step accumulator (100 Hz simulation).
         constexpr double kPhysStep   = 0.01;  // seconds
         double           physAccum   = 0.0;
@@ -618,35 +623,31 @@ int main()
             // Controls are disabled at time acceleration > 1x — thrust at 1000x makes no sense.
             bool mainEngineOn = false;
             {
-                constexpr double kRcsThrust   =    400.0;  // N per axis  (~1 Draco thruster)
-                constexpr double kMainThrust  = 22'000.0;  // N  (~upper-stage engine, ~1.76 m/s²)
-                constexpr double kTorque      =   1000.0;  // N·m per axis
-
                 glm::dvec3 shipForce(0.0), shipTorque(0.0);
 
                 if (viewMode == ViewMode::Nav && simSpeedTarget <= 1.0
                     && !ImGui::GetIO().WantCaptureKeyboard) {
                     // Main engine — fires along body +X (forward).  Use SPACE.
                     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-                        shipForce.x += kMainThrust;
+                        shipForce.x += mainEngineThrust;
                         mainEngineOn = true;
                     }
 
                     // RCS translation: x=fwd, y=port, z=up
-                    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) shipForce.x += kRcsThrust;
-                    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) shipForce.x -= kRcsThrust;
-                    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) shipForce.y += kRcsThrust;
-                    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) shipForce.y -= kRcsThrust;
-                    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) shipForce.z += kRcsThrust;
-                    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) shipForce.z -= kRcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) shipForce.x += rcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) shipForce.x -= rcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) shipForce.y += rcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) shipForce.y -= rcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) shipForce.z += rcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) shipForce.z -= rcsThrust;
 
                     // RCS rotation: pitch=Y, yaw=Z, roll=X  (right-hand rule)
-                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) shipTorque.y += kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.y -= kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) shipTorque.z += kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) shipTorque.z -= kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.x -= kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) shipTorque.x += kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) shipTorque.y += rcsTorque;
+                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.y -= rcsTorque;
+                    if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) shipTorque.z += rcsTorque;
+                    if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) shipTorque.z -= rcsTorque;
+                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.x -= rcsTorque;
+                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) shipTorque.x += rcsTorque;
                 }
 
                 spacecraft[playerIdx]->setBodyForce(shipForce);
@@ -815,7 +816,41 @@ int main()
                 ImGui::EndTable();
             }
             ImGui::End();
-            }  // viewMode == Map
+            }  // viewMode == Dev
+
+            // ---- Dev: Spacecraft / thruster tuning panel ----
+            if (viewMode == ViewMode::Dev) {
+                ImGui::Begin("Spacecraft");
+
+                ImGui::Text("Ship mass: %.0f kg", shipMass);
+                ImGui::Separator();
+
+                ImGui::Text("Main engine (SPACE)");
+                ImGui::SliderScalar("Main thrust (N)", ImGuiDataType_Double,
+                    &mainEngineThrust,
+                    (const double[]){1'000.0}, (const double[]){2'000'000.0},
+                    "%.0f", ImGuiSliderFlags_Logarithmic);
+                // Show resulting acceleration for quick sanity check.
+                ImGui::TextDisabled("  → %.2f m/s²  (%.3f g)",
+                    mainEngineThrust / shipMass,
+                    mainEngineThrust / shipMass / 9.80665);
+
+                ImGui::Separator();
+                ImGui::Text("RCS (WASD/QE)");
+                ImGui::SliderScalar("RCS thrust (N)", ImGuiDataType_Double,
+                    &rcsThrust,
+                    (const double[]){10.0}, (const double[]){50'000.0},
+                    "%.0f", ImGuiSliderFlags_Logarithmic);
+
+                ImGui::Separator();
+                ImGui::Text("RCS attitude (IJKL/UO)");
+                ImGui::SliderScalar("RCS torque (N·m)", ImGuiDataType_Double,
+                    &rcsTorque,
+                    (const double[]){10.0}, (const double[]){100'000.0},
+                    "%.0f", ImGuiSliderFlags_Logarithmic);
+
+                ImGui::End();
+            }
 
             // ---- Nav view HUD ----
             if (viewMode == ViewMode::Nav) {
