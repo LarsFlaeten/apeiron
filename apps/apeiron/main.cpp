@@ -302,6 +302,7 @@ int main()
 
         // MFD apps — updated and rendered every frame in Nav view.
         OrbitalMFD orbitalMFD;
+        orbitalMFD.setContext("EARTH", "ECLIPJ2000");
 
         // Physics fixed-step accumulator (100 Hz simulation).
         constexpr double kPhysStep   = 0.01;  // seconds
