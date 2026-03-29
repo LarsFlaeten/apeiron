@@ -281,7 +281,14 @@ int main()
         astro::State shipState;
         shipState.P.r = glm::dvec3(orbitRadius, 0.0, 0.0);
         shipState.P.v = glm::dvec3(0.0, circularV, 0.0);
-        shipState.R.q = glm::dquat(1.0, 0.0, 0.0, 0.0);
+        // Align body frame to RTN: +X=prograde, +Y=nadir, +Z=orbit-normal.
+        {
+            glm::dvec3 T = glm::normalize(shipState.P.v);                        // prograde
+            glm::dvec3 N = glm::normalize(glm::cross(shipState.P.r, shipState.P.v)); // orbit normal
+            glm::dvec3 R = glm::cross(T, N);                                     // radial outward
+            // Rotation matrix columns = where body axes land in inertial frame.
+            shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
+        }
         shipState.R.w = glm::dvec3(0.0);
 
         std::vector<std::unique_ptr<Spacecraft>> spacecraft;
