@@ -17,9 +17,9 @@ void MFDPanel::render(const char* id)
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    const ImU32 kGreen    = IM_COL32(  0, 220,  80, 255);
-    const ImU32 kDimLine  = IM_COL32(  0, 140,  50, 160);
-    const ImU32 kBgFill   = IM_COL32(  0,  25,  10, 110);
+    const ImU32 kGreen    = IM_COL32(  0, 210,  75, 210);
+    const ImU32 kDimLine  = IM_COL32(  0, 140,  50, 120);
+    const ImU32 kBgFill   = IM_COL32(  0,  20,   8,  55);
 
     const ImVec2 tl = pos;
     const ImVec2 br = { pos.x + size.x, pos.y + size.y };

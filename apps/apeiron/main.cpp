@@ -812,6 +812,8 @@ int main()
             if (viewMode == ViewMode::Nav) {
                 auto& ship = *spacecraft[playerIdx];
                 ImGuiIO& io = ImGui::GetIO();
+                const float W = io.DisplaySize.x;
+                const float H = io.DisplaySize.y;
 
                 constexpr auto kOverlayFlags =
                     ImGuiWindowFlags_NoDecoration    |
@@ -821,9 +823,9 @@ int main()
                     ImGuiWindowFlags_NoFocusOnAppearing;
 
                 // ---- Top-right: mission clock + time acceleration ----
-                ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 10.0f, 10.0f),
+                ImGui::SetNextWindowPos(ImVec2(W - 10.0f, 10.0f),
                                         ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-                ImGui::SetNextWindowBgAlpha(0.55f);
+                ImGui::SetNextWindowBgAlpha(0.45f);
                 ImGui::Begin("##NavClock", nullptr, kOverlayFlags);
                 ImGui::TextColored({1.0f, 0.85f, 0.4f, 1.0f}, "%s UTC",
                                    currentEt.toISOUTCString(0).c_str());
@@ -833,43 +835,84 @@ int main()
                     ImGui::Text("%.0fx  [t / T]", simSpeedTarget);
                 ImGui::End();
 
-                // ---- Bottom-left: flight data ----
-                ImGui::SetNextWindowPos(ImVec2(10.0f, io.DisplaySize.y - 10.0f),
-                                        ImGuiCond_Always, ImVec2(0.0f, 1.0f));
-                ImGui::SetNextWindowBgAlpha(0.55f);
-                ImGui::Begin("##NavHUD", nullptr, kOverlayFlags);
-                ImGui::TextColored({0.4f, 1.0f, 0.4f, 1.0f}, "NAV  [F12 = Dev]");
-                ImGui::Text("Alt  %8.1f km", ship.altitudeKm(static_cast<double>(earthRadius)));
-                ImGui::Text("Vel  %8.3f km/s", glm::length(ship.velocity()));
-                glm::dvec3 w = ship.angularVelocity();
-                ImGui::Text("Rate %+.3f %+.3f %+.3f rad/s", w.x, w.y, w.z);
-                ImGui::Separator();
-                ImGui::TextDisabled("WASD/QE translate   IJKL/UO rotate");
-                ImGui::End();
-
-                // ---- MFD panels at the bottom (centred) ----
-                // Update orbital elements from current ship state.
+                // ---- MFD panels — flush to screen left/right edges ----
                 orbitalMFD.update(
                     astro::PosState(ship.position(), ship.velocity()),
                     currentEt, kGM_Earth,
                     static_cast<double>(earthRadius));
 
-                constexpr float kMfdW = 280.0f;
-                constexpr float kMfdH = 220.0f;
-                const float mfdY  = io.DisplaySize.y - 10.0f - kMfdH;
-                const float centreX = io.DisplaySize.x * 0.5f;
+                constexpr float kMfdW = 340.0f;
+                constexpr float kMfdH = 320.0f;
+                const float     mfdY  = H - kMfdH;
 
                 MFDPanel leftPanel;
-                leftPanel.pos  = { centreX - 5.0f - kMfdW, mfdY };
+                leftPanel.pos  = { 0.0f, mfdY };
                 leftPanel.size = { kMfdW, kMfdH };
                 leftPanel.app  = &orbitalMFD;
                 leftPanel.render("##MFD0");
 
                 MFDPanel rightPanel;
-                rightPanel.pos  = { centreX + 5.0f, mfdY };
+                rightPanel.pos  = { W - kMfdW, mfdY };
                 rightPanel.size = { kMfdW, kMfdH };
                 rightPanel.app  = &orbitalMFD;
                 rightPanel.render("##MFD1");
+
+                // ---- Helmet HUD overlay (drawn on top of everything) ----
+                {
+                    ImDrawList* dl = ImGui::GetForegroundDrawList();
+                    const float cx = W * 0.5f;
+                    const float cy = H * 0.5f;
+                    const ImU32 kHudGreen  = IM_COL32(  0, 210,  75, 180);
+                    const ImU32 kHudYellow = IM_COL32(220, 200,   0, 210);
+
+                    // Center reticle — gap in the middle so it doesn't obscure target.
+                    constexpr float kInner = 5.0f, kOuter = 14.0f;
+                    dl->AddLine({cx - kOuter, cy}, {cx - kInner, cy}, kHudGreen, 1.5f);
+                    dl->AddLine({cx + kInner, cy}, {cx + kOuter, cy}, kHudGreen, 1.5f);
+                    dl->AddLine({cx, cy - kOuter}, {cx, cy - kInner}, kHudGreen, 1.5f);
+                    dl->AddLine({cx, cy + kInner}, {cx, cy + kOuter}, kHudGreen, 1.5f);
+
+                    // Project a normalised world-direction to ImGui screen coords.
+                    // Vulkan NDC: y=-1 = top, y=+1 = bottom  →  sy = (ndc.y*0.5+0.5)*H
+                    glm::vec3 shipRp = scene.origin().toRenderSpace(
+                        earthWorld + ship.position());
+                    glm::mat4 vp = camera.viewProjection();
+
+                    auto projectDir = [&](glm::vec3 dir) -> std::optional<ImVec2> {
+                        glm::vec4 clip = vp * glm::vec4(shipRp + dir * 1000.0f, 1.0f);
+                        if (clip.w <= 0.0f) return std::nullopt; // behind camera
+                        glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                        float sx = (ndc.x * 0.5f + 0.5f) * W;
+                        float sy = (ndc.y * 0.5f + 0.5f) * H;
+                        // Only draw if on-screen (with small margin).
+                        if (sx < -50.0f || sx > W + 50.0f ||
+                            sy < -50.0f || sy > H + 50.0f)
+                            return std::nullopt;
+                        return ImVec2{sx, sy};
+                    };
+
+                    // Prograde: circle with four external ticks.
+                    auto drawPrograde = [&](ImVec2 p, ImU32 col) {
+                        constexpr float r = 14.0f, tick = 8.0f;
+                        dl->AddCircle(p, r, col, 0, 1.5f);
+                        dl->AddLine({p.x - r - tick, p.y}, {p.x - r, p.y}, col, 1.5f);
+                        dl->AddLine({p.x + r,        p.y}, {p.x + r + tick, p.y}, col, 1.5f);
+                        dl->AddLine({p.x, p.y - r - tick}, {p.x, p.y - r}, col, 1.5f);
+                        dl->AddLine({p.x, p.y + r},        {p.x, p.y + r + tick}, col, 1.5f);
+                    };
+
+                    // Retrograde: circle with X inside.
+                    auto drawRetrograde = [&](ImVec2 p, ImU32 col) {
+                        constexpr float r = 14.0f, d = 8.0f;
+                        dl->AddCircle(p, r, col, 0, 1.5f);
+                        dl->AddLine({p.x - d, p.y - d}, {p.x + d, p.y + d}, col, 1.5f);
+                        dl->AddLine({p.x + d, p.y - d}, {p.x - d, p.y + d}, col, 1.5f);
+                    };
+
+                    glm::vec3 progradeDir = glm::normalize(glm::vec3(ship.velocity()));
+                    if (auto p = projectDir( progradeDir)) drawPrograde (*p, kHudYellow);
+                    if (auto p = projectDir(-progradeDir)) drawRetrograde(*p, kHudYellow);
+                }
             }
 
             // ---- Atmosphere LUT inspector (Map view only) ----
