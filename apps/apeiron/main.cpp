@@ -841,9 +841,10 @@ int main()
                     currentEt, kGM_Earth,
                     static_cast<double>(earthRadius));
 
-                constexpr float kMfdW = 340.0f;
-                constexpr float kMfdH = 320.0f;
-                const float     mfdY  = H - kMfdH;
+                // Each MFD occupies 1/3 of screen width; height derived from 16:9.
+                const float kMfdW = std::round(W / 3.0f);
+                const float kMfdH = std::round(kMfdW * (9.0f / 16.0f));
+                const float mfdY  = H - kMfdH;
 
                 MFDPanel leftPanel;
                 leftPanel.pos  = { 0.0f, mfdY };
