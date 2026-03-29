@@ -614,31 +614,39 @@ int main()
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
-            // ---- RCS input (active in Nav view at 1x only) ----
+            // ---- Thruster input (active in Nav view at 1x only) ----
             // Controls are disabled at time acceleration > 1x — thrust at 1000x makes no sense.
+            bool mainEngineOn = false;
             {
-                constexpr double kThrust =   400.0;   // N per axis  (~1 Draco thruster)
-                constexpr double kTorque =  1000.0;   // N·m per axis
+                constexpr double kRcsThrust   =    400.0;  // N per axis  (~1 Draco thruster)
+                constexpr double kMainThrust  = 22'000.0;  // N  (~upper-stage engine, ~1.76 m/s²)
+                constexpr double kTorque      =   1000.0;  // N·m per axis
 
                 glm::dvec3 shipForce(0.0), shipTorque(0.0);
 
                 if (viewMode == ViewMode::Nav && simSpeedTarget <= 1.0
                     && !ImGui::GetIO().WantCaptureKeyboard) {
-                    // Translation: x=fwd, y=port, z=up
-                    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) shipForce.x += kThrust;  // fwd
-                    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) shipForce.x -= kThrust;  // aft
-                    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) shipForce.y += kThrust;  // port
-                    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) shipForce.y -= kThrust;  // stbd
-                    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) shipForce.z += kThrust;  // up
-                    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) shipForce.z -= kThrust;  // down
+                    // Main engine — fires along body +X (forward).  Use SPACE.
+                    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+                        shipForce.x += kMainThrust;
+                        mainEngineOn = true;
+                    }
 
-                    // Rotation: pitch=Y, yaw=Z, roll=X  (right-hand rule)
-                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) shipTorque.y += kTorque;  // pitch down
-                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.y -= kTorque;  // pitch up
-                    if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) shipTorque.z += kTorque;  // yaw left
-                    if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) shipTorque.z -= kTorque;  // yaw right
-                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.x -= kTorque;  // roll left
-                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) shipTorque.x += kTorque;  // roll right
+                    // RCS translation: x=fwd, y=port, z=up
+                    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) shipForce.x += kRcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) shipForce.x -= kRcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) shipForce.y += kRcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) shipForce.y -= kRcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) shipForce.z += kRcsThrust;
+                    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) shipForce.z -= kRcsThrust;
+
+                    // RCS rotation: pitch=Y, yaw=Z, roll=X  (right-hand rule)
+                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) shipTorque.y += kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.y -= kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) shipTorque.z += kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) shipTorque.z -= kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.x -= kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) shipTorque.x += kTorque;
                 }
 
                 spacecraft[playerIdx]->setBodyForce(shipForce);
@@ -834,6 +842,8 @@ int main()
                     ImGui::Text("1x real-time");
                 else
                     ImGui::Text("%.0fx  [t / T]", simSpeedTarget);
+                if (mainEngineOn)
+                    ImGui::TextColored({1.0f, 0.5f, 0.1f, 1.0f}, "* MAIN ENG *");
                 ImGui::End();
 
                 // ---- MFD panels — flush to screen left/right edges ----
