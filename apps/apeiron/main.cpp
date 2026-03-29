@@ -30,6 +30,8 @@
 #include "astro/Time.h"
 #include "ScenarioConfig.h"
 #include "Spacecraft.h"
+#include "MFD.h"
+#include "OrbitalMFD.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -298,6 +300,9 @@ int main()
         // Index of the spacecraft the player controls / camera follows.
         const size_t playerIdx = 0;
 
+        // MFD apps — updated and rendered every frame in Nav view.
+        OrbitalMFD orbitalMFD;
+
         // Physics fixed-step accumulator (100 Hz simulation).
         constexpr double kPhysStep   = 0.01;  // seconds
         double           physAccum   = 0.0;
@@ -490,7 +495,8 @@ int main()
         // View mode: F1 = Nav (spacecraft chase-cam + RCS), F12 = Dev (orbit camera + dev panel).
         enum class ViewMode { Dev, Nav };
         ViewMode viewMode = ViewMode::Dev;
-        double simSecondsPerRealSecond = 1.0; // adjustable via ImGui or t/T hotkeys
+        double simSpeedTarget          = 1.0; // set instantly by t/T keys
+        double simSecondsPerRealSecond = 1.0; // smoothly tracks target (log-space)
 
         // Window state shared between callbacks.
         struct WindowState {
@@ -498,7 +504,7 @@ int main()
             double     scrollDelta = 0.0;
             ViewMode*  viewMode    = nullptr;
             double*    simSpeed    = nullptr;
-        } windowState{&renderer, 0.0, &viewMode, &simSecondsPerRealSecond};
+        } windowState{&renderer, 0.0, &viewMode, &simSpeedTarget};
 
         bool isFullscreen = false;
         bool needsResize  = false;
@@ -593,6 +599,17 @@ int main()
             }
             windowState.scrollDelta = 0.0;
 
+            // Smooth time acceleration: converge in log-space toward target.
+            // Time constant ~0.15 s real time — fast enough to feel responsive,
+            // slow enough to avoid the one-frame orbital skip on t/T presses.
+            {
+                const double logCurr = std::log(simSecondsPerRealSecond);
+                const double logTarg = std::log(simSpeedTarget);
+                const double logNew  = logCurr + (logTarg - logCurr)
+                                       * std::min(1.0, static_cast<double>(frameDt) / 0.15);
+                simSecondsPerRealSecond = std::exp(logNew);
+            }
+
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
@@ -604,7 +621,7 @@ int main()
 
                 glm::dvec3 shipForce(0.0), shipTorque(0.0);
 
-                if (viewMode == ViewMode::Nav && simSecondsPerRealSecond <= 1.0
+                if (viewMode == ViewMode::Nav && simSpeedTarget <= 1.0
                     && !ImGui::GetIO().WantCaptureKeyboard) {
                     // Translation: x=fwd, y=port, z=up
                     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) shipForce.x += kThrust;  // fwd
@@ -628,16 +645,14 @@ int main()
             }
 
             // ---- Fixed-step spacecraft physics (simulation time) ----
-            // The accumulator runs in simulation seconds so the orbit scales with time
-            // acceleration.  At high time accel the step size grows to keep the per-frame
-            // step count ≤ kMaxStepsPerFrame; accuracy is still fine for orbital mechanics.
+            // Accumulator runs in sim-seconds so the orbit scales with time acceleration.
+            // Step size grows at high time accel to keep steps/frame ≤ kMaxStepsPerFrame.
+            // No render interpolation: from a first-person bow camera at orbital altitude
+            // one physics step (< 100 m) subtends < 0.001° — completely invisible.
             {
-                constexpr int    kMaxStepsPerFrame = 100;
-                const double     simDt  = static_cast<double>(frameDt) * simSecondsPerRealSecond;
-                const double     step   = std::max(kPhysStep, simDt / kMaxStepsPerFrame);
-
-                for (auto& sc : spacecraft)
-                    sc->saveSnapshot();
+                constexpr int kMaxStepsPerFrame = 100;
+                const double  simDt = static_cast<double>(frameDt) * simSecondsPerRealSecond;
+                const double  step  = std::max(kPhysStep, simDt / kMaxStepsPerFrame);
 
                 physAccum += simDt;
                 while (physAccum >= step) {
@@ -647,7 +662,6 @@ int main()
                     physAccum -= step;
                 }
             }
-            const double renderAlpha = physAccum / kPhysStep;
 
             observerPos = observer.worldPosition(currentEt);
             scene.update(currentEt, observerPos);
@@ -655,6 +669,9 @@ int main()
             // Recenter the floating origin.
             // In Nav view, track the player ship; in Map view, track the selected body.
             if (viewMode == ViewMode::Nav) {
+                // Recenter on the interpolated position — same point the camera sits at.
+                // Using the true physics position would leave a step-size-dependent offset
+                // between camera and origin, causing Earth to jump when time accel changes.
                 scene.origin().recenter(earthWorld + spacecraft[playerIdx]->position());
             } else if (selectedBodyIndex >= 0 && selectedBodyIndex < (int)bodyInfos.size()) {
                 scene.origin().recenter(
@@ -672,9 +689,9 @@ int main()
             if (viewMode == ViewMode::Nav) {
                 auto& ship = *spacecraft[playerIdx];
                 glm::vec3 shipRp = scene.origin().toRenderSpace(
-                    earthWorld + ship.renderPosition(renderAlpha));
+                    earthWorld + ship.position());
 
-                glm::mat3 rot = glm::mat3_cast(glm::fquat(ship.renderAttitude(renderAlpha)));
+                glm::mat3 rot = glm::mat3_cast(glm::fquat(ship.attitude()));
                 glm::vec3 fwd = rot * glm::vec3(1.0f, 0.0f, 0.0f);  // body +X = forward
                 glm::vec3 up  = rot * glm::vec3(0.0f, 0.0f, 1.0f);  // body +Z = up
 
@@ -710,7 +727,7 @@ int main()
 
             ImGui::Text("Simulation");
             ImGui::SliderScalar("Speed (s/s)", ImGuiDataType_Double,
-                                &simSecondsPerRealSecond,
+                                &simSpeedTarget,
                                 (const double[]){1.0}, (const double[]){1e6},
                                 "%.0f", ImGuiSliderFlags_Logarithmic);
 
@@ -810,10 +827,10 @@ int main()
                 ImGui::Begin("##NavClock", nullptr, kOverlayFlags);
                 ImGui::TextColored({1.0f, 0.85f, 0.4f, 1.0f}, "%s UTC",
                                    currentEt.toISOUTCString(0).c_str());
-                if (simSecondsPerRealSecond == 1.0)
+                if (simSpeedTarget == 1.0)
                     ImGui::Text("1x real-time");
                 else
-                    ImGui::Text("%.0fx  [t / T]", simSecondsPerRealSecond);
+                    ImGui::Text("%.0fx  [t / T]", simSpeedTarget);
                 ImGui::End();
 
                 // ---- Bottom-left: flight data ----
@@ -829,6 +846,30 @@ int main()
                 ImGui::Separator();
                 ImGui::TextDisabled("WASD/QE translate   IJKL/UO rotate");
                 ImGui::End();
+
+                // ---- MFD panels at the bottom (centred) ----
+                // Update orbital elements from current ship state.
+                orbitalMFD.update(
+                    astro::PosState(ship.position(), ship.velocity()),
+                    currentEt, kGM_Earth,
+                    static_cast<double>(earthRadius));
+
+                constexpr float kMfdW = 280.0f;
+                constexpr float kMfdH = 220.0f;
+                const float mfdY  = io.DisplaySize.y - 10.0f - kMfdH;
+                const float centreX = io.DisplaySize.x * 0.5f;
+
+                MFDPanel leftPanel;
+                leftPanel.pos  = { centreX - 5.0f - kMfdW, mfdY };
+                leftPanel.size = { kMfdW, kMfdH };
+                leftPanel.app  = &orbitalMFD;
+                leftPanel.render("##MFD0");
+
+                MFDPanel rightPanel;
+                rightPanel.pos  = { centreX + 5.0f, mfdY };
+                rightPanel.size = { kMfdW, kMfdH };
+                rightPanel.app  = &orbitalMFD;
+                rightPanel.render("##MFD1");
             }
 
             // ---- Atmosphere LUT inspector (Map view only) ----
@@ -983,10 +1024,10 @@ int main()
                 constexpr float kShipRadiusKm = 0.01f;  // ~10 m placeholder sphere
 
                 for (auto& sc : spacecraft) {
-                    glm::dvec3 worldPos = earthWorld + sc->renderPosition(renderAlpha);
+                    glm::dvec3 worldPos = earthWorld + sc->position();
                     glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
 
-                    glm::mat4 rot   = glm::mat4(glm::mat3(glm::mat3_cast(glm::fquat(sc->renderAttitude(renderAlpha)))));
+                    glm::mat4 rot   = glm::mat4(glm::mat3(glm::mat3_cast(glm::fquat(sc->attitude()))));
                     glm::mat4 model = glm::translate(glm::mat4(1.0f), rp);
                     model = model * rot;
                     model = glm::scale(model, glm::vec3(kShipRadiusKm));

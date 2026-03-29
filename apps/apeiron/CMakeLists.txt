@@ -32,6 +32,8 @@ add_executable(apeiron
     main.cpp
     ScenarioConfig.cpp
     Spacecraft.cpp
+    MFD.cpp
+    OrbitalMFD.cpp
 )
 
 add_dependencies(apeiron apeiron_shaders)
