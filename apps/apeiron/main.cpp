@@ -587,8 +587,8 @@ int main()
             // Rotation:    IJKL = pitch/yaw, UO = roll.
             // Forces/torques are zeroed each frame; keys set them while held.
             {
-                constexpr double kThrust = 10.0;     // N per axis
-                constexpr double kTorque = 5.0;      // N·m per axis
+                constexpr double kThrust =   400.0;   // N per axis  (~1 Draco thruster)
+                constexpr double kTorque =  1000.0;  // N·m per axis
 
                 glm::dvec3 shipForce(0.0), shipTorque(0.0);
 
@@ -604,8 +604,8 @@ int main()
                     if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.x -= kTorque;
                     if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) shipTorque.y += kTorque;
                     if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) shipTorque.y -= kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.z += kTorque;
-                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) shipTorque.z -= kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.z -= kTorque;
+                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) shipTorque.z += kTorque;
                 }
 
                 spacecraft[playerIdx]->setBodyForce(shipForce);
