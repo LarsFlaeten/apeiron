@@ -609,8 +609,8 @@ int main()
                     if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) shipForce.z -= kThrust;  // down
 
                     // Rotation: pitch=Y, yaw=Z, roll=X  (right-hand rule)
-                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) shipTorque.y -= kTorque;  // pitch up
-                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.y += kTorque;  // pitch down
+                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) shipTorque.y += kTorque;  // pitch down
+                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.y -= kTorque;  // pitch up
                     if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) shipTorque.z += kTorque;  // yaw left
                     if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) shipTorque.z -= kTorque;  // yaw right
                     if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.x -= kTorque;  // roll left
