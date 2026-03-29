@@ -490,30 +490,38 @@ int main()
         // View mode: F1 = Nav (spacecraft chase-cam + RCS), F12 = Dev (orbit camera + dev panel).
         enum class ViewMode { Dev, Nav };
         ViewMode viewMode = ViewMode::Dev;
+        double simSecondsPerRealSecond = 1.0; // adjustable via ImGui or t/T hotkeys
 
         // Window state shared between callbacks.
         struct WindowState {
             apeiron::render::Renderer* renderer;
             double     scrollDelta = 0.0;
             ViewMode*  viewMode    = nullptr;
-        } windowState{&renderer, 0.0, &viewMode};
+            double*    simSpeed    = nullptr;
+        } windowState{&renderer, 0.0, &viewMode, &simSecondsPerRealSecond};
 
         bool isFullscreen = false;
         bool needsResize  = false;
         int  windowedX = 100, windowedY = 100;
 
         glfwSetWindowUserPointer(window, &windowState);
-        glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int) {
+        glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int mods) {
             if (action != GLFW_PRESS) return;
             auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w));
             if (key == GLFW_KEY_ESCAPE)
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
-            else if (key == GLFW_KEY_GRAVE_ACCENT)   // ` toggles wireframe
+            else if (key == GLFW_KEY_GRAVE_ACCENT)
                 s->renderer->setWireframe(!s->renderer->wireframe());
             else if (key == GLFW_KEY_F1)
                 *s->viewMode = ViewMode::Nav;
             else if (key == GLFW_KEY_F12)
                 *s->viewMode = ViewMode::Dev;
+            else if (key == GLFW_KEY_T) {
+                if (mods & GLFW_MOD_SHIFT)
+                    *s->simSpeed = std::max(1.0,   *s->simSpeed / 10.0);  // T = slower
+                else
+                    *s->simSpeed = std::min(1.0e6, *s->simSpeed * 10.0);  // t = faster
+            }
         });
         glfwSetScrollCallback(window, [](GLFWwindow* w, double, double yoff) {
             auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w));
@@ -523,7 +531,6 @@ int main()
         // =================================================================
         // Main loop
         // =================================================================
-        double simSecondsPerRealSecond = 1.0; // adjustable via ImGui
         double simElapsed = 0.0; // accumulated simulation seconds
 
         auto prevFrameTime = std::chrono::steady_clock::now();
@@ -589,17 +596,16 @@ int main()
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
-            // ---- RCS input (active in Nav view) ----
-            // Translation: WASD = body X/Z, QE = body Y.
-            // Rotation:    IJKL = pitch/yaw, UO = roll.
-            // Forces/torques are zeroed each frame; keys set them while held.
+            // ---- RCS input (active in Nav view at 1x only) ----
+            // Controls are disabled at time acceleration > 1x — thrust at 1000x makes no sense.
             {
                 constexpr double kThrust =   400.0;   // N per axis  (~1 Draco thruster)
-                constexpr double kTorque =  1000.0;  // N·m per axis
+                constexpr double kTorque =  1000.0;   // N·m per axis
 
                 glm::dvec3 shipForce(0.0), shipTorque(0.0);
 
-                if (viewMode == ViewMode::Nav && !ImGui::GetIO().WantCaptureKeyboard) {
+                if (viewMode == ViewMode::Nav && simSecondsPerRealSecond <= 1.0
+                    && !ImGui::GetIO().WantCaptureKeyboard) {
                     // Translation: x=fwd, y=port, z=up
                     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) shipForce.x += kThrust;  // fwd
                     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) shipForce.x -= kThrust;  // aft
@@ -621,18 +627,25 @@ int main()
                 spacecraft[playerIdx]->setBodyTorque(shipTorque);
             }
 
-            // ---- Fixed-step spacecraft physics ----
-            // Runs at wall-clock time (not simulation speed) so controls feel right.
-            // Cap accumulator to 5 steps max to avoid spiral-of-death on slow frames.
-            // Snapshot taken before the loop; alpha used by renderer to interpolate.
-            for (auto& sc : spacecraft)
-                sc->saveSnapshot();
-            physAccum = std::min(physAccum + static_cast<double>(frameDt), kPhysStep * 5.0);
-            while (physAccum >= kPhysStep) {
+            // ---- Fixed-step spacecraft physics (simulation time) ----
+            // The accumulator runs in simulation seconds so the orbit scales with time
+            // acceleration.  At high time accel the step size grows to keep the per-frame
+            // step count ≤ kMaxStepsPerFrame; accuracy is still fine for orbital mechanics.
+            {
+                constexpr int    kMaxStepsPerFrame = 100;
+                const double     simDt  = static_cast<double>(frameDt) * simSecondsPerRealSecond;
+                const double     step   = std::max(kPhysStep, simDt / kMaxStepsPerFrame);
+
                 for (auto& sc : spacecraft)
-                    if (!sc->parentId())
-                        sc->update(kPhysStep, currentEt);
-                physAccum -= kPhysStep;
+                    sc->saveSnapshot();
+
+                physAccum += simDt;
+                while (physAccum >= step) {
+                    for (auto& sc : spacecraft)
+                        if (!sc->parentId())
+                            sc->update(step, currentEt);
+                    physAccum -= step;
+                }
             }
             const double renderAlpha = physAccum / kPhysStep;
 
@@ -783,21 +796,34 @@ int main()
                 auto& ship = *spacecraft[playerIdx];
                 ImGuiIO& io = ImGui::GetIO();
 
-                // Frameless overlay pinned to bottom-left.
-                ImGui::SetNextWindowPos(ImVec2(10.0f, io.DisplaySize.y - 10.0f),
-                                        ImGuiCond_Always, ImVec2(0.0f, 1.0f));
-                ImGui::SetNextWindowBgAlpha(0.55f);
-                ImGui::Begin("##NavHUD", nullptr,
+                constexpr auto kOverlayFlags =
                     ImGuiWindowFlags_NoDecoration    |
                     ImGuiWindowFlags_NoInputs        |
                     ImGuiWindowFlags_AlwaysAutoResize|
                     ImGuiWindowFlags_NoSavedSettings |
-                    ImGuiWindowFlags_NoFocusOnAppearing);
+                    ImGuiWindowFlags_NoFocusOnAppearing;
 
+                // ---- Top-right: mission clock + time acceleration ----
+                ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 10.0f, 10.0f),
+                                        ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+                ImGui::SetNextWindowBgAlpha(0.55f);
+                ImGui::Begin("##NavClock", nullptr, kOverlayFlags);
+                ImGui::TextColored({1.0f, 0.85f, 0.4f, 1.0f}, "%s UTC",
+                                   currentEt.toISOUTCString(0).c_str());
+                if (simSecondsPerRealSecond == 1.0)
+                    ImGui::Text("1x real-time");
+                else
+                    ImGui::Text("%.0fx  [t / T]", simSecondsPerRealSecond);
+                ImGui::End();
+
+                // ---- Bottom-left: flight data ----
+                ImGui::SetNextWindowPos(ImVec2(10.0f, io.DisplaySize.y - 10.0f),
+                                        ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+                ImGui::SetNextWindowBgAlpha(0.55f);
+                ImGui::Begin("##NavHUD", nullptr, kOverlayFlags);
                 ImGui::TextColored({0.4f, 1.0f, 0.4f, 1.0f}, "NAV  [F12 = Dev]");
                 ImGui::Text("Alt  %8.1f km", ship.altitudeKm(static_cast<double>(earthRadius)));
                 ImGui::Text("Vel  %8.3f km/s", glm::length(ship.velocity()));
-
                 glm::dvec3 w = ship.angularVelocity();
                 ImGui::Text("Rate %+.3f %+.3f %+.3f rad/s", w.x, w.y, w.z);
                 ImGui::Separator();
