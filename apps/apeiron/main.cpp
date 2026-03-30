@@ -304,6 +304,29 @@ int main()
         OrbitalMFD orbitalMFD;
         orbitalMFD.setContext("EARTH", "ECLIPJ2000");
 
+        // Frame options: ECLIPJ2000 (identity) and J2000 (equatorial).
+        // pxform_c is constant for inertial frames; et=0 is fine.
+        {
+            SpiceDouble m[3][3];
+            pxform_c("ECLIPJ2000", "J2000", 0.0, m);
+            glm::dmat3 eclToJ2000;
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c)
+                    eclToJ2000[c][r] = m[r][c];
+            orbitalMFD.setFrames({{"ECLIPJ2000", glm::dmat3(1.0)},
+                                   {"J2000",      eclToJ2000}});
+        }
+
+        // Reference body for the OrbitalMFD — updated when the user types a new NAIF name.
+        struct RefBody {
+            std::string name;
+            double      mu;        // km³/s²
+            double      radiusKm;  // equatorial
+            SpiceInt    naifId;    // NAIF body id
+        };
+        RefBody refBody{ "EARTH", kGM_Earth,
+                         static_cast<double>(earthRadius), 399 };
+
         // Thruster parameters — adjustable from the Dev view.
         double mainEngineThrust = 22'000.0;   // N  (SPACE)
         double rcsThrust        =    400.0;   // N  (WASD/QE)
@@ -882,10 +905,40 @@ int main()
                 ImGui::End();
 
                 // ---- MFD panels — flush to screen left/right edges ----
-                orbitalMFD.update(
-                    astro::PosState(ship.position(), ship.velocity()),
-                    currentEt, kGM_Earth,
-                    static_cast<double>(earthRadius));
+
+                // Check if the user changed the reference body.
+                {
+                    std::string pending = orbitalMFD.consumePendingRef();
+                    if (!pending.empty()) {
+                        SpiceInt    id;  SpiceBoolean found;
+                        bodn2c_c(pending.c_str(), &id, &found);
+                        if (found) {
+                            SpiceInt    n;
+                            SpiceDouble muArr[1], radii[3];
+                            bodvrd_c(pending.c_str(), "GM",    1, &n, muArr);
+                            bodvrd_c(pending.c_str(), "RADII", 3, &n, radii);
+                            refBody = { pending, muArr[0], radii[0], id };
+                            orbitalMFD.setContext(refBody.name.c_str(), "");
+                        }
+                        // If not found, silently ignore (body stays unchanged).
+                    }
+                }
+
+                // Compute spacecraft state relative to the reference body.
+                astro::PosState shipRelRef(ship.position(), ship.velocity());
+                if (refBody.naifId != 399) {  // 399 = Earth (already the origin)
+                    SpiceDouble refState[6], lt;
+                    spkgeo_c(refBody.naifId,
+                             currentEt.getETValue(),
+                             "ECLIPJ2000", 399,
+                             refState, &lt);
+                    shipRelRef = astro::PosState(
+                        ship.position() - glm::dvec3(refState[0], refState[1], refState[2]),
+                        ship.velocity() - glm::dvec3(refState[3], refState[4], refState[5]));
+                }
+
+                orbitalMFD.update(shipRelRef, currentEt,
+                                  refBody.mu, refBody.radiusKm);
 
                 // Each MFD occupies 1/3 of screen width; height derived from 16:9.
                 const float kMfdW = std::round(W / 3.0f);

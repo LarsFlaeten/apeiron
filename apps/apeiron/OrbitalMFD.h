@@ -6,6 +6,15 @@
 #include "astro/Time.h"
 #include "astro/OrbitElements.h"   // only for meanAnomalyFromTrueAnomaly
 
+#include <glm/glm.hpp>
+#include <string>
+#include <vector>
+
+struct MFDFrame {
+    const char* name;   // display name, e.g. "ECLIPJ2000"
+    glm::dmat3  rot;    // rotation: ECLIPJ2000 vectors → this frame
+};
+
 // ---------------------------------------------------------------------------
 // OrbitalMFD
 //
@@ -24,6 +33,14 @@ public:
 
     void setContext(const char* refName, const char* frameName);
 
+    // Provide the list of frames the FRM button cycles through.
+    // The first entry is shown on start-up; identity rot = ECLIPJ2000.
+    void setFrames(std::vector<MFDFrame> frames);
+
+    // Called by main.cpp each frame; returns the new body name the user typed,
+    // or an empty string when there is no pending request.
+    std::string consumePendingRef();
+
     // Recompute every frame.
     //   mu           — GM of the reference body (km³/s²)
     //   bodyRadiusKm — equatorial radius for altitude conversion
@@ -34,11 +51,23 @@ public:
 
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
+    const char* leftLabel(int slot) const override;
+    void        onLeft   (int slot) override;
+
 private:
     void renderDiagram(ImDrawList* dl, ImVec2 diagOrigin, float diagSize) const;
 
     const char* m_refName   = "EARTH";
-    const char* m_frameName = "ECLIPJ2000";
+    const char* m_frameName = "ECLIPJ2000";  // fallback when m_frames is empty
+
+    // REF input overlay (slot 0)
+    bool        m_refInputActive = false;
+    char        m_refInputBuf[32]{};
+    std::string m_pendingRef;
+
+    // FRM cycling (slot 1)
+    std::vector<MFDFrame> m_frames;
+    int                   m_frameIdx = 0;
 
     // --- updated every frame ---
     double m_altKm        = 0.0;

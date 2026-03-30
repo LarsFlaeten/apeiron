@@ -25,7 +25,7 @@ static const ImU32 kColShip     = IM_COL32(220, 200,   0, 255);
 static const ImU32 kColMark     = IM_COL32(  0, 180,  60, 160);
 static const ImU32 kColApseLine = IM_COL32(  0, 140,  50,  80);
 static const ImU32 kColAsymptote= IM_COL32(180, 100,   0,  90);
-static const ImU32 kColDiagBg   = IM_COL32(  0,  15,   5,  80);
+static const ImU32 kColDiagBg   = IM_COL32(  0,   0,   0,   0);  // fully transparent
 static const ImU32 kColEscape   = IM_COL32(220, 120,   0, 220);
 
 // Format a duration in seconds as [H:]MM:SS
@@ -50,6 +50,43 @@ void OrbitalMFD::setContext(const char* refName, const char* frameName)
 }
 
 // ---------------------------------------------------------------------------
+void OrbitalMFD::setFrames(std::vector<MFDFrame> frames)
+{
+    m_frames   = std::move(frames);
+    m_frameIdx = 0;
+}
+
+// ---------------------------------------------------------------------------
+std::string OrbitalMFD::consumePendingRef()
+{
+    std::string out;
+    std::swap(out, m_pendingRef);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+const char* OrbitalMFD::leftLabel(int slot) const
+{
+    if (slot == 0) return "REF";
+    if (slot == 1) return "FRM";
+    return "";
+}
+
+// ---------------------------------------------------------------------------
+void OrbitalMFD::onLeft(int slot)
+{
+    if (slot == 0) {
+        m_refInputActive = !m_refInputActive;
+        if (m_refInputActive)
+            m_refInputBuf[0] = '\0';
+    } else if (slot == 1) {
+        if (!m_frames.empty()) {
+            m_frameIdx = (m_frameIdx + 1) % static_cast<int>(m_frames.size());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // All orbital elements computed directly from r, v — no Kepler solver needed.
 // This is safe for every eccentricity value.
 void OrbitalMFD::update(const astro::PosState&     state,
@@ -59,19 +96,25 @@ void OrbitalMFD::update(const astro::PosState&     state,
 {
     m_bodyRadiusKm = bodyRadiusKm;
 
-    const double r   = glm::length(state.r);
-    const double v2  = glm::dot(state.v, state.v);
-    const double rv  = glm::dot(state.r, state.v);
+    // Apply frame rotation so elements are measured in the selected frame.
+    const astro::PosState& s = (!m_frames.empty())
+        ? astro::PosState(m_frames[m_frameIdx].rot * state.r,
+                          m_frames[m_frameIdx].rot * state.v)
+        : state;
+
+    const double r   = glm::length(s.r);
+    const double v2  = glm::dot(s.v, s.v);
+    const double rv  = glm::dot(s.r, s.v);
 
     // Specific orbital energy (negative = bound, positive = escape).
     const double energy = 0.5 * v2 - mu / r;
 
     // Angular momentum vector and magnitude.
-    const glm::dvec3 hVec = glm::cross(state.r, state.v);
+    const glm::dvec3 hVec = glm::cross(s.r, s.v);
     const double     h    = glm::length(hVec);
 
     // Eccentricity vector (points toward periapsis).
-    const glm::dvec3 eVec = ((v2 - mu / r) * state.r - rv * state.v) / mu;
+    const glm::dvec3 eVec = ((v2 - mu / r) * s.r - rv * s.v) / mu;
     const double     e    = glm::length(eVec);
 
     // Semi-major axis: negative for hyperbolic, huge for near-parabolic.
@@ -107,7 +150,7 @@ void OrbitalMFD::update(const astro::PosState&     state,
     double nu       = 0.0;
     bool   trueValid = false;
     if (e > kMinEcc) {
-        double cosNu = std::clamp(glm::dot(eVec / e, state.r / r), -1.0, 1.0);
+        double cosNu = std::clamp(glm::dot(eVec / e, s.r / r), -1.0, 1.0);
         nu = std::acos(cosNu);
         if (rv < 0.0) nu = -nu;   // approaching periapsis → negative angle
         trueValid = std::isfinite(nu);
@@ -302,15 +345,38 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         renderDiagram(dl, { origin.x + size.x - diagSize, origin.y }, diagSize);
     }
 
+    // ---- REF input overlay (drawn first so other text appears on top) ----
+    if (m_refInputActive) {
+        ImGui::SetCursorScreenPos({ origin.x + pad, origin.y + pad });
+        ImGui::SetNextItemWidth(size.x * 0.5f - pad * 2.0f);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,     IM_COL32( 0, 40, 15, 200));
+        ImGui::PushStyleColor(ImGuiCol_Text,         IM_COL32( 0,210, 75, 255));
+        ImGui::PushStyleColor(ImGuiCol_Border,       IM_COL32( 0,210, 75, 180));
+        bool entered = ImGui::InputText("##refInput", m_refInputBuf,
+                                        sizeof(m_refInputBuf),
+                                        ImGuiInputTextFlags_EnterReturnsTrue |
+                                        ImGuiInputTextFlags_AutoSelectAll);
+        ImGui::PopStyleColor(3);
+        ImGui::SetKeyboardFocusHere(-1);  // keep focus
+        if (entered && m_refInputBuf[0] != '\0') {
+            m_pendingRef     = m_refInputBuf;
+            m_refInputActive = false;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+            m_refInputActive = false;
+    }
+
     // ---- Header ----
     {
+        const char* frameName = (!m_frames.empty())
+            ? m_frames[m_frameIdx].name : m_frameName;
         char buf[80];
         if (m_isHyperbolic)
             std::snprintf(buf, sizeof(buf), "%s  \xe2\x80\xa2  %s  \xe2\x80\xa2  HYP",
-                          m_refName, m_frameName);
+                          m_refName, frameName);
         else
             std::snprintf(buf, sizeof(buf), "%s  \xe2\x80\xa2  %s",
-                          m_refName, m_frameName);
+                          m_refName, frameName);
         ImU32 hdrCol = m_isHyperbolic ? kColEscape : kColDim;
         dl->AddText({ origin.x + pad, origin.y + 2.0f }, hdrCol, buf);
     }
@@ -318,65 +384,58 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     dl->AddLine({ origin.x,          origin.y + headerH },
                 { origin.x + size.x, origin.y + headerH }, kColDivider, 0.5f);
 
-    // ---- Two-column data rows ----
-    const float colW = size.x * 0.5f;
-    float       dy   = origin.y + headerH + pad;
+    // ---- Single-column data rows, left side ----
+    // Text occupies the left half of the content area; diagram shows through on the right.
+    const float textW = size.x * 0.5f;
+    float       dy    = origin.y + headerH + pad;
 
-    auto cell = [&](float colX, const char* label, const char* fmt, double val,
-                    const char* unit = "") {
-        dl->AddText({ colX + pad, dy }, kColGreen, label);
+    // Draw one row: label left-aligned, value right-aligned within the text column.
+    auto row = [&](const char* label, const char* fmt, double val,
+                   const char* unit = "", ImU32 col = 0) {
+        if (col == 0) col = kColGreen;
+        dl->AddText({ origin.x + pad, dy }, col, label);
         char buf[48];
         std::snprintf(buf, sizeof(buf), fmt, val);
         std::strncat(buf, unit, sizeof(buf) - std::strlen(buf) - 1);
         ImVec2 tsz = ImGui::CalcTextSize(buf);
-        dl->AddText({ colX + colW - tsz.x - pad, dy }, kColGreen, buf);
+        dl->AddText({ origin.x + textW - tsz.x - pad, dy }, col, buf);
+        dy += lineH;
     };
 
-    auto cellStr = [&](float colX, const char* label, const char* value,
-                       ImU32 col = 0) {
+    auto rowStr = [&](const char* label, const char* value, ImU32 col = 0) {
         if (col == 0) col = kColGreen;
-        dl->AddText({ colX + pad, dy }, col, label);
+        dl->AddText({ origin.x + pad, dy }, col, label);
         ImVec2 tsz = ImGui::CalcTextSize(value);
-        dl->AddText({ colX + colW - tsz.x - pad, dy }, col, value);
+        dl->AddText({ origin.x + textW - tsz.x - pad, dy }, col, value);
+        dy += lineH;
     };
 
     char tApBuf[16], tPeBuf[16];
     fmtTime(m_tToApoSec, tApBuf, sizeof(tApBuf));
     fmtTime(m_tToPerSec, tPeBuf, sizeof(tPeBuf));
 
-    // Row 1: Alt / Vel
-    cell(origin.x,        "Alt",  "%.1f",  m_altKm,    " km");
-    cell(origin.x + colW, "Vel",  "%.3f",  m_velKms,   " km/s");   dy += lineH;
-
-    // Row 2: Apo / Per
+    row   ("Alt",   "%.1f",   m_altKm,     " km");
+    row   ("Vel",   "%.3f",   m_velKms,    " km/s");
     if (m_apoAltKm >= 0.0)
-        cell   (origin.x, "Apo", "%.1f", m_apoAltKm, " km");
+        row("Apo",  "%.1f",   m_apoAltKm,  " km");
     else
-        cellStr(origin.x, "Apo", "\xe2\x88\x9e", kColEscape);       // ∞
-    cell(origin.x + colW, "Per", "%.1f", m_perAltKm, " km");        dy += lineH;
+        rowStr("Apo", "\xe2\x88\x9e", kColEscape);          // ∞
+    row   ("Per",   "%.1f",   m_perAltKm,  " km");
 
-    // Row 3: t-AP / t-PE  (hidden for hyperbolic)
     if (!m_isHyperbolic) {
-        cellStr(origin.x,        "t-AP", tApBuf);
-        cellStr(origin.x + colW, "t-PE", tPeBuf);                   dy += lineH;
+        rowStr("t-AP", tApBuf);
+        rowStr("t-PE", tPeBuf);
     } else {
-        // Show v∞ instead
-        cell   (origin.x,        "v\xe2\x88\x9e", "%.3f", m_hypVinfKms, " km/s");
-        dy += lineH;
+        row("v\xe2\x88\x9e", "%.3f", m_hypVinfKms, " km/s", kColEscape);
     }
 
-    // Row 4: Inc / RAAN
-    cell(origin.x,        "Inc",  "%.2f\xc2\xb0", m_incDeg);
-    cell(origin.x + colW, "RAAN", "%.2f\xc2\xb0", m_raanDeg);      dy += lineH;
-
-    // Row 5: Ecc / ArgPe
-    cell(origin.x,        "Ecc",  "%.5f",          m_eccen);
-    cell(origin.x + colW, "ArgPe","%.2f\xc2\xb0",  m_argpeDeg);    dy += lineH;
-
-    // Row 6: h / T (period only when bound)
-    cell(origin.x, "h", "%.0f", m_angMomKm2s, " km\xc2\xb2/s");
+    row   ("Inc",   "%.2f\xc2\xb0", m_incDeg);
+    row   ("RAAN",  "%.2f\xc2\xb0", m_raanDeg);
+    row   ("Ecc",   "%.5f",   m_eccen);
+    row   ("ArgPe", "%.2f\xc2\xb0", m_argpeDeg);
+    row   ("h",     "%.0f",   m_angMomKm2s, " km\xc2\xb2/s");
     if (m_periodMin > 0.0)
-        cell(origin.x + colW, "T", "%.2f", m_periodMin, " min");
+        row("T",    "%.2f",   m_periodMin,  " min");
     else
-        cellStr(origin.x + colW, "T", "---");
+        rowStr("T", "---");
 }
