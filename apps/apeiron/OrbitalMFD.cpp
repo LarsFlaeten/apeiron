@@ -1,6 +1,7 @@
 #include "OrbitalMFD.h"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <numbers>
 #include <cmath>
 #include <cstdio>
@@ -81,7 +82,8 @@ void OrbitalMFD::onLeft(int slot)
             m_refInputBuf[0] = '\0';
     } else if (slot == 1) {
         if (!m_frames.empty()) {
-            m_frameIdx = (m_frameIdx + 1) % static_cast<int>(m_frames.size());
+            m_frameIdx    = (m_frameIdx + 1) % static_cast<int>(m_frames.size());
+            m_diagViewRot = glm::dmat3(1.0);  // reset to top-down view in new frame
         }
     }
 }
@@ -200,135 +202,217 @@ void OrbitalMFD::update(const astro::PosState&     state,
     // Freeze diagram scale for high-e / hyperbolic.
     if (e < kFreezeEcc && a > 0.0)
         m_frozenSmaKm = a;
+
+    // --- 3D orbit geometry in the current frame ---
+    // Always computed so the diagram can draw even circular orbits.
+    if (h > 1.0e-10) {
+        m_normDir3D = glm::normalize(hVec);
+        if (e > kMinEcc) {
+            m_periDir3D = glm::normalize(eVec);
+        } else {
+            // Circular: use current position as a stable reference direction.
+            glm::dvec3 rHat = (r > 1.0e-6) ? (s.r / r) : glm::dvec3(1.0, 0.0, 0.0);
+            // Project out the normal component so periDir lies in the orbit plane.
+            rHat -= glm::dot(rHat, m_normDir3D) * m_normDir3D;
+            m_periDir3D = (glm::length(rHat) > 1.0e-6)
+                ? glm::normalize(rHat)
+                : glm::normalize(glm::cross(m_normDir3D, glm::dvec3(0.0, 0.0, 1.0)));
+        }
+        m_qDir3D = glm::normalize(glm::cross(m_normDir3D, m_periDir3D));
+    } else {
+        m_periDir3D = {1.0, 0.0, 0.0};
+        m_normDir3D = {0.0, 0.0, 1.0};
+        m_qDir3D    = {0.0, 1.0, 0.0};
+    }
+    // Current spacecraft direction (used for ship dot on circular orbits).
+    m_shipDir3D = (r > 1.0e-6) ? glm::normalize(s.r) : m_periDir3D;
 }
 
 // ---------------------------------------------------------------------------
-void OrbitalMFD::renderDiagram(ImDrawList* dl,
-                                ImVec2      diagOrigin,
-                                float       diagSize) const
+// 3D orbit diagram.
+//
+// The central body sits at screen centre.  m_diagViewRot maps frame-space
+// vectors to "view space": view.x → screen right, view.y → screen up,
+// view.z → toward viewer.  Default (identity) = looking down the frame +Z
+// axis, so the reference plane (ecliptic / equatorial) fills the screen.
+//
+// Right-drag to rotate; double-right-click to reset.
+// ---------------------------------------------------------------------------
+void OrbitalMFD::renderDiagram(ImDrawList* dl, ImVec2 diagOrigin, float diagSize)
 {
-    const double e    = m_eccen;
+    const double e     = m_eccen;
     const bool   isHyp = m_isHyperbolic;
+    const float  pad   = 8.0f;
+    const float  usable = diagSize - 2.0f * pad;
+    if (usable <= 0.0f) return;
 
-    const float pad    = 10.0f;
-    const float usable = diagSize - 2.0f * pad;
+    const float cx = diagOrigin.x + diagSize * 0.5f;
+    const float cy = diagOrigin.y + diagSize * 0.5f;
 
-    // Background.
-    dl->AddRectFilled(diagOrigin,
-                      { diagOrigin.x + diagSize, diagOrigin.y + diagSize },
-                      kColDiagBg, 3.0f);
-
-    // Scale reference: frozen SMA for high-e, current SMA otherwise.
+    // ---- Scale ----------------------------------------------------------------
+    // Use frozen SMA at high eccentricity to prevent runaway zoom.
     const double refA = (e >= kFreezeEcc && m_frozenSmaKm > 0.0)
-                        ? m_frozenSmaKm : m_smaKm;
-    if (refA <= 0.0 || usable <= 0.0) return;
+                        ? m_frozenSmaKm : std::abs(m_smaKm);
+    if (refA <= 0.0) return;
 
-    // sc (pixels per km): fit full ellipse or frozen extent.
-    const double b_ref = (e < 1.0) ? refA * std::sqrt(std::max(0.0, 1.0 - e * e))
-                                     : refA;  // for hyperbolic, just use a as reference
-    const float sc = static_cast<float>(
-        std::min((usable * 0.5) / refA, (usable * 0.5) / b_ref));
+    // Maximum extent from the focus (central body) that must fit in 45% of usable.
+    const double apoKm = isHyp
+        ? (m_frozenSmaKm > 0.0 ? m_frozenSmaKm * 2.0 : std::abs(m_smaKm) * 2.0)
+        : refA * (1.0 + std::min(e, kFreezeEcc));
+    const float sc = static_cast<float>((usable * 0.45) / apoKm);
 
-    if (isHyp) {
-        // ---- Hyperbolic: focus-centred diagram --------------------------------
-        const float cx = diagOrigin.x + diagSize * 0.5f;
-        const float cy = diagOrigin.y + diagSize * 0.5f;
-
-        const double a_abs = std::abs(m_smaKm);
-        const double p     = a_abs * (e * e - 1.0);  // semi-latus rectum
-        const double nu_inf = std::acos(-1.0 / e);   // asymptote angle
-
-        // Asymptote lines (dim orange).
-        {
-            float extent = diagSize * 0.7f;
-            float ax = static_cast<float>(std::cos(nu_inf));
-            float ay = static_cast<float>(std::sin(nu_inf));
-            dl->AddLine({ cx, cy }, { cx + ax * extent, cy - ay * extent }, kColAsymptote, 0.8f);
-            dl->AddLine({ cx, cy }, { cx + ax * extent, cy + ay * extent }, kColAsymptote, 0.8f);
+    // ---- Mouse rotation -------------------------------------------------------
+    {
+        const ImVec2 diagBR = { diagOrigin.x + diagSize, diagOrigin.y + diagSize };
+        if (ImGui::IsMouseHoveringRect(diagOrigin, diagBR)) {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+                const ImVec2 d = ImGui::GetIO().MouseDelta;
+                const double dx = d.x * 0.006;
+                const double dy = d.y * 0.006;
+                if (dx != 0.0 || dy != 0.0) {
+                    const glm::dmat3 Rx(glm::rotate(glm::dmat4(1.0), dy, {1.0, 0.0, 0.0}));
+                    const glm::dmat3 Ry(glm::rotate(glm::dmat4(1.0), dx, {0.0, 1.0, 0.0}));
+                    m_diagViewRot = Rx * Ry * m_diagViewRot;
+                }
+            }
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right))
+                m_diagViewRot = glm::dmat3(1.0);
         }
+    }
 
-        // Hyperbola near branch.
+    // ---- Helpers --------------------------------------------------------------
+    // Project a 3D frame-space position to screen coords.
+    auto proj = [&](const glm::dvec3& p) -> ImVec2 {
+        const glm::dvec3 v = m_diagViewRot * p;
+        return { cx + static_cast<float>(v.x * sc),
+                 cy - static_cast<float>(v.y * sc) };
+    };
+    // View-space Z of a frame-space point (positive = facing viewer).
+    auto viewZ = [&](const glm::dvec3& p) -> double {
+        return (m_diagViewRot * p).z;
+    };
+    // Semi-latus rectum.
+    const double slr = isHyp
+        ? std::abs(m_smaKm) * (e * e - 1.0)
+        : m_smaKm           * (1.0 - e * e);
+
+    // ---- Reference-plane ring (frame XY plane, very dim) ----------------------
+    {
+        constexpr int kRSeg = 64;
+        const double  rr    = apoKm * 0.80;
+        ImVec2 pts[kRSeg + 1];
+        for (int i = 0; i <= kRSeg; ++i) {
+            const double t = kTwoPi * i / kRSeg;
+            pts[i] = proj({ rr * std::cos(t), rr * std::sin(t), 0.0 });
+        }
+        dl->AddPolyline(pts, kRSeg + 1, IM_COL32(0, 70, 25, 45), ImDrawFlags_None, 0.5f);
+    }
+
+    // ---- Orbit curve ----------------------------------------------------------
+    {
         constexpr int kSeg = 120;
-        const double  nu0  = -(nu_inf - 0.04);
+        double nu0, nu1;
+        if (isHyp) {
+            const double nuInf = std::acos(-1.0 / e);
+            nu0 = -(nuInf - 0.04);
+            nu1 =  (nuInf - 0.04);
+        } else {
+            nu0 = 0.0;
+            nu1 = kTwoPi;
+        }
         ImVec2 pts[kSeg + 1];
         for (int i = 0; i <= kSeg; ++i) {
-            double nu = nu0 + (nu_inf - 0.04) * 2.0 * i / kSeg;
-            double r  = p / (1.0 + e * std::cos(nu));
-            pts[i] = { cx + static_cast<float>(r * std::cos(nu)) * sc,
-                       cy - static_cast<float>(r * std::sin(nu)) * sc };
+            const double nu = nu0 + (nu1 - nu0) * i / kSeg;
+            const double r  = slr / (1.0 + e * std::cos(nu));
+            pts[i] = proj(r * (std::cos(nu) * m_periDir3D + std::sin(nu) * m_qDir3D));
         }
-        dl->AddPolyline(pts, kSeg + 1, kColOrbit, ImDrawFlags_None, 1.0f);
+        dl->AddPolyline(pts, kSeg + 1, kColOrbit, ImDrawFlags_None, 1.2f);
+    }
 
-        // Periapsis marker.
-        {
-            double rp = p / (1.0 + e);
-            dl->AddCircle({ cx + static_cast<float>(rp) * sc, cy }, 3.0f, kColMark, 0, 1.5f);
+    // ---- Asymptote lines (hyperbolic only) ------------------------------------
+    if (isHyp) {
+        const double nuInf = std::acos(-1.0 / e);
+        const float  ext   = diagSize * 0.65f;
+        for (int sign : {+1, -1}) {
+            const glm::dvec3 dir3D = std::cos(nuInf) * m_periDir3D
+                                   + sign * std::sin(nuInf) * m_qDir3D;
+            const ImVec2 p0 = { cx, cy };
+            const ImVec2 p1 = proj(dir3D * apoKm * 1.5);
+            const float  dx = p1.x - p0.x;
+            const float  dy = p1.y - p0.y;
+            const float  len = std::sqrt(dx * dx + dy * dy);
+            if (len > 0.5f)
+                dl->AddLine(p0, { cx + dx / len * ext, cy + dy / len * ext },
+                            kColAsymptote, 0.8f);
         }
+    }
 
-        // Central body.
-        float bodyR = std::min(static_cast<float>(m_bodyRadiusKm) * sc, diagSize * 0.42f);
-        bodyR = std::max(bodyR, 4.0f);
-        dl->AddCircleFilled({ cx, cy }, bodyR, kColBody);
-        dl->AddCircle      ({ cx, cy }, bodyR, kColBodyRim, 0, 1.0f);
-
-        // Ship position on trajectory.
-        if (m_trueValid && std::abs(m_trueDeg * kDeg2Rad) < nu_inf - 0.02) {
-            double nu_ship = m_trueDeg * kDeg2Rad;
-            double r_ship  = p / (1.0 + e * std::cos(nu_ship));
-            float  sx = cx + static_cast<float>(r_ship * std::cos(nu_ship)) * sc;
-            float  sy = cy - static_cast<float>(r_ship * std::sin(nu_ship)) * sc;
-            dl->AddLine({ cx, cy }, { sx, sy }, kColShip, 1.0f);
-            dl->AddCircleFilled({ sx, sy }, 4.0f, kColShip);
+    // ---- Apse line + markers --------------------------------------------------
+    if (e > 0.005) {
+        const double rp3d = slr / (1.0 + e);
+        const ImVec2 periPt = proj( rp3d * m_periDir3D);
+        const ImVec2 focus  = { cx, cy };
+        if (!isHyp) {
+            const double ra3d  = slr / (1.0 - e);
+            const ImVec2 apoPt = proj(-ra3d * m_periDir3D);
+            dl->AddLine(periPt, apoPt, kColApseLine, 0.5f);
+            dl->AddCircle(apoPt, 2.5f, kColMark, 0, 1.0f);
+        } else {
+            dl->AddLine(focus, periPt, kColApseLine, 0.5f);
         }
+        dl->AddCircle(periPt, 3.0f, kColMark, 0, 1.5f);
+    }
 
-    } else {
-        // ---- Elliptic: ellipse-centred diagram --------------------------------
-        const double a = refA;
-        const double b = a * std::sqrt(std::max(0.0, 1.0 - e * e));
+    // ---- Central body as wireframe sphere -------------------------------------
+    {
+        // Ensure the sphere is visible even when bodyRadius < scale limit.
+        const double bR = std::max(m_bodyRadiusKm,
+                                   apoKm * 0.035);  // at least 3.5% of scale
+        const ImU32 cFront = kColBodyRim;
+        const ImU32 cBack  = IM_COL32(30, 80, 180, 50);
 
-        // Ellipse centre at diagram centre.
-        const float cx = diagOrigin.x + diagSize * 0.5f;
-        const float cy = diagOrigin.y + diagSize * 0.5f;
-
-        // Orbit ellipse.
-        {
-            const float sa = static_cast<float>(a) * sc;
-            const float sb = static_cast<float>(b) * sc;
-            constexpr int kSeg = 128;
-            ImVec2 pts[kSeg + 1];
-            for (int i = 0; i <= kSeg; ++i) {
-                float t = static_cast<float>(kTwoPi) * i / kSeg;
-                pts[i] = { cx + sa * std::cos(t), cy - sb * std::sin(t) };
+        // Draw 3 orthogonal great circles as per-segment lines so back-facing
+        // halves can be rendered dimmer.
+        struct Axes { glm::dvec3 a, b; };
+        const Axes circles[3] = {
+            { {1,0,0}, {0,1,0} },  // equatorial
+            { {1,0,0}, {0,0,1} },  // prime meridian
+            { {0,1,0}, {0,0,1} },  // 90-degree meridian
+        };
+        constexpr int kBSeg = 36;
+        for (const auto& c : circles) {
+            for (int i = 0; i < kBSeg; ++i) {
+                const double t0 = kTwoPi * i       / kBSeg;
+                const double t1 = kTwoPi * (i + 1) / kBSeg;
+                const glm::dvec3 p0 = bR * (std::cos(t0) * c.a + std::sin(t0) * c.b);
+                const glm::dvec3 p1 = bR * (std::cos(t1) * c.a + std::sin(t1) * c.b);
+                const bool front = (viewZ(p0) + viewZ(p1)) >= 0.0;
+                dl->AddLine(proj(p0), proj(p1), front ? cFront : cBack, 0.8f);
             }
-            dl->AddPolyline(pts, kSeg + 1, kColOrbit, ImDrawFlags_None, 1.0f);
         }
+        // Solid fill for the body.
+        const float bPx = std::max(static_cast<float>(bR * sc), 3.0f);
+        dl->AddCircleFilled({ cx, cy }, bPx, kColBody);
+    }
 
-        // Apse line + markers.
-        const float periPx = static_cast<float>(a) * sc;
-        if (e > 0.005) {
-            dl->AddLine({ cx - periPx, cy }, { cx + periPx, cy }, kColApseLine, 0.5f);
-            dl->AddCircle({ cx + periPx, cy }, 3.0f, kColMark, 0, 1.5f);  // Pe
-            dl->AddCircle({ cx - periPx, cy }, 2.5f, kColMark, 0, 1.0f);  // Ap
-        }
-
-        // Central body at the right focus.
-        const float focusX = cx + static_cast<float>(a * e) * sc;
-        {
-            float bodyR = std::min(static_cast<float>(m_bodyRadiusKm) * sc,
-                                   diagSize * 0.42f);
-            bodyR = std::max(bodyR, 4.0f);
-            dl->AddCircleFilled({ focusX, cy }, bodyR, kColBody);
-            dl->AddCircle      ({ focusX, cy }, bodyR, kColBodyRim, 0, 1.0f);
-        }
-
-        // True anomaly line and ship dot.
+    // ---- Spacecraft position --------------------------------------------------
+    {
+        const ImVec2 focus = { cx, cy };
         if (m_trueValid) {
-            double nu    = m_trueDeg * kDeg2Rad;
-            double r_orb = a * (1.0 - e * e) / (1.0 + e * std::cos(nu));
-            float  sx = cx + static_cast<float>(r_orb * std::cos(nu) + a * e) * sc;
-            float  sy = cy - static_cast<float>(r_orb * std::sin(nu))         * sc;
-            dl->AddLine({ focusX, cy }, { sx, sy }, kColShip, 1.0f);
-            dl->AddCircleFilled({ sx, sy }, 4.0f, kColShip);
+            const double nu    = m_trueDeg * kDeg2Rad;
+            if (!isHyp || std::abs(nu) < std::acos(-1.0 / e) - 0.02) {
+                const double r_s  = slr / (1.0 + e * std::cos(nu));
+                const ImVec2 shipPt = proj(r_s * (std::cos(nu) * m_periDir3D
+                                                 + std::sin(nu) * m_qDir3D));
+                dl->AddLine(focus, shipPt, kColShip, 1.0f);
+                dl->AddCircleFilled(shipPt, 4.0f, kColShip);
+            }
+        } else {
+            // Circular orbit: use current spacecraft direction.
+            const double rCur = m_altKm + m_bodyRadiusKm;
+            const ImVec2 shipPt = proj(rCur * m_shipDir3D);
+            dl->AddLine(focus, shipPt, kColShip, 1.0f);
+            dl->AddCircleFilled(shipPt, 4.0f, kColShip);
         }
     }
 }

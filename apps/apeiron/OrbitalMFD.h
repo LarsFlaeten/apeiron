@@ -55,7 +55,8 @@ public:
     void        onLeft   (int slot) override;
 
 private:
-    void renderDiagram(ImDrawList* dl, ImVec2 diagOrigin, float diagSize) const;
+    // Non-const: updates m_diagViewRot from mouse input.
+    void renderDiagram(ImDrawList* dl, ImVec2 diagOrigin, float diagSize);
 
     const char* m_refName   = "EARTH";
     const char* m_frameName = "ECLIPJ2000";  // fallback when m_frames is empty
@@ -93,4 +94,19 @@ private:
     // Stores the SMA (km) used for the last "normal" scale computation.
     double m_frozenSmaKm  = 0.0;
     static constexpr double kFreezeEcc = 0.90;
+
+    // --- 3D orbit geometry in the current frame (updated by update()) ---
+    // periDir: unit vector toward periapsis
+    // normDir: unit orbit normal (= h/|h|)
+    // qDir:    unit vector 90° ahead of periapsis in the orbit plane (= normDir × periDir)
+    // shipDir: unit vector from body toward spacecraft (for circular orbits)
+    glm::dvec3 m_periDir3D {1.0, 0.0, 0.0};
+    glm::dvec3 m_normDir3D {0.0, 0.0, 1.0};
+    glm::dvec3 m_qDir3D    {0.0, 1.0, 0.0};
+    glm::dvec3 m_shipDir3D {1.0, 0.0, 0.0};
+
+    // --- Diagram 3D view ---
+    // Identity = looking from frame +Z (top-down on reference plane).
+    // Right-drag rotates; double-right-click resets.
+    glm::dmat3 m_diagViewRot {1.0};
 };
