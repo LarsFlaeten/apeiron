@@ -521,8 +521,8 @@ int main()
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
 
-        // View mode: F1 = Nav (spacecraft chase-cam + RCS), F12 = Dev (orbit camera + dev panel).
-        enum class ViewMode { Dev, Nav };
+        // View mode: F1 = Nav (chase-cam + HUD + RCS), F2 = MFD fullscreen, F12 = Dev.
+        enum class ViewMode { Dev, Nav, MfdFull };
         ViewMode viewMode = ViewMode::Dev;
         double simSpeedTarget          = 1.0; // set instantly by t/T keys
         double simSecondsPerRealSecond = 1.0; // smoothly tracks target (log-space)
@@ -549,6 +549,8 @@ int main()
                 s->renderer->setWireframe(!s->renderer->wireframe());
             else if (key == GLFW_KEY_F1)
                 *s->viewMode = ViewMode::Nav;
+            else if (key == GLFW_KEY_F2)
+                *s->viewMode = ViewMode::MfdFull;
             else if (key == GLFW_KEY_F12)
                 *s->viewMode = ViewMode::Dev;
             else if (key == GLFW_KEY_T) {
@@ -571,6 +573,11 @@ int main()
         auto prevFrameTime = std::chrono::steady_clock::now();
         double prevMouseX{}, prevMouseY{};
         glfwGetCursorPos(window, &prevMouseX, &prevMouseY);
+
+        // For finite-differencing angular and linear rates in the Nav console.
+        glm::dvec3 prevAngVelInertial(0.0);
+        glm::dvec3 prevLinVelKms(0.0);
+        float      prevNavDt = 0.016f;
 
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
@@ -701,7 +708,7 @@ int main()
 
             // Recenter the floating origin.
             // In Nav view, track the player ship; in Map view, track the selected body.
-            if (viewMode == ViewMode::Nav) {
+            if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull) {
                 // Recenter on the interpolated position — same point the camera sits at.
                 // Using the true physics position would leave a step-size-dependent offset
                 // between camera and origin, causing Earth to jump when time accel changes.
@@ -718,8 +725,8 @@ int main()
                     bodyInfos[sunIndex].node->worldPosition());
             }
 
-            // ---- Nav camera: chase-cam rigidly offset from player ship body frame ----
-            if (viewMode == ViewMode::Nav) {
+            // ---- Nav / MfdFull camera: chase-cam rigidly offset from player ship body frame ----
+            if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull) {
                 auto& ship = *spacecraft[playerIdx];
                 glm::vec3 shipRp = scene.origin().toRenderSpace(
                     earthWorld + ship.position());
@@ -875,6 +882,48 @@ int main()
                 ImGui::End();
             }
 
+            // ---- MFD fullscreen view (F2) ----
+            if (viewMode == ViewMode::MfdFull) {
+                auto& ship = *spacecraft[playerIdx];
+                ImGuiIO& io = ImGui::GetIO();
+                const float W = io.DisplaySize.x;
+                const float H = io.DisplaySize.y;
+
+                // Shared ref-body update (same logic as Nav).
+                {
+                    std::string pending = orbitalMFD.consumePendingRef();
+                    if (!pending.empty()) {
+                        SpiceInt    id;  SpiceBoolean found;
+                        bodn2c_c(pending.c_str(), &id, &found);
+                        if (found) {
+                            SpiceInt    n;
+                            SpiceDouble muArr[1], radii[3];
+                            bodvrd_c(pending.c_str(), "GM",    1, &n, muArr);
+                            bodvrd_c(pending.c_str(), "RADII", 3, &n, radii);
+                            refBody = { pending, muArr[0], radii[0], id };
+                            orbitalMFD.setContext(refBody.name.c_str(), "");
+                        }
+                    }
+                }
+
+                astro::PosState shipRelRef(ship.position(), ship.velocity());
+                if (refBody.naifId != 399) {
+                    SpiceDouble refState[6], lt;
+                    spkgeo_c(refBody.naifId, currentEt.getETValue(),
+                             "ECLIPJ2000", 399, refState, &lt);
+                    shipRelRef = astro::PosState(
+                        ship.position() - glm::dvec3(refState[0], refState[1], refState[2]),
+                        ship.velocity() - glm::dvec3(refState[3], refState[4], refState[5]));
+                }
+                orbitalMFD.update(shipRelRef, currentEt, refBody.mu, refBody.radiusKm);
+
+                MFDPanel fullPanel;
+                fullPanel.pos  = { 0.0f, 0.0f };
+                fullPanel.size = { W, H };
+                fullPanel.app  = &orbitalMFD;
+                fullPanel.render("##MFDFull");
+            }
+
             // ---- Nav view HUD ----
             if (viewMode == ViewMode::Nav) {
                 auto& ship = *spacecraft[playerIdx];
@@ -900,8 +949,6 @@ int main()
                     ImGui::Text("1x real-time");
                 else
                     ImGui::Text("%.0fx  [t / T]", simSpeedTarget);
-                if (mainEngineOn)
-                    ImGui::TextColored({1.0f, 0.5f, 0.1f, 1.0f}, "* MAIN ENG *");
                 ImGui::End();
 
                 // ---- MFD panels — flush to screen left/right edges ----
@@ -956,6 +1003,145 @@ int main()
                 rightPanel.size = { kMfdW, kMfdH };
                 rightPanel.app  = &orbitalMFD;
                 rightPanel.render("##MFD1");
+
+                // ---- Nav Console — bottom centre ----
+                {
+                    auto& ship = *spacecraft[playerIdx];
+
+                    // Body-frame angular velocity (convert from inertial via attitude).
+                    glm::dquat  att   = ship.attitude();
+                    glm::dvec3  w_in  = ship.angularVelocity();
+                    glm::dvec3  w_bod = glm::conjugate(att) * w_in;  // inertial → body
+
+                    // Angular acceleration from finite difference.
+                    // frameDt is the real-time frame delta (always > 0).
+                    glm::dvec3 alpha_bod(0.0);
+                    if (prevNavDt > 1e-6f) {
+                        glm::dvec3 prevW_bod = glm::conjugate(att) * prevAngVelInertial;
+                        alpha_bod = (w_bod - prevW_bod) / static_cast<double>(prevNavDt);
+                    }
+
+                    // Linear acceleration in inertial frame (km/s²) → convert to g.
+                    constexpr double kGInKms2 = 9.80665e-3;  // 1 g in km/s²
+                    glm::dvec3 linVel = ship.velocity();
+                    glm::dvec3 linAcc_g(0.0);
+                    if (prevNavDt > 1e-6f)
+                        linAcc_g = (linVel - prevLinVelKms) / (static_cast<double>(prevNavDt) * kGInKms2);
+
+                    // Prograde error: angle between ship nose (+X body in inertial) and velocity.
+                    glm::dvec3 noseInertial = att * glm::dvec3(1.0, 0.0, 0.0);
+                    double vMag = glm::length(linVel);
+                    double progradeErrDeg = 0.0;
+                    if (vMag > 1e-6) {
+                        double c = glm::clamp(glm::dot(noseInertial, linVel / vMag), -1.0, 1.0);
+                        progradeErrDeg = std::acos(c) * 180.0 / std::numbers::pi;
+                    }
+
+                    // Store for next frame.
+                    prevAngVelInertial = w_in;
+                    prevLinVelKms      = linVel;
+                    prevNavDt          = frameDt;
+
+                    // Convert to °/s and °/s².
+                    constexpr double kR2D = 180.0 / std::numbers::pi;
+                    glm::dvec3 w_degs  = w_bod  * kR2D;
+                    glm::dvec3 al_degs = alpha_bod * kR2D;
+
+                    // Vertical speed (km/s).
+                    double vsKms = 0.0;
+                    {
+                        // Use Earth position as reference (current ref body would be better
+                        // but Earth is always the floating origin here).
+                        glm::dvec3 rHat = glm::length(ship.position()) > 1e-6
+                            ? glm::normalize(ship.position()) : glm::dvec3(0, 0, 1);
+                        vsKms = glm::dot(linVel, rHat);
+                    }
+
+                    // --- Draw the console panel ---
+                    const float consW = kMfdW;
+                    const ImU32 kGrn  = IM_COL32(  0, 210,  75, 210);
+                    const ImU32 kDim  = IM_COL32(  0, 160,  55, 150);
+                    const ImU32 kYel  = IM_COL32(220, 200,   0, 240);
+                    const ImU32 kOra  = IM_COL32(240, 130,  20, 240);
+
+                    constexpr auto kConFlags =
+                        ImGuiWindowFlags_NoDecoration    |
+                        ImGuiWindowFlags_NoSavedSettings |
+                        ImGuiWindowFlags_NoFocusOnAppearing|
+                        ImGuiWindowFlags_AlwaysAutoResize;
+
+                    ImGui::SetNextWindowBgAlpha(0.30f);
+                    ImGui::SetNextWindowPos(
+                        ImVec2(kMfdW + (kMfdW - consW) * 0.5f, H),
+                        ImGuiCond_Always, ImVec2(0.0f, 1.0f));  // anchor bottom-left
+                    ImGui::SetNextWindowSize(ImVec2(consW, 0.0f));
+                    ImGui::Begin("##NavConsole", nullptr, kConFlags);
+
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kGrn));
+
+                    // Title
+                    ImGui::SetCursorPosX((consW - ImGui::CalcTextSize("-- NAV CONSOLE --").x) * 0.5f);
+                    ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.8f}, "-- NAV CONSOLE --");
+                    ImGui::Separator();
+
+                    // Helper: two-column row.
+                    auto rowf = [&](const char* lbl, const char* fmt, ...) {
+                        char buf[64]; va_list ap; va_start(ap, fmt);
+                        std::vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kDim));
+                        ImGui::Text("%s", lbl);
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine(consW * 0.42f);
+                        ImGui::Text("%s", buf);
+                    };
+
+                    // Rotational rates (body P/Y/R in °/s).
+                    rowf("ω Pitch", "%+7.2f °/s", w_degs.y);
+                    rowf("ω Yaw  ", "%+7.2f °/s", w_degs.z);
+                    rowf("ω Roll ", "%+7.2f °/s", w_degs.x);
+                    ImGui::Separator();
+
+                    // Angular accelerations.
+                    rowf("α Pitch", "%+7.2f °/s²", al_degs.y);
+                    rowf("α Yaw  ", "%+7.2f °/s²", al_degs.z);
+                    rowf("α Roll ", "%+7.2f °/s²", al_degs.x);
+                    ImGui::Separator();
+
+                    // Linear acceleration.
+                    rowf("Acc X  ", "%+7.3f g", linAcc_g.x);
+                    rowf("Acc Y  ", "%+7.3f g", linAcc_g.y);
+                    rowf("Acc Z  ", "%+7.3f g", linAcc_g.z);
+                    ImGui::Separator();
+
+                    // Flight data.
+                    rowf("Pro∠   ", "%7.1f °",  progradeErrDeg);
+                    rowf("Vspd   ", "%+7.3f km/s", vsKms);
+                    ImGui::Separator();
+
+                    // Main engine indicator.
+                    if (mainEngineOn)
+                        ImGui::TextColored({1.0f, 0.50f, 0.10f, 1.0f}, "  *** MAIN ENGINE ***");
+                    else
+                        ImGui::TextColored({0.0f, 0.50f, 0.20f, 0.5f}, "  main engine off");
+                    ImGui::Separator();
+
+                    // Autopilot mode buttons (wired up later).
+                    ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "Autopilot:");
+                    ImGui::SameLine();
+                    ImGui::TextColored({0.6f, 0.6f, 0.6f, 0.6f}, "(coming soon)");
+                    if (ImGui::Button("Kill Rot")) { /* TODO */ }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Prograde")) { /* TODO */ }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Retro")) { /* TODO */ }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Nrm+")) { /* TODO */ }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Nrm-")) { /* TODO */ }
+
+                    ImGui::PopStyleColor();
+                    ImGui::End();
+                }
 
                 // ---- Helmet HUD overlay (drawn on top of everything) ----
                 {
