@@ -17,6 +17,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 add_subdirectory(libs/astro)
 add_subdirectory(libs/universe)
 add_subdirectory(libs/render)
+add_subdirectory(libs/spacecraft)
 
 add_subdirectory(apps/apeiron)
 

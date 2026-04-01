@@ -23,6 +23,24 @@ if(Catch2_FOUND)
 
     catch_discover_tests(universe_tests)
 
+    # ---- Spacecraft / control allocation tests ----
+    add_executable(spacecraft_tests
+        test_spacecraft.cpp
+    )
+
+    target_link_libraries(spacecraft_tests
+        PRIVATE
+            Catch2::Catch2WithMain
+            spacecraft
+    )
+
+    target_compile_definitions(spacecraft_tests
+        PRIVATE
+            APEIRON_DATA_DIR="${CMAKE_SOURCE_DIR}/data"
+    )
+
+    catch_discover_tests(spacecraft_tests)
+
 else()
     message(STATUS "Catch2 not found — skipping tests. Install via vcpkg to enable.")
 endif()
