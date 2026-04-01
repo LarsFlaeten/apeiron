@@ -10,3 +10,5 @@ data/kernels/spk/*.bsp
 data/textures/*
 data/stars/*
 data/meshes/*
+data/spacecraft/*
+
