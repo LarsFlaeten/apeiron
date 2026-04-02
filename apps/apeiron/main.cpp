@@ -1619,8 +1619,6 @@ int main()
                             for (const auto& t : orionModel.thrusters) {
                                 if (t.exhaustNode.empty()) continue;
                                 orionGltf.setNodeVisible(t.exhaustNode, t.firing);
-                                if (t.firing)
-                                    orionGltf.setNodeScale(t.exhaustNode, t.exhaustScale);
                             }
                         }
                         orionGltf.draw(renderer.currentCmd(), meshPipeline,
