@@ -5,6 +5,7 @@ find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(tinyobjloader CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(fastgltf CONFIG REQUIRED)
 find_package(glm CONFIG QUIET)
 if(NOT TARGET glm::glm)
     if(TARGET glm)
@@ -29,6 +30,8 @@ add_library(render STATIC
     src/Texture.cpp
     src/AtmospherePrecompute.cpp
     src/AtmospherePipeline.cpp
+    src/MeshPipeline.cpp
+    src/GltfModel.cpp
 )
 
 target_include_directories(render
@@ -48,7 +51,7 @@ target_link_libraries(render
 )
 
 target_include_directories(render PRIVATE ${Stb_INCLUDE_DIR})
-target_link_libraries(render PRIVATE tinyobjloader::tinyobjloader)
+target_link_libraries(render PRIVATE tinyobjloader::tinyobjloader fastgltf::fastgltf)
 
 target_compile_features(render PUBLIC cxx_std_23)
 

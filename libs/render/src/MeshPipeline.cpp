@@ -1,0 +1,141 @@
+#include "apeiron/render/MeshPipeline.h"
+#include "apeiron/render/Context.h"
+#include "apeiron/render/Pipeline.h"
+#include "apeiron/render/Vertex.h"
+
+#include <fstream>
+#include <stdexcept>
+#include <vector>
+
+namespace apeiron::render {
+
+static std::vector<uint32_t> readSpirv(const std::filesystem::path& path)
+{
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open())
+        throw std::runtime_error("Cannot open shader: " + path.string());
+    auto bytes = static_cast<std::streamsize>(file.tellg());
+    if (bytes % 4 != 0)
+        throw std::runtime_error("SPIR-V not multiple of 4: " + path.string());
+    file.seekg(0);
+    std::vector<uint32_t> code(bytes / 4);
+    file.read(reinterpret_cast<char*>(code.data()), bytes);
+    return code;
+}
+
+vk::ShaderModule MeshPipeline::loadShader(const std::filesystem::path& spvPath)
+{
+    auto code = readSpirv(spvPath);
+    vk::ShaderModuleCreateInfo info{};
+    info.setCode(code);
+    return m_ctx.device().createShaderModule(info);
+}
+
+MeshPipeline::MeshPipeline(const Context&               ctx,
+                             const Pipeline&              mainPipeline,
+                             const std::filesystem::path& shaderDir)
+    : m_ctx(ctx)
+    , m_renderPass(mainPipeline.renderPass())  // borrow — not owned
+{
+    // Push-constant range: MeshPushConstants = 160 bytes.
+    vk::PushConstantRange pcRange{};
+    pcRange.setStageFlags(vk::ShaderStageFlagBits::eVertex |
+                          vk::ShaderStageFlagBits::eFragment)
+           .setOffset(0)
+           .setSize(sizeof(MeshPushConstants));
+
+    // No descriptor sets — all data is in push constants + vertex attributes.
+    vk::PipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.setPushConstantRanges(pcRange);
+    m_layout = m_ctx.device().createPipelineLayout(layoutInfo);
+
+    // Shaders.
+    auto vert = loadShader(shaderDir / "mesh.vert.spv");
+    auto frag = loadShader(shaderDir / "mesh.frag.spv");
+
+    std::array<vk::PipelineShaderStageCreateInfo, 2> stages{};
+    stages[0].setStage(vk::ShaderStageFlagBits::eVertex)  .setModule(vert).setPName("main");
+    stages[1].setStage(vk::ShaderStageFlagBits::eFragment).setModule(frag).setPName("main");
+
+    auto binding    = Vertex::bindingDescription();
+    auto attributes = Vertex::attributeDescriptions();
+    vk::PipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.setVertexBindingDescriptions  (binding)
+               .setVertexAttributeDescriptions(attributes);
+
+    vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.setTopology(vk::PrimitiveTopology::eTriangleList);
+
+    std::array dynStates{vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+    vk::PipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.setDynamicStates(dynStates);
+
+    vk::PipelineViewportStateCreateInfo viewportState{};
+    viewportState.setViewportCount(1).setScissorCount(1);
+
+    vk::PipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.setPolygonMode(vk::PolygonMode::eFill)
+              .setCullMode   (vk::CullModeFlagBits::eNone)
+              .setFrontFace  (vk::FrontFace::eCounterClockwise)
+              .setLineWidth  (1.0f);
+
+    vk::PipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.setRasterizationSamples(vk::SampleCountFlagBits::e1);
+
+    // Additive alpha blend for emissive plumes; opaque for hull.
+    // We use a single pipeline with additive blending — hull meshes have alpha=1
+    // so the blend is effectively opaque; emissive plumes add to HDR.
+    vk::PipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment
+        .setBlendEnable        (vk::True)
+        .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+        .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+        .setColorBlendOp       (vk::BlendOp::eAdd)
+        .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+        .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+        .setAlphaBlendOp       (vk::BlendOp::eAdd)
+        .setColorWriteMask(
+            vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+            vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+
+    vk::PipelineColorBlendStateCreateInfo colorBlend{};
+    colorBlend.setAttachments(blendAttachment);
+
+    vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.setDepthTestEnable      (vk::True)
+                .setDepthWriteEnable     (vk::True)
+                .setDepthCompareOp       (vk::CompareOp::eLess)
+                .setDepthBoundsTestEnable(vk::False)
+                .setStencilTestEnable    (vk::False);
+
+    vk::GraphicsPipelineCreateInfo info{};
+    info.setStages            (stages)
+        .setPVertexInputState (&vertexInput)
+        .setPInputAssemblyState(&inputAssembly)
+        .setPViewportState    (&viewportState)
+        .setPRasterizationState(&rasterizer)
+        .setPMultisampleState (&multisampling)
+        .setPColorBlendState  (&colorBlend)
+        .setPDepthStencilState(&depthStencil)
+        .setPDynamicState     (&dynamicState)
+        .setLayout            (m_layout)
+        .setRenderPass        (m_renderPass)
+        .setSubpass           (0);
+
+    auto [result, pipeline] = m_ctx.device().createGraphicsPipeline(nullptr, info);
+    if (result != vk::Result::eSuccess)
+        throw std::runtime_error("Failed to create mesh pipeline");
+    m_pipeline = pipeline;
+
+    m_ctx.device().destroyShaderModule(vert);
+    m_ctx.device().destroyShaderModule(frag);
+}
+
+MeshPipeline::~MeshPipeline()
+{
+    m_ctx.device().destroyPipeline      (m_pipeline);
+    m_ctx.device().destroyPipelineLayout(m_layout);
+    // m_renderPass is borrowed from Pipeline — not destroyed here
+}
+
+} // namespace apeiron::render
