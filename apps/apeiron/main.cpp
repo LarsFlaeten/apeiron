@@ -536,10 +536,6 @@ int main()
                 orionGltf.load(allocator, glb);
                 std::cout << "[Apeiron] Loaded Orion glTF: "
                           << orionGltf.nodes().size() << " nodes\n";
-                // Debug: dump all node names so we can verify plume name matching.
-                for (const auto& n : orionGltf.nodes())
-                    if (!n.name.empty())
-                        std::cout << "  node: \"" << n.name << "\"\n";
                 // Hide all exhaust plume nodes at startup (throttle = 0).
                 for (const auto& t : orionModel.thrusters)
                     if (!t.exhaustNode.empty())
@@ -754,7 +750,8 @@ int main()
             {
                 glm::dvec3 shipForce(0.0), shipTorque(0.0);
 
-                if (viewMode == ViewMode::Nav && simSpeedTarget <= 1.0
+                if ((viewMode == ViewMode::Nav || viewMode == ViewMode::ShipInspect)
+                    && simSpeedTarget <= 1.0
                     && !ImGui::GetIO().WantCaptureKeyboard) {
 
                     if (!orionModel.thrusters.empty()) {
@@ -875,7 +872,7 @@ int main()
                     // Position: translate to ship, then apply node offset (metres → km).
                     glm::vec3 pos = shipRp + glm::vec3(camWorld[3]) * 1e-3f;
                     glm::vec3 fwd = glm::normalize(glm::vec3(camWorld[0]));  // +X = forward
-                    glm::vec3 up  = glm::normalize(glm::vec3(camWorld[2]));  // +Z = up
+                    glm::vec3 up  = glm::normalize(glm::vec3(camWorld[1]));  // +Y in glTF = Blender +Z = up
 
                     camera.setPosition(pos);
                     camera.setTarget  (pos + fwd);
@@ -883,7 +880,7 @@ int main()
                 } else {
                     // Fallback: bow camera at ship centre.
                     glm::vec3 fwd = glm::mat3(shipRot) * glm::vec3(1.0f, 0.0f, 0.0f);
-                    glm::vec3 up  = glm::mat3(shipRot) * glm::vec3(0.0f, 0.0f, 1.0f);
+                    glm::vec3 up  = glm::mat3(shipRot) * glm::vec3(0.0f, 1.0f, 0.0f);
                     camera.setPosition(shipRp);
                     camera.setTarget  (shipRp + fwd);
                     camera.setUp      (up);
