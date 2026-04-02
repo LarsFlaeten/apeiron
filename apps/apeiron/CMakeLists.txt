@@ -42,6 +42,7 @@ target_link_libraries(apeiron
     PRIVATE
         universe
         render
+        spacecraft
         tomlplusplus::tomlplusplus
 )
 
@@ -55,6 +56,7 @@ target_compile_definitions(apeiron
         APEIRON_SHADER_DIR="${SHADER_OUT_DIR}"
         APEIRON_SCENARIO_FILE="${CMAKE_SOURCE_DIR}/data/scenarios/scenario.toml"
         APEIRON_STAR_CATALOG="${CMAKE_SOURCE_DIR}/data/stars/hygdata_v42.csv"
+        APEIRON_DATA_DIR="${CMAKE_SOURCE_DIR}/data"
 )
 
 target_compile_features(apeiron PRIVATE cxx_std_23)

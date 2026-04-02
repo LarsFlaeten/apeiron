@@ -32,6 +32,8 @@
 #include "Spacecraft.h"
 #include "MFD.h"
 #include "OrbitalMFD.h"
+#include "apeiron/spacecraft/ManifestLoader.h"
+#include "apeiron/spacecraft/SpacecraftModel.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -40,6 +42,7 @@
 #include <cspice/SpiceUsr.h>
 
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -299,6 +302,22 @@ int main()
 
         // Index of the spacecraft the player controls / camera follows.
         const size_t playerIdx = 0;
+
+        // Load Orion thruster manifest.  Falls back gracefully if the file is missing.
+        spacecraft::SpacecraftModel orionModel;
+        {
+            std::filesystem::path toml =
+                std::filesystem::path(APEIRON_DATA_DIR)
+                / "spacecraft/orion/CM_SM06_thrusters.toml";
+            if (std::filesystem::exists(toml)) {
+                orionModel = spacecraft::loadManifest(toml);
+                std::cout << "[Apeiron] Loaded Orion manifest: "
+                          << orionModel.thrusters.size() << " thrusters\n";
+            } else {
+                std::cerr << "[Apeiron] WARNING: Orion manifest not found at "
+                          << toml << " — using scalar fallback\n";
+            }
+        }
 
         // MFD apps — updated and rendered every frame in Nav view.
         OrbitalMFD orbitalMFD;
@@ -657,27 +676,51 @@ int main()
 
                 if (viewMode == ViewMode::Nav && simSpeedTarget <= 1.0
                     && !ImGui::GetIO().WantCaptureKeyboard) {
-                    // Main engine — fires along body +X (forward).  Use SPACE.
-                    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-                        shipForce.x += mainEngineThrust;
-                        mainEngineOn = true;
+
+                    if (!orionModel.thrusters.empty()) {
+                        // ---- Control allocation path (Orion manifest loaded) ----
+                        // Orion model space: +X = aft, engine pointing +X.
+                        spacecraft::Wrench desired{};
+                        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+                            desired[0] += static_cast<double>(orionModel.thrusters[0].thrustN);
+                            mainEngineOn = true;
+                        }
+                        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) desired[0] += rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) desired[0] -= rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) desired[1] += rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) desired[1] -= rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) desired[2] += rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) desired[2] -= rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) desired[4] += rcsTorque;
+                        if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) desired[4] -= rcsTorque;
+                        if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) desired[5] += rcsTorque;
+                        if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) desired[5] -= rcsTorque;
+                        if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) desired[3] -= rcsTorque;
+                        if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) desired[3] += rcsTorque;
+                        orionModel.solveAllocation(desired);
+                        glm::vec3 F{}, T{};
+                        orionModel.accumulateWrench(F, T);
+                        shipForce  = glm::dvec3(F);
+                        shipTorque = glm::dvec3(T);
+                    } else {
+                        // ---- Scalar fallback (no manifest) ----
+                        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+                            shipForce.x += mainEngineThrust;
+                            mainEngineOn = true;
+                        }
+                        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) shipForce.x += rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) shipForce.x -= rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) shipForce.y += rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) shipForce.y -= rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) shipForce.z += rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) shipForce.z -= rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) shipTorque.y += rcsTorque;
+                        if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.y -= rcsTorque;
+                        if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) shipTorque.z += rcsTorque;
+                        if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) shipTorque.z -= rcsTorque;
+                        if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.x -= rcsTorque;
+                        if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) shipTorque.x += rcsTorque;
                     }
-
-                    // RCS translation: x=fwd, y=port, z=up
-                    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) shipForce.x += rcsThrust;
-                    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) shipForce.x -= rcsThrust;
-                    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) shipForce.y += rcsThrust;
-                    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) shipForce.y -= rcsThrust;
-                    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) shipForce.z += rcsThrust;
-                    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) shipForce.z -= rcsThrust;
-
-                    // RCS rotation: pitch=Y, yaw=Z, roll=X  (right-hand rule)
-                    if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) shipTorque.y += rcsTorque;
-                    if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) shipTorque.y -= rcsTorque;
-                    if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) shipTorque.z += rcsTorque;
-                    if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) shipTorque.z -= rcsTorque;
-                    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) shipTorque.x -= rcsTorque;
-                    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) shipTorque.x += rcsTorque;
                 }
 
                 spacecraft[playerIdx]->setBodyForce(shipForce);
