@@ -75,7 +75,7 @@ MeshPipeline::MeshPipeline(const Context&               ctx,
 
     vk::PipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.setPolygonMode(vk::PolygonMode::eFill)
-              .setCullMode   (vk::CullModeFlagBits::eBack)
+              .setCullMode   (vk::CullModeFlagBits::eFront)
               .setFrontFace  (vk::FrontFace::eClockwise)
               .setLineWidth  (1.0f);
 
