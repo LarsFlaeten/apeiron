@@ -8,6 +8,7 @@ layout(location = 3) in vec2 inUV;
 layout(location = 0) out vec3 fragNormal;   // world-space
 layout(location = 1) out vec3 fragColor;
 layout(location = 2) out vec3 fragPos;      // world-space (for specular)
+layout(location = 3) out vec2 fragUV;
 
 layout(push_constant) uniform PC {
     mat4  mvp;
@@ -30,4 +31,5 @@ void main()
     fragNormal = normalize(normalMat * inNormal);
     fragColor  = inColor * pc.baseColor.rgb;
     fragPos    = vec3(pc.modelMat * vec4(inPosition, 1.0));
+    fragUV     = inUV;
 }

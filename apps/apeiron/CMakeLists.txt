@@ -9,7 +9,7 @@ set(SHADER_OUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders")
 file(MAKE_DIRECTORY "${SHADER_OUT_DIR}")
 
 set(SHADER_SPIRV)
-foreach(SHADER triangle.vert triangle.tesc triangle.tese triangle.frag tonemap.vert tonemap.frag star.vert star.frag bloom_threshold.frag bloom_blur.frag ring.vert ring.frag atmosphere_transmittance.comp atmosphere.vert atmosphere.frag mesh.vert mesh.frag)
+foreach(SHADER triangle.vert triangle.tesc triangle.tese triangle.frag tonemap.vert tonemap.frag star.vert star.frag bloom_threshold.frag bloom_blur.frag ring.vert ring.frag atmosphere_transmittance.comp atmosphere.vert atmosphere.frag mesh.vert mesh.frag plume.vert plume.frag)
     add_custom_command(
         OUTPUT  "${SHADER_OUT_DIR}/${SHADER}.spv"
         COMMAND ${GLSLC_EXECUTABLE}

@@ -82,14 +82,15 @@ public:
 
 private:
     // Recursively draw a node and its children.
-    // boundDoubleSided tracks whether the double-sided pipeline is currently bound,
-    // to avoid redundant pipeline rebinds.
+    // plumePass: false = opaque geometry only, true = plumes only.
+    // boundPipeline tracks the currently bound pipeline to avoid redundant rebinds.
     void drawNode(vk::CommandBuffer       cmd,
                   const MeshPipeline&     pipeline,
                   int                     nodeIdx,
                   const glm::mat4&        parentMvp,
                   const glm::mat4&        parentModel,
                   const glm::vec3&        sunDir,
+                  bool                    plumePass,
                   bool&                   boundDoubleSided) const;
 
     std::vector<Mesh>     m_meshes;

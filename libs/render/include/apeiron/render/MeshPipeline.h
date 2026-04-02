@@ -35,10 +35,12 @@ public:
     MeshPipeline& operator=(const MeshPipeline&) = delete;
 
     // handle(false) = back-face culled (solid geometry)
-    // handle(true)  = no culling (double-sided: flat panels, plumes)
+    // handle(true)  = no culling (double-sided: flat panels)
     vk::Pipeline       handle(bool doubleSided = false) const {
         return doubleSided ? m_pipelineDS : m_pipeline;
     }
+    // Dedicated plume pipeline: additive blend, no culling, plume shaders.
+    vk::Pipeline       plumeHandle() const { return m_pipelinePlume; }
     vk::PipelineLayout layout()     const { return m_layout;   }
     vk::RenderPass     renderPass() const { return m_renderPass; }
 
@@ -48,8 +50,9 @@ private:
     const Context&   m_ctx;
     vk::RenderPass   m_renderPass;   // borrowed from mainPipeline (not owned)
     vk::PipelineLayout m_layout;
-    vk::Pipeline       m_pipeline;   // back-face culled
-    vk::Pipeline       m_pipelineDS; // double-sided (no culling)
+    vk::Pipeline       m_pipeline;      // back-face culled
+    vk::Pipeline       m_pipelineDS;   // double-sided (no culling)
+    vk::Pipeline       m_pipelinePlume; // plume: additive blend, no cull, plume shaders
 };
 
 } // namespace apeiron::render

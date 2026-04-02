@@ -138,12 +138,55 @@ MeshPipeline::MeshPipeline(const Context&               ctx,
 
     m_ctx.device().destroyShaderModule(vert);
     m_ctx.device().destroyShaderModule(frag);
+
+    // Plume pipeline: dedicated shaders, additive blend, no culling.
+    auto plumeVert = loadShader(shaderDir / "plume.vert.spv");
+    auto plumeFrag = loadShader(shaderDir / "plume.frag.spv");
+
+    stages[0].setModule(plumeVert);
+    stages[1].setModule(plumeFrag);
+
+    vk::PipelineRasterizationStateCreateInfo rasterizerPlume = rasterizer;
+    rasterizerPlume.setCullMode(vk::CullModeFlagBits::eNone);
+
+    vk::PipelineColorBlendAttachmentState additiveBlend{};
+    additiveBlend
+        .setBlendEnable        (vk::True)
+        .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+        .setDstColorBlendFactor(vk::BlendFactor::eOne)       // additive
+        .setColorBlendOp       (vk::BlendOp::eAdd)
+        .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+        .setDstAlphaBlendFactor(vk::BlendFactor::eOne)
+        .setAlphaBlendOp       (vk::BlendOp::eAdd)
+        .setColorWriteMask(
+            vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+            vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+
+    vk::PipelineColorBlendStateCreateInfo additiveColorBlend{};
+    additiveColorBlend.setAttachments(additiveBlend);
+
+    // Plumes don't write depth (additive transparent — depth read only).
+    vk::PipelineDepthStencilStateCreateInfo plumeDepth = depthStencil;
+    plumeDepth.setDepthWriteEnable(vk::False);
+
+    info.setPRasterizationState(&rasterizerPlume)
+        .setPColorBlendState   (&additiveColorBlend)
+        .setPDepthStencilState (&plumeDepth);
+
+    auto [resultP, pipelinePlume] = m_ctx.device().createGraphicsPipeline(nullptr, info);
+    if (resultP != vk::Result::eSuccess)
+        throw std::runtime_error("Failed to create plume pipeline");
+    m_pipelinePlume = pipelinePlume;
+
+    m_ctx.device().destroyShaderModule(plumeVert);
+    m_ctx.device().destroyShaderModule(plumeFrag);
 }
 
 MeshPipeline::~MeshPipeline()
 {
     m_ctx.device().destroyPipeline      (m_pipeline);
     m_ctx.device().destroyPipeline      (m_pipelineDS);
+    m_ctx.device().destroyPipeline      (m_pipelinePlume);
     m_ctx.device().destroyPipelineLayout(m_layout);
     // m_renderPass is borrowed from Pipeline — not destroyed here
 }

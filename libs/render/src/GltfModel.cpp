@@ -294,12 +294,19 @@ void GltfModel::draw(vk::CommandBuffer       cmd,
 {
     if (m_meshes.empty()) return;
 
-    // Start with the back-face-culled pipeline; drawNode rebinds as needed.
+    glm::mat4 mvp = vp * rootModel;
+
+    // Pass 1: opaque geometry — writes depth.
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.handle(false));
     bool boundDS = false;
-
     for (int ri : m_rootNodes)
-        drawNode(cmd, pipeline, ri, vp * rootModel, rootModel, sunDirWorld, boundDS);
+        drawNode(cmd, pipeline, ri, mvp, rootModel, sunDirWorld, false, boundDS);
+
+    // Pass 2: plumes — reads depth only, additive blend.
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.plumeHandle());
+    boundDS = true;
+    for (int ri : m_rootNodes)
+        drawNode(cmd, pipeline, ri, mvp, rootModel, sunDirWorld, true, boundDS);
 }
 
 void GltfModel::drawNode(vk::CommandBuffer  cmd,
@@ -308,6 +315,7 @@ void GltfModel::drawNode(vk::CommandBuffer  cmd,
                           const glm::mat4&   parentMvp,
                           const glm::mat4&   parentModel,
                           const glm::vec3&   sunDir,
+                          bool               plumePass,
                           bool&              boundDS) const
 {
     const auto& n = m_nodes[nodeIdx];
@@ -318,35 +326,38 @@ void GltfModel::drawNode(vk::CommandBuffer  cmd,
     glm::mat4 mvp       = parentMvp   * nodeLocal;
 
     if (n.meshIdx >= 0 && n.meshCount > 0) {
-        // Plume quads are double-sided; everything else uses back-face culling.
-        bool ds = (n.name.find("plume") != std::string::npos);
-        if (ds != boundDS) {
-            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.handle(ds));
-            boundDS = ds;
-        }
+        bool isPlume = (n.name.find("plume") != std::string::npos);
 
-        MeshPushConstants pc{};
-        pc.mvp       = mvp;
-        pc.modelMat  = model;
-        pc.sunDir    = glm::vec4(sunDir, n.isEmissive ? 1.0f : 0.0f);
-        pc.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, n.emissiveScale);
+        // Each pass only draws its own type.
+        if (isPlume == plumePass) {
+            // Rebind pipeline only when it changes (opaque pass may toggle DS).
+            if (!plumePass && isPlume != boundDS) {
+                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.handle(false));
+                boundDS = false;
+            }
 
-        cmd.pushConstants(pipeline.layout(),
-                          vk::ShaderStageFlagBits::eVertex |
-                          vk::ShaderStageFlagBits::eFragment,
-                          0, sizeof(MeshPushConstants),
-                          &pc);
+            MeshPushConstants pc{};
+            pc.mvp       = mvp;
+            pc.modelMat  = model;
+            pc.sunDir    = glm::vec4(sunDir, n.isEmissive ? 1.0f : 0.0f);
+            pc.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, n.emissiveScale);
 
-        // Draw all primitives (one per material slot).
-        for (int p = 0; p < n.meshCount; ++p) {
-            int idx = n.meshIdx + p;
-            if (idx < static_cast<int>(m_meshes.size()))
-                m_meshes[idx].draw(cmd);
+            cmd.pushConstants(pipeline.layout(),
+                              vk::ShaderStageFlagBits::eVertex |
+                              vk::ShaderStageFlagBits::eFragment,
+                              0, sizeof(MeshPushConstants),
+                              &pc);
+
+            for (int p = 0; p < n.meshCount; ++p) {
+                int idx = n.meshIdx + p;
+                if (idx < static_cast<int>(m_meshes.size()))
+                    m_meshes[idx].draw(cmd);
+            }
         }
     }
 
     for (int ci : n.children)
-        drawNode(cmd, pipeline, ci, mvp, model, sunDir, boundDS);
+        drawNode(cmd, pipeline, ci, mvp, model, sunDir, plumePass, boundDS);
 }
 
 } // namespace apeiron::render
