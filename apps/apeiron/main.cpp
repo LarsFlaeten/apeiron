@@ -20,6 +20,8 @@
 #include "apeiron/render/Swapchain.h"
 #include "apeiron/render/Texture.h"
 #include "apeiron/render/Vertex.h"
+#include "apeiron/render/MeshPipeline.h"
+#include "apeiron/render/GltfModel.h"
 
 #include "apeiron/universe/BodyProperties.h"
 #include "apeiron/universe/CelestialBody.h"
@@ -432,6 +434,27 @@ int main()
             }
         } orbit;
 
+        // Ship inspection orbit camera (F11 view).
+        struct ShipOrbit {
+            float azimuthDeg   =  45.0f;
+            float elevationDeg =  20.0f;
+            float distanceM    =  30.0f;   // metres (ship is ~10 m scale)
+            bool  bodyFrame    =  true;    // true = orbit in ship body frame
+
+            // Returns camera offset in either body frame (caller rotates to inertial)
+            // or directly in render space depending on bodyFrame flag.
+            glm::vec3 localOffset() const {
+                float az = glm::radians(azimuthDeg);
+                float el = glm::radians(elevationDeg);
+                // Convert metres → km (render space is in km).
+                float dKm = distanceM * 1e-3f;
+                return dKm * glm::vec3(
+                    std::cos(el) * std::cos(az),
+                    std::cos(el) * std::sin(az),
+                    std::sin(el));
+            }
+        } shipOrbit;
+
         // Default focus: the observer body (first body matching cfg.observerBody).
         int selectedBodyIndex = 0;
         for (int i = 0; i < static_cast<int>(bodyInfos.size()); ++i)
@@ -492,6 +515,26 @@ int main()
                                              pipeline.renderPass(), swapchain,
                                              APEIRON_SHADER_DIR, std::move(starVertices));
 
+        // Mesh pipeline for rigid glTF models (spacecraft, etc.).
+        apeiron::render::MeshPipeline meshPipeline(ctx, pipeline, APEIRON_SHADER_DIR);
+
+        // Load Orion glTF model.
+        apeiron::render::GltfModel orionGltf;
+        {
+            std::filesystem::path glb =
+                std::filesystem::path(APEIRON_DATA_DIR)
+                / "spacecraft/orion/CM_SM06.glb";
+            if (std::filesystem::exists(glb)) {
+                glfwSetWindowTitle(window, "Apeiron — Loading Orion model…");
+                glfwPollEvents();
+                orionGltf.load(allocator, glb);
+                std::cout << "[Apeiron] Loaded Orion glTF: "
+                          << orionGltf.nodes().size() << " nodes\n";
+            } else {
+                std::cerr << "[Apeiron] WARNING: Orion GLB not found at " << glb << "\n";
+            }
+        }
+
         // Renderer last — its destructor calls waitIdle before anything else frees.
         apeiron::render::Renderer renderer(ctx, swapchain, pipeline, tonemap, bloom,
                                            atmospherePipeline);
@@ -540,8 +583,8 @@ int main()
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
 
-        // View mode: F1 = Nav (chase-cam + HUD + RCS), F2 = MFD fullscreen, F12 = Dev.
-        enum class ViewMode { Dev, Nav, MfdFull };
+        // View mode: F1=Nav, F2=MFD fullscreen, F11=Ship inspect, F12=Dev.
+        enum class ViewMode { Dev, Nav, MfdFull, ShipInspect };
         ViewMode viewMode = ViewMode::Dev;
         double simSpeedTarget          = 1.0; // set instantly by t/T keys
         double simSecondsPerRealSecond = 1.0; // smoothly tracks target (log-space)
@@ -570,6 +613,8 @@ int main()
                 *s->viewMode = ViewMode::Nav;
             else if (key == GLFW_KEY_F2)
                 *s->viewMode = ViewMode::MfdFull;
+            else if (key == GLFW_KEY_F11)
+                *s->viewMode = ViewMode::ShipInspect;
             else if (key == GLFW_KEY_F12)
                 *s->viewMode = ViewMode::Dev;
             else if (key == GLFW_KEY_T) {
@@ -751,7 +796,8 @@ int main()
 
             // Recenter the floating origin.
             // In Nav view, track the player ship; in Map view, track the selected body.
-            if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull) {
+            if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull ||
+                viewMode == ViewMode::ShipInspect) {
                 // Recenter on the interpolated position — same point the camera sits at.
                 // Using the true physics position would leave a step-size-dependent offset
                 // between camera and origin, causing Earth to jump when time accel changes.
@@ -781,6 +827,38 @@ int main()
                 // Bow camera: placed at the ship centre, looking forward along +X body.
                 camera.setPosition(shipRp);
                 camera.setTarget  (shipRp + fwd);
+                camera.setUp      (up);
+            }
+
+            // ---- F11 ship inspection camera ----
+            if (viewMode == ViewMode::ShipInspect) {
+                auto& ship = *spacecraft[playerIdx];
+                glm::vec3 shipRp = scene.origin().toRenderSpace(
+                    earthWorld + ship.position());
+
+                if (!ImGui::GetIO().WantCaptureMouse) {
+                    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+                        shipOrbit.azimuthDeg   -= dx * 0.4f;
+                        shipOrbit.elevationDeg += dy * 0.4f;
+                        shipOrbit.elevationDeg  = glm::clamp(shipOrbit.elevationDeg, -85.0f, 85.0f);
+                    }
+                    if (windowState.scrollDelta != 0.0)
+                        shipOrbit.distanceM *= std::exp(-0.2f * static_cast<float>(windowState.scrollDelta));
+                }
+
+                glm::vec3 offset = shipOrbit.localOffset();  // in km, local frame
+
+                glm::mat3 rot = glm::mat3_cast(glm::fquat(ship.attitude()));
+                if (shipOrbit.bodyFrame)
+                    offset = rot * offset;  // rotate into inertial render space
+
+                // Up vector: body +Z in body frame, ecliptic north in inertial.
+                glm::vec3 up = shipOrbit.bodyFrame
+                    ? rot * glm::vec3(0.0f, 0.0f, 1.0f)
+                    : glm::vec3(0.0f, 0.0f, 1.0f);
+
+                camera.setPosition(shipRp + offset);
+                camera.setTarget  (shipRp);
                 camera.setUp      (up);
             }
 
@@ -922,6 +1000,68 @@ int main()
                     (const double[]){10.0}, (const double[]){100'000.0},
                     "%.0f", ImGuiSliderFlags_Logarithmic);
 
+                ImGui::End();
+            }
+
+            // ---- F11 Ship inspection view ----
+            if (viewMode == ViewMode::ShipInspect) {
+                auto& ship = *spacecraft[playerIdx];
+                ImGuiIO& io = ImGui::GetIO();
+
+                constexpr auto kFlags =
+                    ImGuiWindowFlags_NoDecoration    |
+                    ImGuiWindowFlags_NoSavedSettings |
+                    ImGuiWindowFlags_AlwaysAutoResize|
+                    ImGuiWindowFlags_NoFocusOnAppearing;
+
+                ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
+                ImGui::SetNextWindowBgAlpha(0.55f);
+                ImGui::Begin("##ShipInspect", nullptr, kFlags);
+
+                ImGui::TextColored({0.0f, 0.82f, 0.30f, 1.0f}, "SHIP INSPECT  [F11]");
+                ImGui::Separator();
+
+                ImGui::Text("Dist: %.1f m", shipOrbit.distanceM);
+                ImGui::Text("Az:   %.1f°", shipOrbit.azimuthDeg);
+                ImGui::Text("El:   %.1f°", shipOrbit.elevationDeg);
+                ImGui::Separator();
+
+                ImGui::Text("Orbit frame:");
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Body", shipOrbit.bodyFrame))
+                    shipOrbit.bodyFrame = true;
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Inertial", !shipOrbit.bodyFrame))
+                    shipOrbit.bodyFrame = false;
+
+                ImGui::Separator();
+                ImGui::TextDisabled("Drag to orbit  Scroll to zoom");
+
+                // Show active thrusters.
+                if (!orionModel.thrusters.empty()) {
+                    ImGui::Separator();
+                    ImGui::Text("Active thrusters:");
+                    int activeCount = 0;
+                    for (const auto& t : orionModel.thrusters) {
+                        if (t.throttle > 0.01f) {
+                            ImGui::TextColored({1.0f, 0.5f, 0.1f, 1.0f},
+                                "  %s  %.0f%%", t.id.c_str(), t.throttle * 100.0f);
+                            ++activeCount;
+                        }
+                    }
+                    if (activeCount == 0)
+                        ImGui::TextDisabled("  (none)");
+                }
+
+                ImGui::End();
+
+                // Sim speed indicator top-right.
+                ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 10.0f, 10.0f),
+                    ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+                ImGui::SetNextWindowBgAlpha(0.45f);
+                ImGui::Begin("##SIclock", nullptr, kFlags);
+                ImGui::TextColored({1.0f, 0.85f, 0.4f, 1.0f}, "%s UTC",
+                                   currentEt.toISOUTCString(0).c_str());
                 ImGui::End();
             }
 
@@ -1386,28 +1526,51 @@ int main()
                 }
             }
 
-            // ---- Draw spacecraft (placeholder: small emissive spheres) ----
+            // ---- Draw spacecraft ----
             // Positions are in Earth-centred ECI (km); convert via earthWorld offset.
             {
                 glm::vec3 scSunDir = (sunIndex >= 0)
                     ? glm::normalize(sunRenderPos - scene.origin().toRenderSpace(earthWorld))
                     : glm::vec3(0.0f, 1.0f, 0.0f);
 
-                constexpr float kShipRadiusKm = 0.01f;  // ~10 m placeholder sphere
-
                 for (auto& sc : spacecraft) {
                     glm::dvec3 worldPos = earthWorld + sc->position();
                     glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
 
-                    glm::mat4 rot   = glm::mat4(glm::mat3(glm::mat3_cast(glm::fquat(sc->attitude()))));
-                    glm::mat4 model = glm::translate(glm::mat4(1.0f), rp);
-                    model = model * rot;
-                    model = glm::scale(model, glm::vec3(kShipRadiusKm));
+                    glm::mat3 attRot = glm::mat3_cast(glm::fquat(sc->attitude()));
 
-                    glm::vec3 viewDir = glm::normalize(camera.position() - rp);
-                    renderer.draw(vp * model, model, scSunDir, viewDir,
-                                  /*emissive=*/true, 1.0f, 0.0f,
-                                  descriptorSets[0], *meshes[0]);
+                    // The Orion model is in metres; render space is in km → scale by 1e-3.
+                    // Body +X is forward in both the physics model and glTF model space.
+                    constexpr float kModelToKm = 1e-3f;
+                    glm::mat4 shipModel = glm::translate(glm::mat4(1.0f), rp)
+                                       * glm::mat4(glm::mat3(attRot))
+                                       * glm::scale(glm::mat4(1.0f), glm::vec3(kModelToKm));
+
+                    if (orionGltf.isLoaded()) {
+                        // Update plume node visibility and scale from throttles.
+                        if (!orionModel.thrusters.empty()) {
+                            for (const auto& t : orionModel.thrusters) {
+                                if (t.exhaustNode.empty()) continue;
+                                bool active = t.throttle > 0.01f;
+                                orionGltf.setNodeVisible(t.exhaustNode, active);
+                                if (active)
+                                    orionGltf.setNodeScale(t.exhaustNode,
+                                        t.exhaustScale * t.throttle);
+                            }
+                        }
+                        orionGltf.draw(renderer.currentCmd(), meshPipeline,
+                                       vp, shipModel, scSunDir);
+                    } else {
+                        // Fallback: small emissive sphere.
+                        constexpr float kShipRadiusKm = 0.01f;
+                        glm::mat4 model = glm::translate(glm::mat4(1.0f), rp);
+                        model = model * glm::mat4(glm::mat3(attRot));
+                        model = glm::scale(model, glm::vec3(kShipRadiusKm));
+                        glm::vec3 viewDir = glm::normalize(camera.position() - rp);
+                        renderer.draw(vp * model, model, scSunDir, viewDir,
+                                      /*emissive=*/true, 1.0f, 0.0f,
+                                      descriptorSets[0], *meshes[0]);
+                    }
                 }
             }
 

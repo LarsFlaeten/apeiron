@@ -262,7 +262,8 @@ void GltfModel::setNodeScale(std::string_view name, float scale)
 
 void GltfModel::draw(vk::CommandBuffer       cmd,
                       const MeshPipeline&     pipeline,
-                      const glm::mat4&        rootTransform,
+                      const glm::mat4&        vp,
+                      const glm::mat4&        rootModel,
                       const glm::vec3&        sunDirWorld) const
 {
     if (m_meshes.empty()) return;
@@ -270,24 +271,27 @@ void GltfModel::draw(vk::CommandBuffer       cmd,
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.handle());
 
     for (int ri : m_rootNodes)
-        drawNode(cmd, pipeline.layout(), ri, rootTransform, sunDirWorld);
+        drawNode(cmd, pipeline.layout(), ri, vp * rootModel, rootModel, sunDirWorld);
 }
 
 void GltfModel::drawNode(vk::CommandBuffer  cmd,
                           vk::PipelineLayout layout,
                           int                nodeIdx,
-                          const glm::mat4&   parentWorld,
+                          const glm::mat4&   parentMvp,
+                          const glm::mat4&   parentModel,
                           const glm::vec3&   sunDir) const
 {
     const auto& n = m_nodes[nodeIdx];
     if (!n.visible) return;
 
-    glm::mat4 world = parentWorld * nodeLocalTransform(n);
+    glm::mat4 nodeLocal = nodeLocalTransform(n);
+    glm::mat4 model     = parentModel * nodeLocal;
+    glm::mat4 mvp       = parentMvp   * nodeLocal;
 
     if (n.meshIdx >= 0 && n.meshIdx < static_cast<int>(m_meshes.size())) {
         MeshPushConstants pc{};
-        pc.mvp       = world;  // caller must pre-multiply with VP
-        pc.modelMat  = world;
+        pc.mvp       = mvp;
+        pc.modelMat  = model;
         pc.sunDir    = glm::vec4(sunDir, n.isEmissive ? 1.0f : 0.0f);
         pc.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, n.emissiveScale);
 
@@ -300,7 +304,7 @@ void GltfModel::drawNode(vk::CommandBuffer  cmd,
     }
 
     for (int ci : n.children)
-        drawNode(cmd, layout, ci, world, sunDir);
+        drawNode(cmd, layout, ci, mvp, model, sunDir);
 }
 
 } // namespace apeiron::render

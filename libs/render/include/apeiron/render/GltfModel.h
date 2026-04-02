@@ -60,12 +60,14 @@ public:
     void setNodeVisible(std::string_view name, bool visible);
     void setNodeScale  (std::string_view name, float scale);
 
-    // Draw the full model with the given root transform.
+    // Draw the full model with the given root model matrix.
     // Must be called inside an active render pass that is compatible with MeshPipeline.
+    // vp: view-projection matrix.  rootModel: world transform for the model root.
     // sunDirWorld: unit vector toward the sun in world space.
     void draw(vk::CommandBuffer       cmd,
               const MeshPipeline&     pipeline,
-              const glm::mat4&        rootTransform,
+              const glm::mat4&        vp,
+              const glm::mat4&        rootModel,
               const glm::vec3&        sunDirWorld) const;
 
     // Bounding sphere radius in model space (useful for camera framing).
@@ -78,7 +80,8 @@ private:
     void drawNode(vk::CommandBuffer       cmd,
                   vk::PipelineLayout      layout,
                   int                     nodeIdx,
-                  const glm::mat4&        parentWorld,
+                  const glm::mat4&        parentMvp,
+                  const glm::mat4&        parentModel,
                   const glm::vec3&        sunDir) const;
 
     std::vector<Mesh>     m_meshes;
