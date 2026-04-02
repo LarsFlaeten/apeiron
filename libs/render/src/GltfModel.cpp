@@ -246,6 +246,25 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
 }
 
 // ---------------------------------------------------------------------------
+// nodeWorldTransform
+// ---------------------------------------------------------------------------
+
+glm::mat4 GltfModel::nodeWorldTransform(std::string_view name) const
+{
+    auto it = m_nameIndex.find(std::string(name));
+    if (it == m_nameIndex.end()) return glm::mat4(1.0f);
+
+    // Walk up the parent chain accumulating transforms.
+    glm::mat4 t(1.0f);
+    int idx = it->second;
+    while (idx >= 0) {
+        t   = nodeLocalTransform(m_nodes[idx]) * t;
+        idx = m_nodes[idx].parentIdx;
+    }
+    return t;
+}
+
+// ---------------------------------------------------------------------------
 // setNodeVisible / setNodeScale
 // ---------------------------------------------------------------------------
 

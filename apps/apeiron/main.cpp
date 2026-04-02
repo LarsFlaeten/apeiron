@@ -43,6 +43,7 @@
 
 #include <cspice/SpiceUsr.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -434,6 +435,11 @@ int main()
             }
         } orbit;
 
+        // Active camera node for Nav view (cycles through cam_* nodes with C key).
+        std::vector<std::string> navCamNodes;
+        int navCamIdx = 0;
+        // Populated after GLB load below.
+
         // Ship inspection orbit camera (F11 view).
         struct ShipOrbit {
             float azimuthDeg   =  45.0f;
@@ -538,6 +544,19 @@ int main()
                 for (const auto& t : orionModel.thrusters)
                     if (!t.exhaustNode.empty())
                         orionGltf.setNodeVisible(t.exhaustNode, false);
+
+                // Collect all cam_* nodes in order.
+                for (const auto& n : orionGltf.nodes())
+                    if (n.name.rfind("cam_", 0) == 0)
+                        navCamNodes.push_back(n.name);
+                std::sort(navCamNodes.begin(), navCamNodes.end());
+                // Put cam_nav_main first.
+                auto mainIt = std::find(navCamNodes.begin(), navCamNodes.end(), "cam_nav_main");
+                if (mainIt != navCamNodes.end())
+                    std::rotate(navCamNodes.begin(), mainIt, mainIt + 1);
+                std::cout << "[Apeiron] Nav cameras:";
+                for (auto& c : navCamNodes) std::cout << " " << c;
+                std::cout << "\n";
             } else {
                 std::cerr << "[Apeiron] WARNING: Orion GLB not found at " << glb << "\n";
             }
@@ -603,7 +622,10 @@ int main()
             double     scrollDelta = 0.0;
             ViewMode*  viewMode    = nullptr;
             double*    simSpeed    = nullptr;
-        } windowState{&renderer, 0.0, &viewMode, &simSpeedTarget};
+            std::vector<std::string>* navCams    = nullptr;
+            int*                      navCamIdx  = nullptr;
+        } windowState{&renderer, 0.0, &viewMode, &simSpeedTarget,
+                      &navCamNodes, &navCamIdx};
 
         bool isFullscreen = false;
         bool needsResize  = false;
@@ -623,6 +645,11 @@ int main()
                 *s->viewMode = ViewMode::MfdFull;
             else if (key == GLFW_KEY_F11)
                 *s->viewMode = ViewMode::ShipInspect;
+            else if (key == GLFW_KEY_C &&
+                     (*s->viewMode == ViewMode::Nav ||
+                      *s->viewMode == ViewMode::MfdFull) &&
+                     !s->navCams->empty())
+                *s->navCamIdx = (*s->navCamIdx + 1) % static_cast<int>(s->navCams->size());
             else if (key == GLFW_KEY_F12)
                 *s->viewMode = ViewMode::Dev;
             else if (key == GLFW_KEY_T) {
@@ -826,20 +853,41 @@ int main()
             // ship inspect needs 0.00001 km (1 cm) to see a 10 m object at 30 m.
             camera.setNear(viewMode == ViewMode::ShipInspect ? 1e-3f : 0.1f);
 
-            // ---- Nav / MfdFull camera: chase-cam rigidly offset from player ship body frame ----
+            // ---- Nav / MfdFull camera: driven by cam_* node from the glTF model ----
             if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull) {
                 auto& ship = *spacecraft[playerIdx];
                 glm::vec3 shipRp = scene.origin().toRenderSpace(
                     earthWorld + ship.position());
 
-                glm::mat3 rot = glm::mat3_cast(glm::fquat(ship.attitude()));
-                glm::vec3 fwd = rot * glm::vec3(1.0f, 0.0f, 0.0f);  // body +X = forward
-                glm::vec3 up  = rot * glm::vec3(0.0f, 0.0f, 1.0f);  // body +Z = up
+                glm::mat3 attRot3 = glm::mat3_cast(glm::fquat(ship.attitude()));
 
-                // Bow camera: placed at the ship centre, looking forward along +X body.
-                camera.setPosition(shipRp);
-                camera.setTarget  (shipRp + fwd);
-                camera.setUp      (up);
+                // rollFix matches the one applied in the draw call.
+                glm::mat4 rollFix = glm::rotate(glm::mat4(1.0f),
+                                                glm::radians(90.0f),
+                                                glm::vec3(1.0f, 0.0f, 0.0f));
+                glm::mat4 shipRot = glm::mat4(glm::mat3(attRot3)) * rollFix;
+
+                if (orionGltf.isLoaded() && !navCamNodes.empty()) {
+                    // Node transform is in metres (model space); directions are unit vectors.
+                    glm::mat4 nodeTf = orionGltf.nodeWorldTransform(navCamNodes[navCamIdx]);
+                    glm::mat4 camWorld = shipRot * nodeTf;
+
+                    // Position: translate to ship, then apply node offset (metres → km).
+                    glm::vec3 pos = shipRp + glm::vec3(camWorld[3]) * 1e-3f;
+                    glm::vec3 fwd = glm::normalize(glm::vec3(camWorld[0]));  // +X = forward
+                    glm::vec3 up  = glm::normalize(glm::vec3(camWorld[2]));  // +Z = up
+
+                    camera.setPosition(pos);
+                    camera.setTarget  (pos + fwd);
+                    camera.setUp      (up);
+                } else {
+                    // Fallback: bow camera at ship centre.
+                    glm::vec3 fwd = glm::mat3(shipRot) * glm::vec3(1.0f, 0.0f, 0.0f);
+                    glm::vec3 up  = glm::mat3(shipRot) * glm::vec3(0.0f, 0.0f, 1.0f);
+                    camera.setPosition(shipRp);
+                    camera.setTarget  (shipRp + fwd);
+                    camera.setUp      (up);
+                }
             }
 
             // ---- F11 ship inspection camera ----
@@ -1144,6 +1192,9 @@ int main()
                     ImGui::Text("1x real-time");
                 else
                     ImGui::Text("%.0fx  [t / T]", simSpeedTarget);
+                if (!navCamNodes.empty())
+                    ImGui::TextColored({0.5f, 0.9f, 0.5f, 0.8f}, "[C] %s",
+                                       navCamNodes[navCamIdx].c_str());
                 ImGui::End();
 
                 // ---- MFD panels — flush to screen left/right edges ----
@@ -1554,8 +1605,14 @@ int main()
                     // The Orion model is in metres; render space is in km → scale by 1e-3.
                     // Body +X is forward in both the physics model and glTF model space.
                     constexpr float kModelToKm = 1e-3f;
+                    // 90° roll correction: Blender model has windows facing -Y,
+                    // physics expects windows facing +Z (orbit normal).
+                    glm::mat4 rollFix = glm::rotate(glm::mat4(1.0f),
+                                                    glm::radians(90.0f),
+                                                    glm::vec3(1.0f, 0.0f, 0.0f));
                     glm::mat4 shipModel = glm::translate(glm::mat4(1.0f), rp)
                                        * glm::mat4(glm::mat3(attRot))
+                                       * rollFix
                                        * glm::scale(glm::mat4(1.0f), glm::vec3(kModelToKm));
 
                     if (orionGltf.isLoaded()) {

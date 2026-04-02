@@ -76,6 +76,10 @@ public:
 
     const std::vector<GltfNode>& nodes() const { return m_nodes; }
 
+    // Returns the local-to-model-root transform for a named node,
+    // or identity if not found.
+    glm::mat4 nodeWorldTransform(std::string_view name) const;
+
 private:
     // Recursively draw a node and its children.
     // boundDoubleSided tracks whether the double-sided pipeline is currently bound,
