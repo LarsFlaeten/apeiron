@@ -775,6 +775,7 @@ int main()
                         if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) desired[3] -= rcsTorque;
                         if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) desired[3] += rcsTorque;
                         orionModel.solveAllocation(desired);
+                        orionModel.stepPWM(frameDt);
                         glm::vec3 F{}, T{};
                         orionModel.accumulateWrench(F, T);
                         shipForce  = glm::dvec3(F);
@@ -1617,11 +1618,9 @@ int main()
                         if (!orionModel.thrusters.empty()) {
                             for (const auto& t : orionModel.thrusters) {
                                 if (t.exhaustNode.empty()) continue;
-                                bool active = t.throttle > 0.01f;
-                                orionGltf.setNodeVisible(t.exhaustNode, active);
-                                if (active)
-                                    orionGltf.setNodeScale(t.exhaustNode,
-                                        t.exhaustScale * t.throttle);
+                                orionGltf.setNodeVisible(t.exhaustNode, t.firing);
+                                if (t.firing)
+                                    orionGltf.setNodeScale(t.exhaustNode, t.exhaustScale);
                             }
                         }
                         orionGltf.draw(renderer.currentCmd(), meshPipeline,

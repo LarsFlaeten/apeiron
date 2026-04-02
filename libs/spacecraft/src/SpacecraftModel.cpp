@@ -157,11 +157,26 @@ void SpacecraftModel::solveAllocation(const Wrench& desired)
     }
 }
 
+void SpacecraftModel::stepPWM(double dt, double pwmPeriod, double minDutyCycle)
+{
+    for (auto& t : thrusters) {
+        if (t.throttle < static_cast<float>(minDutyCycle)) {
+            t.firing   = false;
+            t.pwmPhase = 0.0f;
+            continue;
+        }
+        t.pwmPhase += static_cast<float>(dt);
+        if (t.pwmPhase >= static_cast<float>(pwmPeriod))
+            t.pwmPhase -= static_cast<float>(pwmPeriod);
+        t.firing = (t.pwmPhase < t.throttle * static_cast<float>(pwmPeriod));
+    }
+}
+
 void SpacecraftModel::accumulateWrench(glm::vec3& forceOut, glm::vec3& torqueOut) const
 {
     for (const auto& t : thrusters) {
-        if (t.throttle <= 0.0f) continue;
-        glm::vec3 f   = t.direction * (t.thrustN * t.throttle);
+        if (!t.firing) continue;
+        glm::vec3 f   = t.direction * t.thrustN;
         glm::vec3 arm = t.position - centerOfMass;
         forceOut  += f;
         torqueOut += glm::cross(arm, f);

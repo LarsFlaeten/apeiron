@@ -20,7 +20,9 @@ struct Thruster {
     float         exhaustScale = 1.0f;  // plume scale at full throttle
 
     // Runtime state — set each tick by the control allocator.
-    float throttle = 0.0f;  // [0, 1]
+    float throttle  = 0.0f;  // [0, 1] duty cycle from pseudoinverse
+    float pwmPhase  = 0.0f;  // [0, pwmPeriod) phase accumulator
+    bool  firing    = false; // true when valve is open this tick
 };
 
 } // namespace spacecraft

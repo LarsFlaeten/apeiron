@@ -40,7 +40,14 @@ public:
     // scaled down if the desired wrench exceeds actuator capacity.
     void solveAllocation(const Wrench& desired);
 
-    // Apply the current throttle values as body force + torque.
+    // Advance PWM phase accumulators by dt seconds and update firing state.
+    // Thrusters below minDutyCycle are never fired (avoids chatter).
+    // pwmPeriod: cycle length in seconds (default 0.1 s = 10 Hz).
+    void stepPWM(double dt,
+                 double pwmPeriod    = 0.1,
+                 double minDutyCycle = 0.05);
+
+    // Apply the current firing state as body force + torque.
     // Outputs are in model space, SI units (N and N·m).
     void accumulateWrench(glm::vec3& forceOut, glm::vec3& torqueOut) const;
 
