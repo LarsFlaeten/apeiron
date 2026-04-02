@@ -30,6 +30,7 @@ public:
     void setTarget  (const glm::vec3& target) { m_target   = target; }
     void setUp      (const glm::vec3& up)     { m_up       = up;     }
     void setAspect  (float aspect)            { m_aspect   = aspect; }
+    void setNear    (float near)             { m_near     = near;   }
 
     const glm::vec3& position() const { return m_position; }
     float            near()     const { return m_near;     }

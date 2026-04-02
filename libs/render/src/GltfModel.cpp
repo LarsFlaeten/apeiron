@@ -138,7 +138,12 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
                 std::iota(indices.begin(), indices.end(), 0u);
             }
 
+            bool doubleSided = false;
+            if (prim.materialIndex.has_value())
+                doubleSided = a.materials[prim.materialIndex.value()].doubleSided;
+
             m_meshes.emplace_back(allocator, verts, indices);
+            m_meshDoubleSided.push_back(doubleSided);
         }
     }
 
@@ -202,10 +207,12 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
                               static_cast<float>(trs->scale[2]) };
         }
 
-        // Mesh.
+        // Mesh — record start index and primitive count so all material slots render.
         if (gNode.meshIndex.has_value()) {
             std::size_t mi = gNode.meshIndex.value();
-            n.meshIdx = (mi < gltfMeshToOurIdx.size()) ? gltfMeshToOurIdx[mi] : -1;
+            n.meshIdx   = (mi < gltfMeshToOurIdx.size()) ? gltfMeshToOurIdx[mi] : -1;
+            n.meshCount = (mi < a.meshes.size())
+                          ? static_cast<int>(a.meshes[mi].primitives.size()) : 0;
             if (n.meshIdx >= 0 && n.meshIdx < static_cast<int>(meshEmissive.size())) {
                 n.isEmissive    = meshEmissive[n.meshIdx];
                 n.emissiveScale = meshEmissiveScale[n.meshIdx];
@@ -268,18 +275,21 @@ void GltfModel::draw(vk::CommandBuffer       cmd,
 {
     if (m_meshes.empty()) return;
 
-    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.handle());
+    // Start with the back-face-culled pipeline; drawNode rebinds as needed.
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.handle(false));
+    bool boundDS = false;
 
     for (int ri : m_rootNodes)
-        drawNode(cmd, pipeline.layout(), ri, vp * rootModel, rootModel, sunDirWorld);
+        drawNode(cmd, pipeline, ri, vp * rootModel, rootModel, sunDirWorld, boundDS);
 }
 
 void GltfModel::drawNode(vk::CommandBuffer  cmd,
-                          vk::PipelineLayout layout,
+                          const MeshPipeline& pipeline,
                           int                nodeIdx,
                           const glm::mat4&   parentMvp,
                           const glm::mat4&   parentModel,
-                          const glm::vec3&   sunDir) const
+                          const glm::vec3&   sunDir,
+                          bool&              boundDS) const
 {
     const auto& n = m_nodes[nodeIdx];
     if (!n.visible) return;
@@ -288,23 +298,36 @@ void GltfModel::drawNode(vk::CommandBuffer  cmd,
     glm::mat4 model     = parentModel * nodeLocal;
     glm::mat4 mvp       = parentMvp   * nodeLocal;
 
-    if (n.meshIdx >= 0 && n.meshIdx < static_cast<int>(m_meshes.size())) {
+    if (n.meshIdx >= 0 && n.meshCount > 0) {
+        // Plume quads are double-sided; everything else uses back-face culling.
+        bool ds = (n.name.find("plume") != std::string::npos);
+        if (ds != boundDS) {
+            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.handle(ds));
+            boundDS = ds;
+        }
+
         MeshPushConstants pc{};
         pc.mvp       = mvp;
         pc.modelMat  = model;
         pc.sunDir    = glm::vec4(sunDir, n.isEmissive ? 1.0f : 0.0f);
         pc.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, n.emissiveScale);
 
-        cmd.pushConstants(layout,
+        cmd.pushConstants(pipeline.layout(),
                           vk::ShaderStageFlagBits::eVertex |
                           vk::ShaderStageFlagBits::eFragment,
                           0, sizeof(MeshPushConstants),
                           &pc);
-        m_meshes[n.meshIdx].draw(cmd);
+
+        // Draw all primitives (one per material slot).
+        for (int p = 0; p < n.meshCount; ++p) {
+            int idx = n.meshIdx + p;
+            if (idx < static_cast<int>(m_meshes.size()))
+                m_meshes[idx].draw(cmd);
+        }
     }
 
     for (int ci : n.children)
-        drawNode(cmd, layout, ci, mvp, model, sunDir);
+        drawNode(cmd, pipeline, ci, mvp, model, sunDir, boundDS);
 }
 
 } // namespace apeiron::render

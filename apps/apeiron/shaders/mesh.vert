@@ -20,8 +20,8 @@ void main()
 {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
 
-    // Logarithmic depth (matches planet pipeline).
-    float C_NEAR = 0.1;
+    // Logarithmic depth — matches mesh.frag and is compatible with planet pipeline.
+    float C_NEAR = 1e-3;
     float C_FAR  = 1.0e9;
     float z_eye  = 1.0 / gl_Position.w;  // approximate; corrected in frag
     gl_Position.z = log2(z_eye / C_NEAR) / log2(C_FAR / C_NEAR) * gl_Position.w;

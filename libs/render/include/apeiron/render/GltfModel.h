@@ -34,7 +34,8 @@ struct GltfNode {
     glm::vec3               translation{0.0f};
     glm::quat               rotation   {1.0f, 0.0f, 0.0f, 0.0f};
     glm::vec3               scale      {1.0f};
-    int                     meshIdx    = -1;   // index into m_meshes; -1 = no mesh
+    int                     meshIdx    = -1;   // first index into m_meshes; -1 = no mesh
+    int                     meshCount  =  0;   // number of primitives (usually 1)
 
     // Runtime state (toggled by caller each frame).
     bool  visible       = true;
@@ -77,14 +78,18 @@ public:
 
 private:
     // Recursively draw a node and its children.
+    // boundDoubleSided tracks whether the double-sided pipeline is currently bound,
+    // to avoid redundant pipeline rebinds.
     void drawNode(vk::CommandBuffer       cmd,
-                  vk::PipelineLayout      layout,
+                  const MeshPipeline&     pipeline,
                   int                     nodeIdx,
                   const glm::mat4&        parentMvp,
                   const glm::mat4&        parentModel,
-                  const glm::vec3&        sunDir) const;
+                  const glm::vec3&        sunDir,
+                  bool&                   boundDoubleSided) const;
 
     std::vector<Mesh>     m_meshes;
+    std::vector<bool>     m_meshDoubleSided;  // parallel to m_meshes
     std::vector<GltfNode> m_nodes;
     std::vector<int>      m_rootNodes;   // top-level node indices
 

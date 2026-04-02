@@ -12,7 +12,9 @@ layout(push_constant) uniform PC {
     vec4  baseColor; // w = emissive intensity
 } pc;
 
-const float C_NEAR = 0.1;
+// C_NEAR is 1 m in km — covers ship close-up views (camera at ~30 m).
+// Close enough to planet pipeline's 0.1 that depth values are compatible at km distances.
+const float C_NEAR = 1e-3;
 const float C_FAR  = 1.0e9;
 
 void main()

@@ -530,6 +530,14 @@ int main()
                 orionGltf.load(allocator, glb);
                 std::cout << "[Apeiron] Loaded Orion glTF: "
                           << orionGltf.nodes().size() << " nodes\n";
+                // Debug: dump all node names so we can verify plume name matching.
+                for (const auto& n : orionGltf.nodes())
+                    if (!n.name.empty())
+                        std::cout << "  node: \"" << n.name << "\"\n";
+                // Hide all exhaust plume nodes at startup (throttle = 0).
+                for (const auto& t : orionModel.thrusters)
+                    if (!t.exhaustNode.empty())
+                        orionGltf.setNodeVisible(t.exhaustNode, false);
             } else {
                 std::cerr << "[Apeiron] WARNING: Orion GLB not found at " << glb << "\n";
             }
@@ -813,6 +821,10 @@ int main()
                 sunRenderPos = scene.origin().toRenderSpace(
                     bodyInfos[sunIndex].node->worldPosition());
             }
+
+            // Near plane: planet views need 0.1 km (avoids z-fight at orbital distance);
+            // ship inspect needs 0.00001 km (1 cm) to see a 10 m object at 30 m.
+            camera.setNear(viewMode == ViewMode::ShipInspect ? 1e-3f : 0.1f);
 
             // ---- Nav / MfdFull camera: chase-cam rigidly offset from player ship body frame ----
             if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull) {

@@ -75,8 +75,8 @@ MeshPipeline::MeshPipeline(const Context&               ctx,
 
     vk::PipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.setPolygonMode(vk::PolygonMode::eFill)
-              .setCullMode   (vk::CullModeFlagBits::eNone)
-              .setFrontFace  (vk::FrontFace::eCounterClockwise)
+              .setCullMode   (vk::CullModeFlagBits::eBack)
+              .setFrontFace  (vk::FrontFace::eClockwise)
               .setLineWidth  (1.0f);
 
     vk::PipelineMultisampleStateCreateInfo multisampling{};
@@ -127,6 +127,15 @@ MeshPipeline::MeshPipeline(const Context&               ctx,
         throw std::runtime_error("Failed to create mesh pipeline");
     m_pipeline = pipeline;
 
+    // Double-sided variant: identical but with no culling.
+    vk::PipelineRasterizationStateCreateInfo rasterizerDS = rasterizer;
+    rasterizerDS.setCullMode(vk::CullModeFlagBits::eNone);
+    info.setPRasterizationState(&rasterizerDS);
+    auto [resultDS, pipelineDS] = m_ctx.device().createGraphicsPipeline(nullptr, info);
+    if (resultDS != vk::Result::eSuccess)
+        throw std::runtime_error("Failed to create double-sided mesh pipeline");
+    m_pipelineDS = pipelineDS;
+
     m_ctx.device().destroyShaderModule(vert);
     m_ctx.device().destroyShaderModule(frag);
 }
@@ -134,6 +143,7 @@ MeshPipeline::MeshPipeline(const Context&               ctx,
 MeshPipeline::~MeshPipeline()
 {
     m_ctx.device().destroyPipeline      (m_pipeline);
+    m_ctx.device().destroyPipeline      (m_pipelineDS);
     m_ctx.device().destroyPipelineLayout(m_layout);
     // m_renderPass is borrowed from Pipeline — not destroyed here
 }

@@ -34,7 +34,11 @@ public:
     MeshPipeline(const MeshPipeline&)            = delete;
     MeshPipeline& operator=(const MeshPipeline&) = delete;
 
-    vk::Pipeline       handle()     const { return m_pipeline; }
+    // handle(false) = back-face culled (solid geometry)
+    // handle(true)  = no culling (double-sided: flat panels, plumes)
+    vk::Pipeline       handle(bool doubleSided = false) const {
+        return doubleSided ? m_pipelineDS : m_pipeline;
+    }
     vk::PipelineLayout layout()     const { return m_layout;   }
     vk::RenderPass     renderPass() const { return m_renderPass; }
 
@@ -42,9 +46,10 @@ private:
     vk::ShaderModule loadShader(const std::filesystem::path& spvPath);
 
     const Context&   m_ctx;
-    vk::RenderPass   m_renderPass;  // borrowed from mainPipeline (not owned)
+    vk::RenderPass   m_renderPass;   // borrowed from mainPipeline (not owned)
     vk::PipelineLayout m_layout;
-    vk::Pipeline       m_pipeline;
+    vk::Pipeline       m_pipeline;   // back-face culled
+    vk::Pipeline       m_pipelineDS; // double-sided (no culling)
 };
 
 } // namespace apeiron::render
