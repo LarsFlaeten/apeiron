@@ -1619,6 +1619,8 @@ int main()
                             for (const auto& t : orionModel.thrusters) {
                                 if (t.exhaustNode.empty()) continue;
                                 orionGltf.setNodeVisible(t.exhaustNode, t.firing);
+                                orionGltf.setNodeColor(t.exhaustNode,
+                                                       t.plumeColor, t.plumeIntensity);
                             }
                         }
                         orionGltf.draw(renderer.currentCmd(), meshPipeline,

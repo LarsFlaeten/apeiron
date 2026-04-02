@@ -38,8 +38,10 @@ struct GltfNode {
     int                     meshCount  =  0;   // number of primitives (usually 1)
 
     // Runtime state (toggled by caller each frame).
-    bool  visible       = true;
-    float scaleOverride = 0.0f;  // 0 = use node scale; >0 = override (for plumes)
+    bool      visible       = true;
+    float     scaleOverride = 0.0f;    // 0 = use node scale; >0 = override
+    glm::vec3 colorOverride {1.0f};    // plume tint (RGB)
+    float     intensityOverride = 1.0f; // plume emissive intensity
 
     // Material baked into vertex colors at load time.
     // Stored here for reference; not used at runtime.
@@ -58,8 +60,9 @@ public:
     bool isLoaded() const { return !m_meshes.empty(); }
 
     // Per-node control.  No-ops if the name is not found.
-    void setNodeVisible(std::string_view name, bool visible);
-    void setNodeScale  (std::string_view name, float scale);
+    void setNodeVisible  (std::string_view name, bool visible);
+    void setNodeScale    (std::string_view name, float scale);
+    void setNodeColor    (std::string_view name, glm::vec3 color, float intensity);
 
     // Draw the full model with the given root model matrix.
     // Must be called inside an active render pass that is compatible with MeshPipeline.

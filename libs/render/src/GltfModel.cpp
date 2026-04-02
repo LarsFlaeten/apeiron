@@ -282,6 +282,15 @@ void GltfModel::setNodeScale(std::string_view name, float scale)
         m_nodes[it->second].scaleOverride = scale;
 }
 
+void GltfModel::setNodeColor(std::string_view name, glm::vec3 color, float intensity)
+{
+    auto it = m_nameIndex.find(std::string(name));
+    if (it != m_nameIndex.end()) {
+        m_nodes[it->second].colorOverride     = color;
+        m_nodes[it->second].intensityOverride = intensity;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // draw()
 // ---------------------------------------------------------------------------
@@ -337,10 +346,13 @@ void GltfModel::drawNode(vk::CommandBuffer  cmd,
             }
 
             MeshPushConstants pc{};
-            pc.mvp       = mvp;
-            pc.modelMat  = model;
-            pc.sunDir    = glm::vec4(sunDir, n.isEmissive ? 1.0f : 0.0f);
-            pc.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, n.emissiveScale);
+            pc.mvp      = mvp;
+            pc.modelMat = model;
+            pc.sunDir   = glm::vec4(sunDir, n.isEmissive ? 1.0f : 0.0f);
+            if (plumePass)
+                pc.baseColor = glm::vec4(n.colorOverride, n.intensityOverride);
+            else
+                pc.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, n.emissiveScale);
 
             cmd.pushConstants(pipeline.layout(),
                               vk::ShaderStageFlagBits::eVertex |

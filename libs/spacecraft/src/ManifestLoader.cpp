@@ -56,9 +56,12 @@ SpacecraftModel loadManifest(const std::filesystem::path& tomlPath)
         thr.quad      = static_cast<int>(t["quad"].value_or(0LL));
         thr.thrustN   = static_cast<float>(t["thrust_n"].value_or(0.0));
         thr.ispS      = static_cast<float>(t["isp_s"].value_or(0.0));
-        thr.refNode   = t["ref_node"].value_or(std::string{});
+        thr.refNode      = t["ref_node"].value_or(std::string{});
         thr.exhaustNode  = t["exhaust_node"].value_or(std::string{});
-        thr.exhaustScale = static_cast<float>(t["exhaust_scale"].value_or(1.0));
+        thr.exhaustScale    = static_cast<float>(t["exhaust_scale"].value_or(1.0));
+        thr.plumeIntensity  = static_cast<float>(t["plume_intensity"].value_or(1.0));
+        if (auto* col = t["plume_color"].as_array())
+            thr.plumeColor = tomlToVec3(*col, "plume_color");
 
         if (auto* pos = t["position"].as_array())
             thr.position = tomlToVec3(*pos, "position");

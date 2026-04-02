@@ -144,27 +144,33 @@ lines.append("")
 # Type-specific properties
 type_props = {
     "main_engine": {
-        "thrust_n":      25700.0,
-        "isp_s":         316.0,
-        "propellant":    "MMH/MON-3",
-        "gimballed":     "true",
-        "gimbal_axes":   '["pitch", "yaw"]',
+        "thrust_n":       25700.0,
+        "isp_s":          316.0,
+        "propellant":     "MMH/MON-3",
+        "gimballed":      "true",
+        "gimbal_axes":    '["pitch", "yaw"]',
         "gimbal_max_deg": 6.0,
-        "exhaust_scale": 1.0,
+        "exhaust_scale":  1.0,
+        "plume_color":    "[0.6, 0.8, 1.0]",   # blue-white
+        "plume_intensity": 8.0,
     },
     "auxiliary": {
-        "thrust_n":      490.0,
-        "isp_s":         312.0,
-        "propellant":    "MMH/MON-3",
-        "gimballed":     "false",
-        "exhaust_scale": 0.5,
+        "thrust_n":       490.0,
+        "isp_s":          312.0,
+        "propellant":     "MMH/MON-3",
+        "gimballed":      "false",
+        "exhaust_scale":  0.5,
+        "plume_color":    "[1.0, 0.6, 0.2]",   # orange
+        "plume_intensity": 3.0,
     },
     "rcs": {
-        "thrust_n":      220.0,
-        "isp_s":         280.0,
-        "propellant":    "MMH/MON-3",
-        "gimballed":     "false",
-        "exhaust_scale": 0.25,
+        "thrust_n":       220.0,
+        "isp_s":          280.0,
+        "propellant":     "MMH/MON-3",
+        "gimballed":      "false",
+        "exhaust_scale":  0.25,
+        "plume_color":    "[0.7, 0.85, 1.0]",  # cold blue-white
+        "plume_intensity": 1.5,
     },
 }
 
@@ -199,7 +205,9 @@ for (thruster_type, thruster_id, quad, pos, direc, exhaust, ref_name) in thruste
     else:
         lines.append(f'exhaust_node = ""  # WARNING: no mesh child found on ref empty')
 
-    lines.append(f'exhaust_scale = {props["exhaust_scale"]}')
+    lines.append(f'exhaust_scale    = {props["exhaust_scale"]}')
+    lines.append(f'plume_color      = {props["plume_color"]}')
+    lines.append(f'plume_intensity  = {props["plume_intensity"]}')
     lines.append("")
 
 # -----------------------------------------------------------------------------
