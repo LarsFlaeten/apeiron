@@ -2,6 +2,8 @@
 
 #include "apeiron/render/Mesh.h"
 #include "apeiron/render/MeshPipeline.h"
+#include "apeiron/render/Texture.h"
+#include "apeiron/render/Buffer.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -13,7 +15,16 @@
 
 namespace apeiron::render {
 
+class Context;
 class GpuAllocator;
+
+// Per-primitive GPU material: UBO + albedo texture + descriptor set.
+struct GltfMaterial {
+    Buffer            ubo;
+    Texture           albedo;
+    vk::DescriptorSet descSet{};
+    bool              doubleSided = false;
+};
 
 // ---------------------------------------------------------------------------
 // GltfModel
@@ -55,7 +66,8 @@ public:
 
     // Load from a .glb or .gltf file.  Uploads all geometry to GPU immediately.
     // Throws std::runtime_error on failure.
-    void load(GpuAllocator& allocator, const std::filesystem::path& path);
+    void load(const Context& ctx, GpuAllocator& allocator,
+              MeshPipeline& pipeline, const std::filesystem::path& path);
 
     bool isLoaded() const { return !m_meshes.empty(); }
 
@@ -96,10 +108,10 @@ private:
                   bool                    plumePass,
                   bool&                   boundDoubleSided) const;
 
-    std::vector<Mesh>     m_meshes;
-    std::vector<bool>     m_meshDoubleSided;  // parallel to m_meshes
-    std::vector<GltfNode> m_nodes;
-    std::vector<int>      m_rootNodes;   // top-level node indices
+    std::vector<Mesh>         m_meshes;
+    std::vector<GltfMaterial> m_materials;  // parallel to m_meshes (one per primitive)
+    std::vector<GltfNode>     m_nodes;
+    std::vector<int>          m_rootNodes;  // top-level node indices
 
     // name → node index for fast lookup.
     std::unordered_map<std::string, int> m_nameIndex;

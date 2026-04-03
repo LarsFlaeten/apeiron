@@ -31,12 +31,81 @@ vk::ShaderModule MeshPipeline::loadShader(const std::filesystem::path& spvPath)
     return m_ctx.device().createShaderModule(info);
 }
 
+void MeshPipeline::createMaterialDescLayout()
+{
+    // Binding 0: MaterialUBO (vertex + fragment access).
+    vk::DescriptorSetLayoutBinding uboBinding{};
+    uboBinding.setBinding        (0)
+              .setDescriptorType (vk::DescriptorType::eUniformBuffer)
+              .setDescriptorCount(1)
+              .setStageFlags     (vk::ShaderStageFlagBits::eVertex |
+                                  vk::ShaderStageFlagBits::eFragment);
+
+    // Binding 1: albedo texture sampler.
+    vk::DescriptorSetLayoutBinding samplerBinding{};
+    samplerBinding.setBinding        (1)
+                  .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
+                  .setDescriptorCount(1)
+                  .setStageFlags     (vk::ShaderStageFlagBits::eFragment);
+
+    std::array bindings{uboBinding, samplerBinding};
+    vk::DescriptorSetLayoutCreateInfo dslInfo{};
+    dslInfo.setBindings(bindings);
+    m_matDescSetLayout = m_ctx.device().createDescriptorSetLayout(dslInfo);
+
+    // Descriptor pool — allow up to 256 material descriptor sets.
+    // (Orion has ~10 materials; 256 leaves ample headroom for future models.)
+    std::array<vk::DescriptorPoolSize, 2> poolSizes{};
+    poolSizes[0].setType(vk::DescriptorType::eUniformBuffer)        .setDescriptorCount(256);
+    poolSizes[1].setType(vk::DescriptorType::eCombinedImageSampler) .setDescriptorCount(256);
+    vk::DescriptorPoolCreateInfo poolInfo{};
+    poolInfo.setMaxSets   (256)
+            .setPoolSizes (poolSizes);
+    m_matDescPool = m_ctx.device().createDescriptorPool(poolInfo);
+}
+
+vk::DescriptorSet MeshPipeline::allocateMaterialDescSet(vk::Buffer     ubo,
+                                                         vk::DeviceSize uboSize,
+                                                         vk::ImageView  imageView,
+                                                         vk::Sampler    sampler) const
+{
+    vk::DescriptorSetAllocateInfo allocInfo{};
+    allocInfo.setDescriptorPool    (m_matDescPool)
+             .setSetLayouts        (m_matDescSetLayout);
+    auto sets = m_ctx.device().allocateDescriptorSets(allocInfo);
+    vk::DescriptorSet ds = sets[0];
+
+    vk::DescriptorBufferInfo bufInfo{};
+    bufInfo.setBuffer(ubo).setOffset(0).setRange(uboSize);
+
+    vk::DescriptorImageInfo imgInfo{};
+    imgInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+           .setImageView  (imageView)
+           .setSampler    (sampler);
+
+    std::array<vk::WriteDescriptorSet, 2> writes{};
+    writes[0].setDstSet         (ds)
+             .setDstBinding     (0)
+             .setDescriptorType (vk::DescriptorType::eUniformBuffer)
+             .setBufferInfo     (bufInfo);
+    writes[1].setDstSet         (ds)
+             .setDstBinding     (1)
+             .setDescriptorType (vk::DescriptorType::eCombinedImageSampler)
+             .setImageInfo      (imgInfo);
+
+    m_ctx.device().updateDescriptorSets(writes, {});
+    return ds;
+}
+
 MeshPipeline::MeshPipeline(const Context&               ctx,
                              const Pipeline&              mainPipeline,
                              const std::filesystem::path& shaderDir)
     : m_ctx(ctx)
     , m_renderPass(mainPipeline.renderPass())  // borrow — not owned
 {
+    // Material descriptor set layout + pool.
+    createMaterialDescLayout();
+
     // Push-constant range: MeshPushConstants = 160 bytes.
     vk::PushConstantRange pcRange{};
     pcRange.setStageFlags(vk::ShaderStageFlagBits::eVertex |
@@ -44,9 +113,10 @@ MeshPipeline::MeshPipeline(const Context&               ctx,
            .setOffset(0)
            .setSize(sizeof(MeshPushConstants));
 
-    // No descriptor sets — all data is in push constants + vertex attributes.
+    // Set 0 = material descriptor (UBO + albedo sampler).
     vk::PipelineLayoutCreateInfo layoutInfo{};
-    layoutInfo.setPushConstantRanges(pcRange);
+    layoutInfo.setSetLayouts        (m_matDescSetLayout)
+              .setPushConstantRanges(pcRange);
     m_layout = m_ctx.device().createPipelineLayout(layoutInfo);
 
     // Shaders.
@@ -184,10 +254,12 @@ MeshPipeline::MeshPipeline(const Context&               ctx,
 
 MeshPipeline::~MeshPipeline()
 {
-    m_ctx.device().destroyPipeline      (m_pipeline);
-    m_ctx.device().destroyPipeline      (m_pipelineDS);
-    m_ctx.device().destroyPipeline      (m_pipelinePlume);
-    m_ctx.device().destroyPipelineLayout(m_layout);
+    m_ctx.device().destroyPipeline         (m_pipeline);
+    m_ctx.device().destroyPipeline         (m_pipelineDS);
+    m_ctx.device().destroyPipeline         (m_pipelinePlume);
+    m_ctx.device().destroyPipelineLayout   (m_layout);
+    m_ctx.device().destroyDescriptorPool   (m_matDescPool);
+    m_ctx.device().destroyDescriptorSetLayout(m_matDescSetLayout);
     // m_renderPass is borrowed from Pipeline — not destroyed here
 }
 

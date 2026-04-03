@@ -196,6 +196,21 @@ Texture Texture::makeBlack(const Context& ctx, GpuAllocator& allocator)
     return t;
 }
 
+Texture Texture::fromMemory(const Context& ctx, GpuAllocator& allocator,
+                            const uint8_t* data, int byteLen, bool linear)
+{
+    int width{}, height{}, channels{};
+    uint8_t* pixels = stbi_load_from_memory(data, byteLen,
+                                             &width, &height, &channels, STBI_rgb_alpha);
+    if (!pixels)
+        throw std::runtime_error(std::string("Texture::fromMemory stb_image: ")
+                                 + stbi_failure_reason());
+    Texture t;
+    t.upload(ctx, allocator, pixels, width, height, linear);
+    stbi_image_free(pixels);
+    return t;
+}
+
 Texture Texture::makeNeutralNormal(const Context& ctx, GpuAllocator& allocator)
 {
     // (128, 128, 255) decodes to tangent-space (0, 0, 1) — no perturbation.

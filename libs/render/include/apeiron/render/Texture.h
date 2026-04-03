@@ -24,6 +24,13 @@ public:
     static Texture makeBlack        (const Context& ctx, GpuAllocator& allocator); // specular/clouds fallback
     static Texture makeNeutralNormal(const Context& ctx, GpuAllocator& allocator); // normal map fallback (flat)
 
+    // Load from raw image bytes (e.g. embedded GLB data decoded via stb_image).
+    static Texture fromMemory(const Context& ctx, GpuAllocator& allocator,
+                              const uint8_t* data, int byteLen, bool linear = false);
+
+    // Default-constructed Texture is empty (no GPU resources).
+    Texture() = default;
+
     ~Texture();
 
     Texture(Texture&&) noexcept;
@@ -36,8 +43,6 @@ public:
     vk::Sampler   sampler()   const { return m_sampler; }
 
 private:
-    Texture() = default;
-
     void upload(const Context& ctx, GpuAllocator& allocator,
                 const uint8_t* pixels, int width, int height, bool linear = false);
 

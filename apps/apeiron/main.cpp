@@ -533,7 +533,7 @@ int main()
             if (std::filesystem::exists(glb)) {
                 glfwSetWindowTitle(window, "Apeiron — Loading Orion model…");
                 glfwPollEvents();
-                orionGltf.load(allocator, glb);
+                orionGltf.load(ctx, allocator, meshPipeline, glb);
                 std::cout << "[Apeiron] Loaded Orion glTF: "
                           << orionGltf.nodes().size() << " nodes\n";
                 // Hide all exhaust plume nodes at startup (throttle = 0).

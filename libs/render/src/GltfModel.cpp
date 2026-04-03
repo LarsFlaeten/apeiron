@@ -1,6 +1,9 @@
 #include "apeiron/render/GltfModel.h"
 #include "apeiron/render/GpuAllocator.h"
+#include "apeiron/render/Context.h"
 #include "apeiron/render/Vertex.h"
+#include "apeiron/render/Buffer.h"
+#include "apeiron/render/Texture.h"
 
 #include <fastgltf/core.hpp>
 #include <fastgltf/types.hpp>
@@ -36,11 +39,42 @@ static glm::mat4 nodeLocalTransform(const GltfNode& n)
     return t * r * s;
 }
 
+// Extract raw image bytes from a fastgltf image data source.
+// Returns nullptr + 0 if the source is not byte-accessible.
+static const uint8_t* imageBytes(const fastgltf::Asset& a,
+                                  const fastgltf::Image& img,
+                                  std::size_t& outLen)
+{
+    outLen = 0;
+    if (auto* bv = std::get_if<fastgltf::sources::BufferView>(&img.data)) {
+        const auto& view   = a.bufferViews[bv->bufferViewIndex];
+        const auto& buffer = a.buffers[view.bufferIndex];
+        if (auto* arr = std::get_if<fastgltf::sources::Array>(&buffer.data)) {
+            outLen = view.byteLength;
+            return reinterpret_cast<const uint8_t*>(arr->bytes.data()) + view.byteOffset;
+        }
+        if (auto* vec = std::get_if<fastgltf::sources::Vector>(&buffer.data)) {
+            outLen = view.byteLength;
+            return reinterpret_cast<const uint8_t*>(vec->bytes.data()) + view.byteOffset;
+        }
+    }
+    if (auto* arr = std::get_if<fastgltf::sources::Array>(&img.data)) {
+        outLen = arr->bytes.size();
+        return reinterpret_cast<const uint8_t*>(arr->bytes.data());
+    }
+    if (auto* vec = std::get_if<fastgltf::sources::Vector>(&img.data)) {
+        outLen = vec->bytes.size();
+        return reinterpret_cast<const uint8_t*>(vec->bytes.data());
+    }
+    return nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // load()
 // ---------------------------------------------------------------------------
 
-void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
+void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
+                     MeshPipeline& pipeline, const std::filesystem::path& path)
 {
     // Parse.
     fastgltf::Parser parser;
@@ -58,8 +92,40 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
 
     auto& a = asset.get();
 
+    // ---- Pre-load all images into Texture objects ----
+    // We need them when building per-primitive materials below.
+    // Index matches a.images[i].
+    Texture whiteFallback = Texture::makeWhite(ctx, allocator);
+
+    std::vector<std::optional<Texture>> gpuImages;
+    gpuImages.reserve(a.images.size());
+    for (const auto& img : a.images) {
+        std::size_t byteLen = 0;
+        const uint8_t* bytes = imageBytes(a, img, byteLen);
+        if (bytes && byteLen > 0) {
+            try {
+                gpuImages.push_back(
+                    Texture::fromMemory(ctx, allocator,
+                                        bytes, static_cast<int>(byteLen)));
+            } catch (...) {
+                gpuImages.push_back(std::nullopt);
+            }
+        } else {
+            gpuImages.push_back(std::nullopt);
+        }
+    }
+
+    // Helper: resolve TextureInfo → image index (via texture → sampler → source).
+    auto resolveTexImage = [&](std::size_t texIdx) -> int {
+        if (texIdx >= a.textures.size()) return -1;
+        const auto& tex = a.textures[texIdx];
+        if (!tex.imageIndex.has_value()) return -1;
+        return static_cast<int>(tex.imageIndex.value());
+    };
+
     // ---- Build mesh list ----
     m_meshes.reserve(a.meshes.size());
+    m_materials.reserve(a.meshes.size());
 
     for (const auto& gMesh : a.meshes) {
         for (const auto& prim : gMesh.primitives) {
@@ -67,19 +133,28 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
             auto posIt = prim.findAttribute("POSITION");
             if (posIt == prim.attributes.end()) continue;
 
-            // Fetch base colour from material.
+            // ---- Material ----
+            GltfMaterial mat;
             glm::vec3 baseColor{1.0f};
-            bool      isEmissive   = false;
-            float     emissiveScale = 1.0f;
+            float metallic  = 0.0f;
+            float roughness = 1.0f;
+            bool  isEmissive = false;
+            float emissiveScale = 1.0f;
+            int   albedoImgIdx  = -1;
 
             if (prim.materialIndex.has_value()) {
-                const auto& mat = a.materials[prim.materialIndex.value()];
-                auto& bc = mat.pbrData.baseColorFactor;
+                const auto& m = a.materials[prim.materialIndex.value()];
+                mat.doubleSided = m.doubleSided;
+
+                auto& bc = m.pbrData.baseColorFactor;
                 baseColor = { static_cast<float>(bc[0]),
                               static_cast<float>(bc[1]),
                               static_cast<float>(bc[2]) };
+                metallic  = static_cast<float>(m.pbrData.metallicFactor);
+                roughness = static_cast<float>(m.pbrData.roughnessFactor);
 
-                auto& ef = mat.emissiveFactor;
+                // Emissive materials (plumes etc.) keep their old path.
+                auto& ef = m.emissiveFactor;
                 float eLen = glm::length(glm::vec3(static_cast<float>(ef[0]),
                                                     static_cast<float>(ef[1]),
                                                     static_cast<float>(ef[2])));
@@ -88,11 +163,58 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
                     baseColor  = glm::vec3(static_cast<float>(ef[0]),
                                            static_cast<float>(ef[1]),
                                            static_cast<float>(ef[2]));
-                    // emissive strength extension
-                    emissiveScale = mat.emissiveStrength > 0.0f
-                                    ? mat.emissiveStrength : eLen;
+                    emissiveScale = m.emissiveStrength > 0.0f
+                                    ? m.emissiveStrength : eLen;
                 }
+
+                // Base-colour texture.
+                if (m.pbrData.baseColorTexture.has_value())
+                    albedoImgIdx = resolveTexImage(
+                        m.pbrData.baseColorTexture->textureIndex);
             }
+
+            // Upload MaterialUBO.
+            MaterialUBO uboData{};
+            uboData.baseColor = glm::vec4(baseColor, 1.0f);
+            uboData.metallic  = metallic;
+            uboData.roughness = roughness;
+
+            mat.ubo = Buffer(allocator.handle(),
+                             sizeof(MaterialUBO),
+                             vk::BufferUsageFlagBits::eUniformBuffer,
+                             VMA_MEMORY_USAGE_AUTO,
+                             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            mat.ubo.upload(&uboData, sizeof(MaterialUBO));
+
+            // Select albedo texture (or white fallback).
+            vk::ImageView view    = whiteFallback.imageView();
+            vk::Sampler   sampler = whiteFallback.sampler();
+            if (albedoImgIdx >= 0 && albedoImgIdx < static_cast<int>(gpuImages.size())
+                && gpuImages[albedoImgIdx].has_value())
+            {
+                view    = gpuImages[albedoImgIdx]->imageView();
+                sampler = gpuImages[albedoImgIdx]->sampler();
+            }
+
+            mat.descSet = pipeline.allocateMaterialDescSet(
+                mat.ubo.handle(), sizeof(MaterialUBO), view, sampler);
+
+            // Move albedo texture into mat (takes ownership).
+            if (albedoImgIdx >= 0 && albedoImgIdx < static_cast<int>(gpuImages.size())
+                && gpuImages[albedoImgIdx].has_value())
+            {
+                mat.albedo = std::move(gpuImages[albedoImgIdx].value());
+                gpuImages[albedoImgIdx].reset();
+            } else {
+                mat.albedo = std::move(whiteFallback);
+                // Recreate white fallback for the next iteration if needed.
+                whiteFallback = Texture::makeWhite(ctx, allocator);
+            }
+
+            // Bake emissive info into the material for use in drawNode.
+            // We store it alongside the node (set after node build), but we
+            // also need it per-mesh primitive — record in m_meshes' parallel vector.
+            // (We use the existing node.isEmissive path; primitives inherit it.)
 
             // Positions.
             std::vector<glm::vec3> positions;
@@ -118,7 +240,7 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
                 fastgltf::copyFromAccessor<glm::vec2>(a, acc, uvs.data());
             }
 
-            // Build vertex array.
+            // Build vertex array (color channel carries baseColor for emissive path).
             std::vector<Vertex> verts(positions.size());
             for (std::size_t i = 0; i < positions.size(); ++i) {
                 verts[i].position = positions[i];
@@ -138,37 +260,24 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
                 std::iota(indices.begin(), indices.end(), 0u);
             }
 
-            bool doubleSided = false;
-            if (prim.materialIndex.has_value())
-                doubleSided = a.materials[prim.materialIndex.value()].doubleSided;
-
             m_meshes.emplace_back(allocator, verts, indices);
-            m_meshDoubleSided.push_back(doubleSided);
+            m_materials.push_back(std::move(mat));
+
+            // Stash emissive info for the per-primitive emissive array (built below).
+            (void)isEmissive;
+            (void)emissiveScale;
         }
     }
 
-    // ---- Build node tree ----
-    // We need a mapping from glTF mesh index → our mesh list index.
-    // Our mesh list is a flat list of primitives (one per primitive across all meshes).
-    // For simplicity, map glTF mesh index → first primitive index in our list.
-    std::vector<int> gltfMeshToOurIdx(a.meshes.size(), -1);
-    {
-        int ourIdx = 0;
-        for (std::size_t mi = 0; mi < a.meshes.size(); ++mi) {
-            if (!a.meshes[mi].primitives.empty()) {
-                gltfMeshToOurIdx[mi] = ourIdx;
-                ourIdx += static_cast<int>(a.meshes[mi].primitives.size());
-            }
-        }
-    }
-
-    // Also track per-mesh emissive info for nodes.
+    // ---- Track emissive per-primitive (parallel to m_meshes) ----
+    // We need to rebuild this now that we've restructured the loop.
     std::vector<bool>  meshEmissive(m_meshes.size(), false);
     std::vector<float> meshEmissiveScale(m_meshes.size(), 1.0f);
     {
         int idx = 0;
         for (const auto& gMesh : a.meshes) {
             for (const auto& prim : gMesh.primitives) {
+                if (idx >= static_cast<int>(m_meshes.size())) break;
                 if (prim.materialIndex.has_value()) {
                     const auto& mat = a.materials[prim.materialIndex.value()];
                     auto& ef = mat.emissiveFactor;
@@ -186,6 +295,18 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
         }
     }
 
+    // ---- Build node tree ----
+    std::vector<int> gltfMeshToOurIdx(a.meshes.size(), -1);
+    {
+        int ourIdx = 0;
+        for (std::size_t mi = 0; mi < a.meshes.size(); ++mi) {
+            if (!a.meshes[mi].primitives.empty()) {
+                gltfMeshToOurIdx[mi] = ourIdx;
+                ourIdx += static_cast<int>(a.meshes[mi].primitives.size());
+            }
+        }
+    }
+
     m_nodes.resize(a.nodes.size());
     for (std::size_t ni = 0; ni < a.nodes.size(); ++ni) {
         const auto& gNode = a.nodes[ni];
@@ -193,7 +314,6 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
 
         n.name = gNode.name;
 
-        // Transform (fastgltf decomposes matrices into TRS via DecomposeNodeMatrices).
         if (auto* trs = std::get_if<fastgltf::TRS>(&gNode.transform)) {
             n.translation = { static_cast<float>(trs->translation[0]),
                               static_cast<float>(trs->translation[1]),
@@ -207,7 +327,6 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
                               static_cast<float>(trs->scale[2]) };
         }
 
-        // Mesh — record start index and primitive count so all material slots render.
         if (gNode.meshIndex.has_value()) {
             std::size_t mi = gNode.meshIndex.value();
             n.meshIdx   = (mi < gltfMeshToOurIdx.size()) ? gltfMeshToOurIdx[mi] : -1;
@@ -219,7 +338,6 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
             }
         }
 
-        // Children — set children list; parent filled in pass 2.
         for (auto childIdx : gNode.children)
             n.children.push_back(static_cast<int>(childIdx));
     }
@@ -239,9 +357,6 @@ void GltfModel::load(GpuAllocator& allocator, const std::filesystem::path& path)
         if (!m_nodes[ni].name.empty())
             m_nameIndex[m_nodes[ni].name] = ni;
 
-    // Bounding radius — scan all positions loaded into m_meshes' vertices.
-    // For now use a conservative fallback; a proper scan would require Mesh to
-    // expose its vertex buffer, which we avoid for simplicity.
     m_boundingRadius = 5.0f;
 }
 
@@ -254,7 +369,6 @@ glm::mat4 GltfModel::nodeWorldTransform(std::string_view name) const
     auto it = m_nameIndex.find(std::string(name));
     if (it == m_nameIndex.end()) return glm::mat4(1.0f);
 
-    // Walk up the parent chain accumulating transforms.
     glm::mat4 t(1.0f);
     int idx = it->second;
     while (idx >= 0) {
@@ -265,7 +379,7 @@ glm::mat4 GltfModel::nodeWorldTransform(std::string_view name) const
 }
 
 // ---------------------------------------------------------------------------
-// setNodeVisible / setNodeScale
+// setNodeVisible / setNodeScale / setNodeColor
 // ---------------------------------------------------------------------------
 
 void GltfModel::setNodeVisible(std::string_view name, bool visible)
@@ -337,9 +451,7 @@ void GltfModel::drawNode(vk::CommandBuffer  cmd,
     if (n.meshIdx >= 0 && n.meshCount > 0) {
         bool isPlume = (n.name.find("plume") != std::string::npos);
 
-        // Each pass only draws its own type.
         if (isPlume == plumePass) {
-            // Rebind pipeline only when it changes (opaque pass may toggle DS).
             if (!plumePass && isPlume != boundDS) {
                 cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.handle(false));
                 boundDS = false;
@@ -362,8 +474,30 @@ void GltfModel::drawNode(vk::CommandBuffer  cmd,
 
             for (int p = 0; p < n.meshCount; ++p) {
                 int idx = n.meshIdx + p;
-                if (idx < static_cast<int>(m_meshes.size()))
-                    m_meshes[idx].draw(cmd);
+                if (idx >= static_cast<int>(m_meshes.size())) break;
+
+                // Bind material descriptor set (UBO + albedo) for this primitive.
+                // Plume pass uses push-constant colour only — still bind a valid set
+                // so the shader can sample (result ignored for plumes).
+                if (idx < static_cast<int>(m_materials.size())
+                    && m_materials[idx].descSet)
+                {
+                    // Switch to DS pipeline if this primitive is double-sided.
+                    if (!plumePass) {
+                        bool wantDS = m_materials[idx].doubleSided;
+                        if (wantDS != boundDS) {
+                            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                             pipeline.handle(wantDS));
+                            boundDS = wantDS;
+                        }
+                    }
+
+                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                           pipeline.layout(), 0,
+                                           m_materials[idx].descSet, {});
+                }
+
+                m_meshes[idx].draw(cmd);
             }
         }
     }
