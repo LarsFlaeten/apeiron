@@ -1,6 +1,7 @@
 add_library(spacecraft STATIC
     src/SpacecraftModel.cpp
     src/ManifestLoader.cpp
+    src/Autopilot.cpp
 )
 
 target_include_directories(spacecraft

@@ -34,6 +34,7 @@
 #include "Spacecraft.h"
 #include "MFD.h"
 #include "OrbitalMFD.h"
+#include "apeiron/spacecraft/Autopilot.h"
 #include "apeiron/spacecraft/ManifestLoader.h"
 #include "apeiron/spacecraft/SpacecraftModel.h"
 
@@ -614,14 +615,15 @@ int main()
 
         // Window state shared between callbacks.
         struct WindowState {
-            apeiron::render::Renderer* renderer;
-            double     scrollDelta = 0.0;
-            ViewMode*  viewMode    = nullptr;
-            double*    simSpeed    = nullptr;
-            std::vector<std::string>* navCams    = nullptr;
-            int*                      navCamIdx  = nullptr;
+            apeiron::render::Renderer*  renderer;
+            double                      scrollDelta = 0.0;
+            ViewMode*                   viewMode    = nullptr;
+            double*                     simSpeed    = nullptr;
+            std::vector<std::string>*   navCams     = nullptr;
+            int*                        navCamIdx   = nullptr;
+            spacecraft::Autopilot*      autopilot   = nullptr;
         } windowState{&renderer, 0.0, &viewMode, &simSpeedTarget,
-                      &navCamNodes, &navCamIdx};
+                      &navCamNodes, &navCamIdx, nullptr};
 
         bool isFullscreen = false;
         bool needsResize  = false;
@@ -648,6 +650,12 @@ int main()
                 *s->navCamIdx = (*s->navCamIdx + 1) % static_cast<int>(s->navCams->size());
             else if (key == GLFW_KEY_F12)
                 *s->viewMode = ViewMode::Dev;
+            else if (key == GLFW_KEY_K && (mods & GLFW_MOD_SHIFT)) {
+                // Shift+K: toggle killrot autopilot.
+                using M = spacecraft::AutopilotMode;
+                s->autopilot->mode = (s->autopilot->mode == M::Killrot)
+                                     ? M::Off : M::Killrot;
+            }
             else if (key == GLFW_KEY_T) {
                 if (mods & GLFW_MOD_SHIFT)
                     *s->simSpeed = std::max(1.0,   *s->simSpeed / 10.0);  // T = slower
@@ -668,6 +676,10 @@ int main()
         auto prevFrameTime = std::chrono::steady_clock::now();
         double prevMouseX{}, prevMouseY{};
         glfwGetCursorPos(window, &prevMouseX, &prevMouseY);
+
+        // Autopilot.
+        spacecraft::Autopilot autopilot;
+        windowState.autopilot = &autopilot;
 
         // For finite-differencing angular rates in the Nav console.
         glm::dvec3 prevAngVelInertial(0.0);
@@ -762,6 +774,8 @@ int main()
                         // ---- Control allocation path (Orion manifest loaded) ----
                         // Orion model space: +X = aft, engine pointing +X.
                         spacecraft::Wrench desired{};
+
+                        // Manual translation always available.
                         if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
                             desired[0] += static_cast<double>(orionModel.thrusters[0].thrustN);
                             mainEngineOn = true;
@@ -772,12 +786,24 @@ int main()
                         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) desired[1] -= rcsThrust;
                         if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) desired[2] += rcsThrust;
                         if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) desired[2] -= rcsThrust;
-                        if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) desired[4] += rcsTorque;
-                        if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) desired[4] -= rcsTorque;
-                        if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) desired[5] += rcsTorque;
-                        if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) desired[5] -= rcsTorque;
-                        if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) desired[3] -= rcsTorque;
-                        if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) desired[3] += rcsTorque;
+
+                        if (autopilot.active()) {
+                            // Autopilot owns the rotation axes — manual torque keys ignored.
+                            auto& ship = *spacecraft[playerIdx];
+                            glm::dquat att     = ship.attitude();
+                            glm::dvec3 w_body  = glm::conjugate(att) * ship.angularVelocity();
+                            spacecraft::Wrench apWrench = autopilot.compute(w_body);
+                            for (int i = 3; i < 6; ++i) desired[i] = apWrench[i];
+                        } else {
+                            // Manual rotation.
+                            if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) desired[4] += rcsTorque;
+                            if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) desired[4] -= rcsTorque;
+                            if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) desired[5] += rcsTorque;
+                            if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) desired[5] -= rcsTorque;
+                            if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) desired[3] -= rcsTorque;
+                            if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) desired[3] += rcsTorque;
+                        }
+
                         orionModel.solveAllocation(desired);
                         orionModel.stepPWM(frameDt);
                         glm::vec3 F{}, T{};
@@ -1038,6 +1064,16 @@ int main()
                 ImGui::Text("Ship mass: %.0f kg", shipMass);
                 ImGui::Separator();
 
+                // Autopilot tuning.
+                ImGui::Text("Autopilot");
+                ImGui::SliderScalar("Kd rot (N·m·s/rad)", ImGuiDataType_Double,
+                    &autopilot.kdRot,
+                    (const double[]){100.0}, (const double[]){200'000.0},
+                    "%.0f", ImGuiSliderFlags_Logarithmic);
+                ImGui::TextDisabled("  τ_settle ≈ %.1f s  (I≈100 000 kg·m²)",
+                    100000.0 / autopilot.kdRot);
+                ImGui::Separator();
+
                 ImGui::Text("Main engine (SPACE)");
                 ImGui::SliderScalar("Main thrust (N)", ImGuiDataType_Double,
                     &mainEngineThrust,
@@ -1105,7 +1141,7 @@ int main()
                     ImGui::Text("Active thrusters:");
                     int activeCount = 0;
                     for (const auto& t : orionModel.thrusters) {
-                        if (t.throttle > 0.01f) {
+                        if (t.throttle >= 0.05f) {  // matches stepPWM minDutyCycle
                             ImGui::TextColored({1.0f, 0.5f, 0.1f, 1.0f},
                                 "  %s  %.0f%%", t.id.c_str(), t.throttle * 100.0f);
                             ++activeCount;
@@ -1379,11 +1415,21 @@ int main()
                         ImGui::TextColored({0.0f, 0.50f, 0.20f, 0.5f}, "  main engine off");
                     ImGui::Separator();
 
-                    // Autopilot mode buttons (wired up later).
-                    ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "Autopilot:");
+                    // Autopilot mode buttons.
+                    bool apKillrot = autopilot.mode == spacecraft::AutopilotMode::Killrot;
+                    ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "AP [⇧K]:");
                     ImGui::SameLine();
-                    ImGui::TextColored({0.6f, 0.6f, 0.6f, 0.6f}, "(coming soon)");
-                    if (ImGui::Button("Kill Rot")) { /* TODO */ }
+                    if (apKillrot)
+                        ImGui::TextColored({0.2f, 1.0f, 0.4f, 1.0f}, "KILLROT");
+                    else
+                        ImGui::TextColored({0.5f, 0.5f, 0.5f, 0.7f}, "off");
+
+                    if (apKillrot)
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
+                    if (ImGui::Button("Kill Rot"))
+                        autopilot.mode = apKillrot ? spacecraft::AutopilotMode::Off
+                                                   : spacecraft::AutopilotMode::Killrot;
+                    if (apKillrot) ImGui::PopStyleColor();
                     ImGui::SameLine();
                     if (ImGui::Button("Prograde")) { /* TODO */ }
                     ImGui::SameLine();
