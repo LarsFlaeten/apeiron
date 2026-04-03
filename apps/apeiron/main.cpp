@@ -669,13 +669,11 @@ int main()
         double prevMouseX{}, prevMouseY{};
         glfwGetCursorPos(window, &prevMouseX, &prevMouseY);
 
-        // For finite-differencing angular and linear rates in the Nav console.
+        // For finite-differencing angular rates in the Nav console.
         glm::dvec3 prevAngVelInertial(0.0);
-        glm::dvec3 prevLinVelKms(0.0);
         float      prevNavDt = 0.016f;
 
-        // Exponential moving averages for Nav console display (τ = 0.15 s).
-        glm::dvec3 emaLinAcc_g(0.0);
+        // Exponential moving averages for angular rates in the Nav console (τ = 0.15 s).
         glm::dvec3 emaAngAcc_degs(0.0);
         glm::dvec3 emaAngVel_degs(0.0);
 
@@ -752,8 +750,9 @@ int main()
             // ---- Thruster input (active in Nav view at 1x only) ----
             // Controls are disabled at time acceleration > 1x — thrust at 1000x makes no sense.
             bool mainEngineOn = false;
+            glm::dvec3 shipForce(0.0);   // body-frame thrust force (N), hoisted for nav console
             {
-                glm::dvec3 shipForce(0.0), shipTorque(0.0);
+                glm::dvec3 shipTorque(0.0);
 
                 if ((viewMode == ViewMode::Nav || viewMode == ViewMode::ShipInspect)
                     && simSpeedTarget <= 1.0
@@ -1270,14 +1269,14 @@ int main()
                         alpha_bod = (w_bod - prevW_bod) / static_cast<double>(prevNavDt);
                     }
 
-                    // Linear acceleration in inertial frame (km/s²) → convert to g.
-                    constexpr double kGInKms2 = 9.80665e-3;  // 1 g in km/s²
-                    glm::dvec3 linVel = ship.velocity();
-                    glm::dvec3 linAcc_g(0.0);
-                    if (prevNavDt > 1e-6f)
-                        linAcc_g = (linVel - prevLinVelKms) / (static_cast<double>(prevNavDt) * kGInKms2);
+                    // Proper (felt) linear acceleration = thruster force / mass in body frame.
+                    // Gravity is free-fall — it contributes zero felt acceleration.
+                    // shipForce is already in body frame (N); divide by mass → m/s², convert to g.
+                    constexpr double kG = 9.80665;  // m/s² per g
+                    glm::dvec3 linAcc_g = shipForce / (shipMass * kG);
 
                     // Prograde error: angle between ship nose (+X body in inertial) and velocity.
+                    glm::dvec3 linVel = ship.velocity();
                     glm::dvec3 noseInertial = att * glm::dvec3(1.0, 0.0, 0.0);
                     double vMag = glm::length(linVel);
                     double progradeErrDeg = 0.0;
@@ -1286,9 +1285,8 @@ int main()
                         progradeErrDeg = std::acos(c) * 180.0 / std::numbers::pi;
                     }
 
-                    // Store for next frame.
+                    // Store for next frame (linear velocity no longer needed for accel).
                     prevAngVelInertial = w_in;
-                    prevLinVelKms      = linVel;
                     prevNavDt          = frameDt;
 
                     // Exponential moving average — τ = 0.15 s smooths ~9 frames at 60 fps.
@@ -1300,9 +1298,8 @@ int main()
                     glm::dvec3 w_degs  = w_bod     * kR2D;
                     glm::dvec3 al_degs = alpha_bod * kR2D;
 
-                    emaAngVel_degs  += emaAlpha * (w_degs     - emaAngVel_degs);
-                    emaAngAcc_degs  += emaAlpha * (al_degs    - emaAngAcc_degs);
-                    emaLinAcc_g     += emaAlpha * (linAcc_g   - emaLinAcc_g);
+                    emaAngVel_degs += emaAlpha * (w_degs  - emaAngVel_degs);
+                    emaAngAcc_degs += emaAlpha * (al_degs - emaAngAcc_degs);
 
                     // Vertical speed (km/s).
                     double vsKms = 0.0;
@@ -1364,10 +1361,10 @@ int main()
                     rowf("α Roll ", "%+7.2f °/s²", emaAngAcc_degs.x);
                     ImGui::Separator();
 
-                    // Linear acceleration.
-                    rowf("Acc X  ", "%+7.3f g", emaLinAcc_g.x);
-                    rowf("Acc Y  ", "%+7.3f g", emaLinAcc_g.y);
-                    rowf("Acc Z  ", "%+7.3f g", emaLinAcc_g.z);
+                    // Proper (felt) acceleration — F/m in body frame, gravity excluded.
+                    rowf("Acc X  ", "%+7.3f g", linAcc_g.x);
+                    rowf("Acc Y  ", "%+7.3f g", linAcc_g.y);
+                    rowf("Acc Z  ", "%+7.3f g", linAcc_g.z);
                     ImGui::Separator();
 
                     // Flight data.
