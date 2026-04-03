@@ -15,6 +15,7 @@ layout(push_constant) uniform PC {
     mat4  modelMat;   // for normal transform (no non-uniform scale assumed)
     vec4  sunDir;     // xyz = direction, w = isEmissive (1.0) or lit (0.0)
     vec4  baseColor;  // rgba multiplier (baked-in material colour)
+    vec4  camPos;     // xyz = camera position in render space (km); used in frag
 } pc;
 
 void main()

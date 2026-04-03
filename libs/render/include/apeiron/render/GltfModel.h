@@ -18,10 +18,10 @@ namespace apeiron::render {
 class Context;
 class GpuAllocator;
 
-// Per-primitive GPU material: UBO + albedo texture + descriptor set.
+// Per-primitive GPU material: UBO + descriptor set.
+// Albedo texture is owned by GltfModel::m_textures (shared across primitives).
 struct GltfMaterial {
     Buffer            ubo;
-    Texture           albedo;
     vk::DescriptorSet descSet{};
     bool              doubleSided = false;
 };
@@ -80,11 +80,13 @@ public:
     // Must be called inside an active render pass that is compatible with MeshPipeline.
     // vp: view-projection matrix.  rootModel: world transform for the model root.
     // sunDirWorld: unit vector toward the sun in world space.
+    // camPosWorld: camera position in the same world space (render space, km).
     void draw(vk::CommandBuffer       cmd,
               const MeshPipeline&     pipeline,
               const glm::mat4&        vp,
               const glm::mat4&        rootModel,
-              const glm::vec3&        sunDirWorld) const;
+              const glm::vec3&        sunDirWorld,
+              const glm::vec3&        camPosWorld) const;
 
     // Bounding sphere radius in model space (useful for camera framing).
     float boundingRadius() const { return m_boundingRadius; }
@@ -105,11 +107,13 @@ private:
                   const glm::mat4&        parentMvp,
                   const glm::mat4&        parentModel,
                   const glm::vec3&        sunDir,
+                  const glm::vec3&        camPos,
                   bool                    plumePass,
                   bool&                   boundDoubleSided) const;
 
     std::vector<Mesh>         m_meshes;
     std::vector<GltfMaterial> m_materials;  // parallel to m_meshes (one per primitive)
+    std::vector<Texture>      m_textures;   // one per glTF image + white fallback at [0]
     std::vector<GltfNode>     m_nodes;
     std::vector<int>          m_rootNodes;  // top-level node indices
 

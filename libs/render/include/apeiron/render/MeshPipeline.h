@@ -11,15 +11,15 @@ class Swapchain;
 class Pipeline;   // for the render pass + HDR framebuffers
 
 // Push-constant block sent to mesh.vert / mesh.frag.
-// Total = 2×mat4 + 2×vec4 = 160 bytes (well within the 128-byte minimum guarantee
-// and within the 256-byte limit guaranteed by Vulkan spec for PC blocks).
+// Total = 2×mat4 + 3×vec4 = 176 bytes (within 256-byte Vulkan spec minimum).
 struct MeshPushConstants {
     glm::mat4 mvp;
     glm::mat4 modelMat;
     glm::vec4 sunDir;    // xyz = direction toward sun, w = isEmissive (1=emissive)
     glm::vec4 baseColor; // xyz = colour tint, w = emissive intensity / plume intensity
+    glm::vec4 camPos;    // xyz = camera world-space position (render space, km); w unused
 };
-static_assert(sizeof(MeshPushConstants) == 160);
+static_assert(sizeof(MeshPushConstants) == 176);
 
 // UBO layout for per-material descriptor set (set 0).
 // Binding 0 = this UBO, binding 1 = albedo sampler2D.

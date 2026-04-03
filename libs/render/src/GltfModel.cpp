@@ -19,6 +19,7 @@
 #include <cstring>
 #include <algorithm>
 #include <numeric>
+#include <iostream>
 
 namespace apeiron::render {
 
@@ -92,35 +93,54 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
 
     auto& a = asset.get();
 
-    // ---- Pre-load all images into Texture objects ----
-    // We need them when building per-primitive materials below.
-    // Index matches a.images[i].
-    Texture whiteFallback = Texture::makeWhite(ctx, allocator);
+    // ---- Pre-load all images into m_textures ----
+    // m_textures[0]   = white 1×1 fallback
+    // m_textures[i+1] = a.images[i] (or white fallback if decode fails)
+    m_textures.reserve(a.images.size() + 1);
+    m_textures.push_back(Texture::makeWhite(ctx, allocator));  // index 0 = fallback
 
-    std::vector<std::optional<Texture>> gpuImages;
-    gpuImages.reserve(a.images.size());
-    for (const auto& img : a.images) {
+    for (std::size_t i = 0; i < a.images.size(); ++i) {
+        const auto& img = a.images[i];
         std::size_t byteLen = 0;
         const uint8_t* bytes = imageBytes(a, img, byteLen);
         if (bytes && byteLen > 0) {
             try {
-                gpuImages.push_back(
+                m_textures.push_back(
                     Texture::fromMemory(ctx, allocator,
                                         bytes, static_cast<int>(byteLen)));
-            } catch (...) {
-                gpuImages.push_back(std::nullopt);
+                std::cout << "[GltfModel] image[" << i << "] \""
+                          << img.name << "\" loaded (" << byteLen << " bytes)\n";
+                continue;
+            } catch (const std::exception& e) {
+                std::cout << "[GltfModel] image[" << i << "] \""
+                          << img.name << "\" decode failed: " << e.what() << "\n";
             }
         } else {
-            gpuImages.push_back(std::nullopt);
+            // Diagnose why bytes are null: print which source variant is active.
+            std::string srcType = "unknown";
+            std::visit([&](const auto& s) {
+                using T = std::decay_t<decltype(s)>;
+                if      constexpr (std::is_same_v<T, fastgltf::sources::BufferView>) srcType = "BufferView";
+                else if constexpr (std::is_same_v<T, fastgltf::sources::URI>)        srcType = "URI";
+                else if constexpr (std::is_same_v<T, fastgltf::sources::Array>)      srcType = "Array";
+                else if constexpr (std::is_same_v<T, fastgltf::sources::Vector>)     srcType = "Vector";
+                else if constexpr (std::is_same_v<T, std::monostate>)                srcType = "monostate(empty)";
+            }, img.data);
+            std::cout << "[GltfModel] image[" << i << "] \""
+                      << img.name << "\" no bytes (source=" << srcType << ")\n";
         }
+        m_textures.push_back(Texture::makeWhite(ctx, allocator));
     }
 
-    // Helper: resolve TextureInfo → image index (via texture → sampler → source).
-    auto resolveTexImage = [&](std::size_t texIdx) -> int {
-        if (texIdx >= a.textures.size()) return -1;
+    // Helper: resolve TextureInfo → m_textures index (0 = white fallback).
+    // glTF image index i maps to m_textures[i+1].
+    auto resolveTexIdx = [&](std::size_t texIdx) -> int {
+        if (texIdx >= a.textures.size()) return 0;
         const auto& tex = a.textures[texIdx];
-        if (!tex.imageIndex.has_value()) return -1;
-        return static_cast<int>(tex.imageIndex.value());
+        if (!tex.imageIndex.has_value()) return 0;
+        int imgIdx = static_cast<int>(tex.imageIndex.value());
+        int mIdx   = imgIdx + 1;
+        return (mIdx < static_cast<int>(m_textures.size())) ? mIdx : 0;
     };
 
     // ---- Build mesh list ----
@@ -140,7 +160,7 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
             float roughness = 1.0f;
             bool  isEmissive = false;
             float emissiveScale = 1.0f;
-            int   albedoImgIdx  = -1;
+            int   texIdx = 0;  // index into m_textures (0 = white fallback)
 
             if (prim.materialIndex.has_value()) {
                 const auto& m = a.materials[prim.materialIndex.value()];
@@ -168,12 +188,18 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
                 }
 
                 // Base-colour texture.
-                if (m.pbrData.baseColorTexture.has_value())
-                    albedoImgIdx = resolveTexImage(
-                        m.pbrData.baseColorTexture->textureIndex);
+                if (m.pbrData.baseColorTexture.has_value()) {
+                    texIdx = resolveTexIdx(m.pbrData.baseColorTexture->textureIndex);
+                    std::cout << "[GltfModel] mat \"" << m.name
+                              << "\" → texIdx=" << texIdx
+                              << " (gltfTex=" << m.pbrData.baseColorTexture->textureIndex << ")\n";
+                } else {
+                    std::cout << "[GltfModel] mat \"" << m.name << "\" → no texture\n";
+                }
             }
 
             // Upload MaterialUBO.
+            // baseColor goes only into the UBO — NOT into vertex color (avoids double-apply).
             MaterialUBO uboData{};
             uboData.baseColor = glm::vec4(baseColor, 1.0f);
             uboData.metallic  = metallic;
@@ -186,35 +212,11 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
                              VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             mat.ubo.upload(&uboData, sizeof(MaterialUBO));
 
-            // Select albedo texture (or white fallback).
-            vk::ImageView view    = whiteFallback.imageView();
-            vk::Sampler   sampler = whiteFallback.sampler();
-            if (albedoImgIdx >= 0 && albedoImgIdx < static_cast<int>(gpuImages.size())
-                && gpuImages[albedoImgIdx].has_value())
-            {
-                view    = gpuImages[albedoImgIdx]->imageView();
-                sampler = gpuImages[albedoImgIdx]->sampler();
-            }
-
+            // Bind texture from shared m_textures (no ownership transfer).
             mat.descSet = pipeline.allocateMaterialDescSet(
-                mat.ubo.handle(), sizeof(MaterialUBO), view, sampler);
-
-            // Move albedo texture into mat (takes ownership).
-            if (albedoImgIdx >= 0 && albedoImgIdx < static_cast<int>(gpuImages.size())
-                && gpuImages[albedoImgIdx].has_value())
-            {
-                mat.albedo = std::move(gpuImages[albedoImgIdx].value());
-                gpuImages[albedoImgIdx].reset();
-            } else {
-                mat.albedo = std::move(whiteFallback);
-                // Recreate white fallback for the next iteration if needed.
-                whiteFallback = Texture::makeWhite(ctx, allocator);
-            }
-
-            // Bake emissive info into the material for use in drawNode.
-            // We store it alongside the node (set after node build), but we
-            // also need it per-mesh primitive — record in m_meshes' parallel vector.
-            // (We use the existing node.isEmissive path; primitives inherit it.)
+                mat.ubo.handle(), sizeof(MaterialUBO),
+                m_textures[texIdx].imageView(),
+                m_textures[texIdx].sampler());
 
             // Positions.
             std::vector<glm::vec3> positions;
@@ -240,12 +242,14 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
                 fastgltf::copyFromAccessor<glm::vec2>(a, acc, uvs.data());
             }
 
-            // Build vertex array (color channel carries baseColor for emissive path).
+            // Vertex color is white — base colour lives in the MaterialUBO to avoid
+            // double-application (material colour × vertex colour × UBO colour).
+            // Emissive colour is handled separately via the node's colorOverride.
             std::vector<Vertex> verts(positions.size());
             for (std::size_t i = 0; i < positions.size(); ++i) {
                 verts[i].position = positions[i];
                 verts[i].normal   = normals[i];
-                verts[i].color    = baseColor;
+                verts[i].color    = glm::vec3(1.0f);
                 verts[i].uv       = uvs[i];
             }
 
@@ -413,7 +417,8 @@ void GltfModel::draw(vk::CommandBuffer       cmd,
                       const MeshPipeline&     pipeline,
                       const glm::mat4&        vp,
                       const glm::mat4&        rootModel,
-                      const glm::vec3&        sunDirWorld) const
+                      const glm::vec3&        sunDirWorld,
+                      const glm::vec3&        camPosWorld) const
 {
     if (m_meshes.empty()) return;
 
@@ -423,13 +428,13 @@ void GltfModel::draw(vk::CommandBuffer       cmd,
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.handle(false));
     bool boundDS = false;
     for (int ri : m_rootNodes)
-        drawNode(cmd, pipeline, ri, mvp, rootModel, sunDirWorld, false, boundDS);
+        drawNode(cmd, pipeline, ri, mvp, rootModel, sunDirWorld, camPosWorld, false, boundDS);
 
     // Pass 2: plumes — reads depth only, additive blend.
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.plumeHandle());
     boundDS = true;
     for (int ri : m_rootNodes)
-        drawNode(cmd, pipeline, ri, mvp, rootModel, sunDirWorld, true, boundDS);
+        drawNode(cmd, pipeline, ri, mvp, rootModel, sunDirWorld, camPosWorld, true, boundDS);
 }
 
 void GltfModel::drawNode(vk::CommandBuffer  cmd,
@@ -438,6 +443,7 @@ void GltfModel::drawNode(vk::CommandBuffer  cmd,
                           const glm::mat4&   parentMvp,
                           const glm::mat4&   parentModel,
                           const glm::vec3&   sunDir,
+                          const glm::vec3&   camPos,
                           bool               plumePass,
                           bool&              boundDS) const
 {
@@ -461,6 +467,7 @@ void GltfModel::drawNode(vk::CommandBuffer  cmd,
             pc.mvp      = mvp;
             pc.modelMat = model;
             pc.sunDir   = glm::vec4(sunDir, n.isEmissive ? 1.0f : 0.0f);
+            pc.camPos   = glm::vec4(camPos, 0.0f);
             if (plumePass)
                 pc.baseColor = glm::vec4(n.colorOverride, n.intensityOverride);
             else
@@ -503,7 +510,7 @@ void GltfModel::drawNode(vk::CommandBuffer  cmd,
     }
 
     for (int ci : n.children)
-        drawNode(cmd, pipeline, ci, mvp, model, sunDir, plumePass, boundDS);
+        drawNode(cmd, pipeline, ci, mvp, model, sunDir, camPos, plumePass, boundDS);
 }
 
 } // namespace apeiron::render

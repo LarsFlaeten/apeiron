@@ -1624,7 +1624,8 @@ int main()
                             }
                         }
                         orionGltf.draw(renderer.currentCmd(), meshPipeline,
-                                       vp, shipModel, scSunDir);
+                                       vp, shipModel, scSunDir,
+                                       camera.position());
                     } else {
                         // Fallback: small emissive sphere.
                         constexpr float kShipRadiusKm = 0.01f;
