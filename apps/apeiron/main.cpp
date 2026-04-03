@@ -674,6 +674,11 @@ int main()
         glm::dvec3 prevLinVelKms(0.0);
         float      prevNavDt = 0.016f;
 
+        // Exponential moving averages for Nav console display (τ = 0.15 s).
+        glm::dvec3 emaLinAcc_g(0.0);
+        glm::dvec3 emaAngAcc_degs(0.0);
+        glm::dvec3 emaAngVel_degs(0.0);
+
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
 
@@ -1286,10 +1291,18 @@ int main()
                     prevLinVelKms      = linVel;
                     prevNavDt          = frameDt;
 
-                    // Convert to °/s and °/s².
+                    // Exponential moving average — τ = 0.15 s smooths ~9 frames at 60 fps.
+                    constexpr double kTau = 0.15;
+                    double emaAlpha = static_cast<double>(frameDt) /
+                                      (static_cast<double>(frameDt) + kTau);
+
                     constexpr double kR2D = 180.0 / std::numbers::pi;
-                    glm::dvec3 w_degs  = w_bod  * kR2D;
+                    glm::dvec3 w_degs  = w_bod     * kR2D;
                     glm::dvec3 al_degs = alpha_bod * kR2D;
+
+                    emaAngVel_degs  += emaAlpha * (w_degs     - emaAngVel_degs);
+                    emaAngAcc_degs  += emaAlpha * (al_degs    - emaAngAcc_degs);
+                    emaLinAcc_g     += emaAlpha * (linAcc_g   - emaLinAcc_g);
 
                     // Vertical speed (km/s).
                     double vsKms = 0.0;
@@ -1340,21 +1353,21 @@ int main()
                     };
 
                     // Rotational rates (body P/Y/R in °/s).
-                    rowf("ω Pitch", "%+7.2f °/s", w_degs.y);
-                    rowf("ω Yaw  ", "%+7.2f °/s", w_degs.z);
-                    rowf("ω Roll ", "%+7.2f °/s", w_degs.x);
+                    rowf("ω Pitch", "%+7.2f °/s", emaAngVel_degs.y);
+                    rowf("ω Yaw  ", "%+7.2f °/s", emaAngVel_degs.z);
+                    rowf("ω Roll ", "%+7.2f °/s", emaAngVel_degs.x);
                     ImGui::Separator();
 
                     // Angular accelerations.
-                    rowf("α Pitch", "%+7.2f °/s²", al_degs.y);
-                    rowf("α Yaw  ", "%+7.2f °/s²", al_degs.z);
-                    rowf("α Roll ", "%+7.2f °/s²", al_degs.x);
+                    rowf("α Pitch", "%+7.2f °/s²", emaAngAcc_degs.y);
+                    rowf("α Yaw  ", "%+7.2f °/s²", emaAngAcc_degs.z);
+                    rowf("α Roll ", "%+7.2f °/s²", emaAngAcc_degs.x);
                     ImGui::Separator();
 
                     // Linear acceleration.
-                    rowf("Acc X  ", "%+7.3f g", linAcc_g.x);
-                    rowf("Acc Y  ", "%+7.3f g", linAcc_g.y);
-                    rowf("Acc Z  ", "%+7.3f g", linAcc_g.z);
+                    rowf("Acc X  ", "%+7.3f g", emaLinAcc_g.x);
+                    rowf("Acc Y  ", "%+7.3f g", emaLinAcc_g.y);
+                    rowf("Acc Z  ", "%+7.3f g", emaLinAcc_g.z);
                     ImGui::Separator();
 
                     // Flight data.
