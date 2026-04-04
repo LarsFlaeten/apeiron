@@ -659,10 +659,16 @@ int main()
             else if (key == GLFW_KEY_F12)
                 *s->viewMode = ViewMode::Dev;
             else if (key == GLFW_KEY_K && (mods & GLFW_MOD_SHIFT)) {
-                // Shift+K: toggle killrot autopilot.
                 using M = spacecraft::AutopilotMode;
-                s->autopilot->mode = (s->autopilot->mode == M::Killrot)
-                                     ? M::Off : M::Killrot;
+                s->autopilot->mode = (s->autopilot->mode == M::Killrot) ? M::Off : M::Killrot;
+            }
+            else if (key == GLFW_KEY_P && (mods & GLFW_MOD_SHIFT)) {
+                using M = spacecraft::AutopilotMode;
+                s->autopilot->mode = (s->autopilot->mode == M::Prograde) ? M::Off : M::Prograde;
+            }
+            else if (key == GLFW_KEY_R && (mods & GLFW_MOD_SHIFT)) {
+                using M = spacecraft::AutopilotMode;
+                s->autopilot->mode = (s->autopilot->mode == M::Retrograde) ? M::Off : M::Retrograde;
             }
             else if (key == GLFW_KEY_T) {
                 if (mods & GLFW_MOD_SHIFT)
@@ -798,13 +804,36 @@ int main()
                         if (autopilot.active()) {
                             // Autopilot owns the rotation axes — manual torque keys ignored.
                             auto& ship = *spacecraft[playerIdx];
-                            glm::dquat att     = ship.attitude();
-                            glm::dvec3 w_body  = glm::conjugate(att) * ship.angularVelocity();
+                            glm::dquat att    = ship.attitude();
+                            glm::dvec3 w_body = glm::conjugate(att) * ship.angularVelocity();
+
+                            // For attitude hold modes, update target each frame.
+                            using M = spacecraft::AutopilotMode;
+                            if (autopilot.mode == M::Prograde || autopilot.mode == M::Retrograde) {
+                                glm::dvec3 r = ship.position();  // km, inertial
+                                glm::dvec3 v = ship.velocity();  // km/s, inertial
+                                glm::dvec3 T = glm::normalize(v);
+                                glm::dvec3 N = glm::normalize(glm::cross(r, v));
+                                glm::dvec3 R = glm::cross(T, N);  // radial outward
+                                // Prograde:  body+X=T, body+Y=nadir(-R), body+Z=N
+                                // Retrograde: body+X=-T, body+Y=zenith(R), body+Z=N
+                                if (autopilot.mode == M::Prograde)
+                                    autopilot.targetAttitude = glm::quat_cast(glm::dmat3(T, -R, N));
+                                else
+                                    autopilot.targetAttitude = glm::quat_cast(glm::dmat3(-T, R, N));
+                                // Feedforward: orbital angular velocity (r × v) / |r|²
+                                glm::dvec3 omegaOrb = glm::cross(r, v) / glm::dot(r, r);
+                                autopilot.omegaFF = glm::dvec3(glm::conjugate(att) * omegaOrb);
+                            }
+
                             bool settleClamp = false;
                             spacecraft::Wrench apWrench = autopilot.compute(
-                                w_body, glm::dvec3(orionModel.inertiaDiag), frameDt, settleClamp);
-                            if (settleClamp)
-                                ship.setAngularVelocity(glm::dvec3(0.0));
+                                att, w_body, glm::dvec3(orionModel.inertiaDiag), frameDt, settleClamp);
+                            if (settleClamp) {
+                                // Clamp to feedforward rate (zero for killrot, orbital rate for attitude hold).
+                                glm::dvec3 w_ff_inertial = att * autopilot.omegaFF;
+                                ship.setAngularVelocity(w_ff_inertial);
+                            }
                             for (int i = 3; i < 6; ++i) desired[i] = apWrench[i];
                         } else {
                             // Manual rotation.
@@ -1077,14 +1106,22 @@ int main()
                 ImGui::Separator();
 
                 // Autopilot tuning.
-                ImGui::Text("Autopilot (bang-bang killrot)");
+                ImGui::Text("Autopilot");
                 ImGui::SliderScalar("Max torque (N·m)", ImGuiDataType_Double,
                     &autopilot.maxTorqueNm,
                     (const double[]){1000.0}, (const double[]){50'000.0},
                     "%.0f", ImGuiSliderFlags_Logarithmic);
-                ImGui::SliderScalar("Deadband (°/s)", ImGuiDataType_Double,
-                    &autopilot.deadband,
-                    (const double[]){0.001}, (const double[]){1.0},
+                ImGui::SliderScalar("RCS authority (N·m)", ImGuiDataType_Double,
+                    &autopilot.rcsAuthorityNm,
+                    (const double[]){100.0}, (const double[]){10'000.0},
+                    "%.0f", ImGuiSliderFlags_Logarithmic);
+                ImGui::SliderScalar("Kd att (s)", ImGuiDataType_Double,
+                    &autopilot.KdAtt,
+                    (const double[]){1.0}, (const double[]){60.0},
+                    "%.1f");
+                ImGui::SliderScalar("Fire threshold (°)", ImGuiDataType_Double,
+                    &autopilot.fireThreshold,
+                    (const double[]){0.001}, (const double[]){0.1},
                     "%.3f", ImGuiSliderFlags_Logarithmic);
                 ImGui::Separator();
 
@@ -1430,24 +1467,29 @@ int main()
                     ImGui::Separator();
 
                     // Autopilot mode buttons.
-                    bool apKillrot = autopilot.mode == spacecraft::AutopilotMode::Killrot;
-                    ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "AP [⇧K]:");
-                    ImGui::SameLine();
-                    if (apKillrot)
-                        ImGui::TextColored({0.2f, 1.0f, 0.4f, 1.0f}, "KILLROT");
-                    else
-                        ImGui::TextColored({0.5f, 0.5f, 0.5f, 0.7f}, "off");
+                    using M = spacecraft::AutopilotMode;
+                    auto apMode = autopilot.mode;
 
-                    if (apKillrot)
-                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
-                    if (ImGui::Button("Kill Rot"))
-                        autopilot.mode = apKillrot ? spacecraft::AutopilotMode::Off
-                                                   : spacecraft::AutopilotMode::Killrot;
-                    if (apKillrot) ImGui::PopStyleColor();
+                    const char* apLabel = "off";
+                    if      (apMode == M::Killrot)   apLabel = "KILLROT";
+                    else if (apMode == M::Prograde)  apLabel = "PROGRADE";
+                    else if (apMode == M::Retrograde) apLabel = "RETROGRADE";
+                    ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "AP:");
                     ImGui::SameLine();
-                    if (ImGui::Button("Prograde")) { /* TODO */ }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Retro")) { /* TODO */ }
+                    ImGui::TextColored(apMode != M::Off
+                        ? ImVec4{0.2f, 1.0f, 0.4f, 1.0f}
+                        : ImVec4{0.5f, 0.5f, 0.5f, 0.7f}, "%s", apLabel);
+
+                    auto apButton = [&](const char* label, M m) {
+                        bool active = apMode == m;
+                        if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
+                        if (ImGui::Button(label)) autopilot.mode = active ? M::Off : m;
+                        if (active) ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                    };
+                    apButton("Kill Rot [⇧K]", M::Killrot);
+                    apButton("Prograde [⇧P]", M::Prograde);
+                    apButton("Retro [⇧R]",    M::Retrograde);
                     ImGui::SameLine();
                     if (ImGui::Button("Nrm+")) { /* TODO */ }
                     ImGui::SameLine();

@@ -1,10 +1,12 @@
 #include "apeiron/spacecraft/Autopilot.h"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace spacecraft {
 
-Wrench Autopilot::compute(const glm::dvec3& omega_body,
+Wrench Autopilot::compute(const glm::dquat& currentAttitude,
+                          const glm::dvec3& omega_body,
                           const glm::dvec3& inertiaDiag,
                           double            dt,
                           bool&             settleClamp)
@@ -18,51 +20,105 @@ Wrench Autopilot::compute(const glm::dvec3& omega_body,
         return w;
     }
 
-    const double omegaMag = glm::length(omega_body);
+    // =========================================================
+    // Killrot
+    // =========================================================
+    if (mode == AutopilotMode::Killrot) {
+        const double omegaMag = glm::length(omega_body);
 
-    // --- Continue an active timed burn ---
-    if (m_timedBurnActive) {
-        if (m_burnTimer > 0.0) {
-            m_burnTimer -= dt;
-            glm::dvec3 tau = maxTorqueNm * m_burnTorqueDir;
+        if (m_timedBurnActive) {
+            if (m_burnTimer > 0.0) {
+                m_burnTimer -= dt;
+                glm::dvec3 tau = maxTorqueNm * m_burnTorqueDir;
+                w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
+                return w;
+            }
+            m_timedBurnActive = false;
+        }
+
+        if (omegaMag < settleClampThreshold) {
+            if (omegaMag > deadband) settleClamp = true;
+            return w;
+        }
+
+        if (omegaMag > timedBurnThreshold) {
+            glm::dvec3 tau = -(maxTorqueNm / omegaMag) * omega_body;
             w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
             return w;
         }
-        m_timedBurnActive = false;
-        // Fall through to re-evaluate ω.
-    }
 
-    // --- Phase 3: settle clamp ---
-    // Below the hardware minimum-impulse floor, directly zero angular velocity.
-    if (omegaMag < settleClampThreshold) {
-        if (omegaMag > deadband)
-            settleClamp = true;  // caller will zero ω this frame
-        return w;
-    }
-
-    // --- Phase 1: bang-bang ---
-    if (omegaMag > timedBurnThreshold) {
-        glm::dvec3 tau = -(maxTorqueNm / omegaMag) * omega_body;
+        // Timed burn
+        glm::dvec3 omegaDir = omega_body / omegaMag;
+        glm::dvec3 od2      = omegaDir * omegaDir;
+        double     I_eff    = od2.x * inertiaDiag.x
+                            + od2.y * inertiaDiag.y
+                            + od2.z * inertiaDiag.z;
+        m_burnTimer       = I_eff * omegaMag / rcsAuthorityNm;
+        m_burnTorqueDir   = -omegaDir;
+        m_timedBurnActive = true;
+        glm::dvec3 tau    = maxTorqueNm * m_burnTorqueDir;
         w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
+        m_burnTimer -= dt;
         return w;
     }
 
-    // --- Phase 2: timed burn ---
-    // Effective inertia along the ω axis (diagonal tensor assumed).
-    glm::dvec3 omegaDir = omega_body / omegaMag;
-    glm::dvec3 od2      = omegaDir * omegaDir;
-    double     I_eff    = od2.x * inertiaDiag.x
-                        + od2.y * inertiaDiag.y
-                        + od2.z * inertiaDiag.z;
+    // =========================================================
+    // Attitude hold (Prograde / Retrograde)
+    // =========================================================
 
-    m_burnTimer       = I_eff * omegaMag / rcsAuthorityNm;
-    m_burnTorqueDir   = -omegaDir;
-    m_timedBurnActive = true;
+    // Attitude error: rotation from current to target, expressed in body frame.
+    // q_err.axis points in the direction we need to rotate, q_err.angle is how far.
+    glm::dquat q_err = glm::conjugate(currentAttitude) * targetAttitude;
+    if (q_err.w < 0.0) q_err = -q_err;  // shortest arc
 
-    // Fire on the first frame of the burn.
-    glm::dvec3 tau = maxTorqueNm * m_burnTorqueDir;
+    const double half_angle  = std::acos(std::clamp(static_cast<double>(q_err.w), -1.0, 1.0));
+    const double error_angle = 2.0 * half_angle;
+    const glm::dvec3 error_axis = (error_angle > 1e-6)
+        ? glm::dvec3(q_err.x, q_err.y, q_err.z) / std::sin(half_angle)
+        : glm::dvec3(1.0, 0.0, 0.0);
+
+    // Rate error in body frame.
+    const glm::dvec3 omega_err = omega_body - omegaFF;
+
+    // Rate component along the error axis (signed — positive = moving toward target).
+    const double omega_along = glm::dot(omega_err, error_axis);
+
+    // Effective inertia along error axis (diagonal tensor).
+    const glm::dvec3 ea2 = error_axis * error_axis;
+    const double I_eff = ea2.x * inertiaDiag.x
+                       + ea2.y * inertiaDiag.y
+                       + ea2.z * inertiaDiag.z;
+
+    // Max angular acceleration available.
+    const double alpha = rcsAuthorityNm / std::max(I_eff, 1.0);
+
+    // Parabolic switch value: positive → accelerate toward target,
+    // negative → brake.  omega_along * |omega_along| / (2α) is the
+    // signed braking distance.
+    const double s = error_angle
+                   - omega_along * std::abs(omega_along) / (2.0 * alpha);
+
+    // Rate components perpendicular to error axis — damp these independently.
+    const glm::dvec3 omega_perp = omega_err - omega_along * error_axis;
+
+    // Coast band: inside deadzone, feedforward carries us.
+    const double residual = std::abs(error_angle) + KdAtt * glm::length(omega_err);
+    if (residual < fireThreshold) {
+        if (glm::length(omega_err) < settleClampThreshold &&
+            glm::length(omega_err) > deadband)
+            settleClamp = true;
+        return w;
+    }
+
+    // Torque direction: parabolic switch along error axis + cross-axis damping.
+    glm::dvec3 tau_dir = std::copysign(1.0, s) * error_axis
+                       - KdAtt * omega_perp;
+    const double tMag = glm::length(tau_dir);
+    if (tMag < 1e-9) return w;
+
+    // Bang-bang: saturate allocator.
+    glm::dvec3 tau = (maxTorqueNm / tMag) * tau_dir;
     w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
-    m_burnTimer -= dt;
     return w;
 }
 
