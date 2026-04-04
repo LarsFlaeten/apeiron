@@ -14,6 +14,8 @@
 #include <draco/core/decoder_buffer.h>
 #include <draco/mesh/mesh.h>
 
+#include <meshoptimizer.h>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -82,9 +84,27 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
                      MeshPipeline& pipeline, const std::filesystem::path& path)
 {
     // Parse.
+    // Enable all extensions we can handle. Extensions requiring external decoders
+    // (Draco, meshopt) are included — their compressed data is decoded below.
+    // Metadata-only extensions (materials, quantization, etc.) are parsed natively.
     fastgltf::Parser parser(
         fastgltf::Extensions::KHR_draco_mesh_compression |
-        fastgltf::Extensions::EXT_texture_webp);
+        fastgltf::Extensions::EXT_meshopt_compression    |
+        fastgltf::Extensions::EXT_texture_webp           |
+        fastgltf::Extensions::KHR_mesh_quantization      |
+        fastgltf::Extensions::KHR_texture_transform      |
+        fastgltf::Extensions::KHR_texture_basisu         |
+        fastgltf::Extensions::KHR_lights_punctual        |
+        fastgltf::Extensions::KHR_materials_unlit        |
+        fastgltf::Extensions::KHR_materials_emissive_strength |
+        fastgltf::Extensions::KHR_materials_specular     |
+        fastgltf::Extensions::KHR_materials_ior          |
+        fastgltf::Extensions::KHR_materials_clearcoat    |
+        fastgltf::Extensions::KHR_materials_transmission |
+        fastgltf::Extensions::KHR_materials_volume       |
+        fastgltf::Extensions::KHR_materials_sheen        |
+        fastgltf::Extensions::KHR_materials_variants     |
+        fastgltf::Extensions::EXT_mesh_gpu_instancing);
 
     auto data = fastgltf::GltfDataBuffer::FromPath(path);
     if (data.error() != fastgltf::Error::None)
@@ -96,9 +116,83 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
 
     auto asset = parser.loadGltf(data.get(), path.parent_path(), kOpts);
     if (asset.error() != fastgltf::Error::None)
-        throw std::runtime_error("fastgltf: parse error in " + path.string());
+        throw std::runtime_error("fastgltf: parse error in " + path.string()
+            + " — " + std::string(fastgltf::getErrorMessage(asset.error())));
 
     auto& a = asset.get();
+
+    // ---- Decompress EXT_meshopt_compression buffer views ----
+    // For each buffer view that carries meshopt compression metadata, decode it
+    // into a fresh fastgltf buffer so that all subsequent iterateAccessor calls
+    // work transparently on the uncompressed data.
+    {
+        // Helper: get raw bytes of a fastgltf buffer.
+        auto bufferBytes = [&](std::size_t bufIdx) -> const uint8_t* {
+            const auto& buf = a.buffers[bufIdx];
+            if (auto* arr = std::get_if<fastgltf::sources::Array>(&buf.data))
+                return reinterpret_cast<const uint8_t*>(arr->bytes.data());
+            if (auto* vec = std::get_if<fastgltf::sources::Vector>(&buf.data))
+                return reinterpret_cast<const uint8_t*>(vec->bytes.data());
+            return nullptr;
+        };
+
+        for (auto& bv : a.bufferViews) {
+            if (!bv.meshoptCompression) continue;
+            const auto& mc = *bv.meshoptCompression;
+
+            const uint8_t* src = bufferBytes(mc.bufferIndex);
+            if (!src) {
+                std::cerr << "[GltfModel] meshopt: cannot access source buffer\n";
+                continue;
+            }
+            src += mc.byteOffset;
+
+            const std::size_t decodedSize = mc.count * mc.byteStride;
+            fastgltf::sources::Vector decoded;
+            decoded.bytes.resize(decodedSize);
+
+            int rc = -1;
+            using Mode = fastgltf::MeshoptCompressionMode;
+            if (mc.mode == Mode::Attributes)
+                rc = meshopt_decodeVertexBuffer(decoded.bytes.data(), mc.count,
+                                                mc.byteStride, src, mc.byteLength);
+            else  // Triangles or Indices
+                rc = meshopt_decodeIndexBuffer(decoded.bytes.data(), mc.count,
+                                               mc.byteStride, src, mc.byteLength);
+
+            if (rc != 0) {
+                std::cerr << "[GltfModel] meshopt: decode failed (rc=" << rc << ")\n";
+                continue;
+            }
+
+            // Apply filter if present.
+            using Filter = fastgltf::MeshoptCompressionFilter;
+            switch (mc.filter) {
+                case Filter::Octahedral:
+                    meshopt_decodeFilterOct(decoded.bytes.data(), mc.count, mc.byteStride);
+                    break;
+                case Filter::Quaternion:
+                    meshopt_decodeFilterQuat(decoded.bytes.data(), mc.count, mc.byteStride);
+                    break;
+                case Filter::Exponential:
+                    meshopt_decodeFilterExp(decoded.bytes.data(), mc.count, mc.byteStride);
+                    break;
+                default: break;
+            }
+
+            // Add decoded bytes as a new buffer and redirect this buffer view to it.
+            fastgltf::Buffer newBuf;
+            newBuf.byteLength = decodedSize;
+            newBuf.data       = std::move(decoded);
+            a.buffers.push_back(std::move(newBuf));
+
+            bv.bufferIndex      = a.buffers.size() - 1;
+            bv.byteOffset       = 0;
+            bv.byteLength       = decodedSize;
+            bv.byteStride       = mc.byteStride;
+            bv.meshoptCompression.reset();
+        }
+    }
 
     // ---- Pre-load all images into m_textures ----
     // m_textures[0]   = white 1×1 fallback

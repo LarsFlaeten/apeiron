@@ -13,6 +13,7 @@
         "fastgltf",
         "draco",
         "libwebp",
+        "meshoptimizer",
         {
             "name": "imgui",
             "features": ["vulkan-binding", "glfw-binding"]

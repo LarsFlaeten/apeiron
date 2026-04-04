@@ -616,13 +616,13 @@ int main()
             }
         }
 
-        // Load ISS glTF model.
+        // Load ISS glTF model — path comes from the TOML [vehicle] glb field.
         apeiron::render::GltfModel issGltf;
         {
-            std::filesystem::path glb =
-                std::filesystem::path(APEIRON_DATA_DIR)
-                / "spacecraft/iss/ISS.glb";
-            if (std::filesystem::exists(glb)) {
+            std::filesystem::path glb = issCfg.glbPath.empty()
+                ? std::filesystem::path{}
+                : std::filesystem::path(APEIRON_DATA_DIR) / issCfg.glbPath;
+            if (!glb.empty() && std::filesystem::exists(glb)) {
                 glfwSetWindowTitle(window, "Apeiron — Loading ISS model…");
                 glfwPollEvents();
                 issGltf.load(ctx, allocator, meshPipeline, glb);
