@@ -36,6 +36,7 @@
 #include "OrbitalMFD.h"
 #include "apeiron/spacecraft/Autopilot.h"
 #include "apeiron/spacecraft/ManifestLoader.h"
+#include "apeiron/spacecraft/OrbitLoader.h"
 #include "apeiron/spacecraft/SpacecraftModel.h"
 
 #include <glm/glm.hpp>
@@ -331,6 +332,51 @@ int main()
         // Index of the spacecraft the player controls / camera follows.
         const size_t playerIdx = 0;
 
+        // ---- ISS — load orbit from TOML, propagate to sim-start epoch ----
+        const size_t issIdx = 1;
+        spacecraft::OrbitConfig issCfg;
+        {
+            std::filesystem::path toml =
+                std::filesystem::path(APEIRON_DATA_DIR)
+                / "spacecraft/iss/iss_orbit.toml";
+            if (std::filesystem::exists(toml)) {
+                issCfg = spacecraft::loadOrbitConfig(toml);
+                std::cout << "[Apeiron] Loaded ISS orbit config: "
+                          << issCfg.name << "\n";
+            } else {
+                std::cerr << "[Apeiron] WARNING: ISS orbit TOML not found at "
+                          << toml << "\n";
+            }
+
+            astro::PosState issState = spacecraft::orbitStateAtEt(issCfg.elements, et);
+            glm::dvec3 issR(issState.r);
+            glm::dvec3 issV(issState.v);
+
+            // Initial attitude: prograde-pointing.
+            glm::dvec3 T = glm::normalize(issV);
+            glm::dvec3 N = glm::normalize(glm::cross(issR, issV));
+            glm::dvec3 R = glm::cross(T, N);
+
+            astro::State issSt;
+            issSt.P.r = issR;
+            issSt.P.v = issV;
+            issSt.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
+            issSt.R.w = glm::dvec3(0.0);
+
+            const double issM = issCfg.massKg > 1.0 ? issCfg.massKg : 420000.0;
+            const glm::dmat3 issInertia = glm::length(issCfg.inertiaDiag) > 0.0
+                ? glm::dmat3(
+                    glm::dvec3(issCfg.inertiaDiag.x, 0, 0),
+                    glm::dvec3(0, issCfg.inertiaDiag.y, 0),
+                    glm::dvec3(0, 0, issCfg.inertiaDiag.z))
+                : glm::dmat3(1.0e10);
+            spacecraft.push_back(std::make_unique<Spacecraft>(issM, issInertia, issSt));
+            spacecraft[issIdx]->addAttractor(earthAttractor);
+
+            std::cout << "[Apeiron] ISS initial position: "
+                      << issR.x << ", " << issR.y << ", " << issR.z << " km\n";
+        }
+
         // MFD apps — updated and rendered every frame in Nav view.
         OrbitalMFD orbitalMFD;
         orbitalMFD.setContext("EARTH", "ECLIPJ2000");
@@ -564,6 +610,23 @@ int main()
                 std::cout << "\n";
             } else {
                 std::cerr << "[Apeiron] WARNING: Orion GLB not found at " << glb << "\n";
+            }
+        }
+
+        // Load ISS glTF model.
+        apeiron::render::GltfModel issGltf;
+        {
+            std::filesystem::path glb =
+                std::filesystem::path(APEIRON_DATA_DIR)
+                / "spacecraft/iss/ISS.glb";
+            if (std::filesystem::exists(glb)) {
+                glfwSetWindowTitle(window, "Apeiron — Loading ISS model…");
+                glfwPollEvents();
+                issGltf.load(ctx, allocator, meshPipeline, glb);
+                std::cout << "[Apeiron] Loaded ISS glTF: "
+                          << issGltf.nodes().size() << " nodes\n";
+            } else {
+                std::cerr << "[Apeiron] WARNING: ISS GLB not found at " << glb << "\n";
             }
         }
 
@@ -1744,27 +1807,33 @@ int main()
                     ? glm::normalize(sunRenderPos - scene.origin().toRenderSpace(earthWorld))
                     : glm::vec3(0.0f, 1.0f, 0.0f);
 
-                for (auto& sc : spacecraft) {
-                    glm::dvec3 worldPos = earthWorld + sc->position();
+                // Helper: draw a fallback emissive sphere for any spacecraft.
+                auto drawFallback = [&](const glm::vec3& rp, const glm::mat3& attRot) {
+                    constexpr float kShipRadiusKm = 0.01f;
+                    glm::mat4 model = glm::translate(glm::mat4(1.0f), rp)
+                                    * glm::mat4(attRot)
+                                    * glm::scale(glm::mat4(1.0f), glm::vec3(kShipRadiusKm));
+                    glm::vec3 viewDir = glm::normalize(camera.position() - rp);
+                    renderer.draw(vp * model, model, scSunDir, viewDir,
+                                  /*emissive=*/true, 1.0f, 0.0f,
+                                  descriptorSets[0], *meshes[0]);
+                };
+
+                // ---- Orion (player) ----
+                {
+                    auto& sc = *spacecraft[playerIdx];
+                    glm::dvec3 worldPos = earthWorld + sc.position();
                     glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
-
-                    glm::mat3 attRot = glm::mat3_cast(glm::fquat(sc->attitude()));
-
-                    // The Orion model is in metres; render space is in km → scale by 1e-3.
-                    // Body +X is forward in both the physics model and glTF model space.
+                    glm::mat3  attRot   = glm::mat3_cast(glm::fquat(sc.attitude()));
                     constexpr float kModelToKm = 1e-3f;
-                    // 90° roll correction: Blender model has windows facing -Y,
-                    // physics expects windows facing +Z (orbit normal).
                     glm::mat4 rollFix = glm::rotate(glm::mat4(1.0f),
                                                     glm::radians(90.0f),
                                                     glm::vec3(1.0f, 0.0f, 0.0f));
                     glm::mat4 shipModel = glm::translate(glm::mat4(1.0f), rp)
-                                       * glm::mat4(glm::mat3(attRot))
+                                       * glm::mat4(attRot)
                                        * rollFix
                                        * glm::scale(glm::mat4(1.0f), glm::vec3(kModelToKm));
-
                     if (orionGltf.isLoaded()) {
-                        // Update plume node visibility and scale from throttles.
                         if (!orionModel.thrusters.empty()) {
                             for (const auto& t : orionModel.thrusters) {
                                 if (t.exhaustNode.empty()) continue;
@@ -1774,18 +1843,29 @@ int main()
                             }
                         }
                         orionGltf.draw(renderer.currentCmd(), meshPipeline,
-                                       vp, shipModel, scSunDir,
-                                       camera.position());
+                                       vp, shipModel, scSunDir, camera.position());
                     } else {
-                        // Fallback: small emissive sphere.
-                        constexpr float kShipRadiusKm = 0.01f;
-                        glm::mat4 model = glm::translate(glm::mat4(1.0f), rp);
-                        model = model * glm::mat4(glm::mat3(attRot));
-                        model = glm::scale(model, glm::vec3(kShipRadiusKm));
-                        glm::vec3 viewDir = glm::normalize(camera.position() - rp);
-                        renderer.draw(vp * model, model, scSunDir, viewDir,
-                                      /*emissive=*/true, 1.0f, 0.0f,
-                                      descriptorSets[0], *meshes[0]);
+                        drawFallback(rp, attRot);
+                    }
+                }
+
+                // ---- ISS ----
+                {
+                    auto& sc = *spacecraft[issIdx];
+                    glm::dvec3 worldPos = earthWorld + sc.position();
+                    glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
+                    glm::mat3  attRot   = glm::mat3_cast(glm::fquat(sc.attitude()));
+                    // ISS model is also in metres; same scale as Orion.
+                    // No roll correction needed until we know the model's orientation.
+                    constexpr float kIssToKm = 1e-3f;
+                    glm::mat4 issModel = glm::translate(glm::mat4(1.0f), rp)
+                                      * glm::mat4(attRot)
+                                      * glm::scale(glm::mat4(1.0f), glm::vec3(kIssToKm));
+                    if (issGltf.isLoaded()) {
+                        issGltf.draw(renderer.currentCmd(), meshPipeline,
+                                     vp, issModel, scSunDir, camera.position());
+                    } else {
+                        drawFallback(rp, attRot);
                     }
                 }
             }

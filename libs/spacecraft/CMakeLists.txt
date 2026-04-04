@@ -2,6 +2,7 @@ add_library(spacecraft STATIC
     src/SpacecraftModel.cpp
     src/ManifestLoader.cpp
     src/Autopilot.cpp
+    src/OrbitLoader.cpp
 )
 
 target_include_directories(spacecraft
@@ -18,6 +19,7 @@ target_link_libraries(spacecraft
         glm::glm
     PRIVATE
         tomlplusplus::tomlplusplus
+        astro
 )
 
 target_compile_features(spacecraft PUBLIC cxx_std_23)
