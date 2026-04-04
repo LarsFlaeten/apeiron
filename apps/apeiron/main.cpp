@@ -848,9 +848,12 @@ int main()
                             if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) desired[3] += rcsTorque;
                         }
 
-                        // Use RCS-only allocation for small corrections to avoid
-                        // aux thruster over-impulse.  Large slews use all thrusters.
-                        if (autopilot.active() && !autopilot.inLargeSlew)
+                        // Use RCS-only allocation for small attitude corrections to avoid
+                        // aux thruster over-impulse.  Fall back to full allocation when:
+                        //   - autopilot is in a large slew, or
+                        //   - a force demand is present (main engine, translation RCS).
+                        const double forceDemand = std::abs(desired[0]) + std::abs(desired[1]) + std::abs(desired[2]);
+                        if (autopilot.active() && !autopilot.inLargeSlew && forceDemand < 1.0)
                             orionModel.solveAllocationRcsOnly(desired);
                         else
                             orionModel.solveAllocation(desired);
