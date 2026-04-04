@@ -312,7 +312,8 @@ TEST_CASE("Autopilot_killrot — check commanded thrust", "[autopilot]")
     for (const auto& c : cases) {
         WARN("\n=== " << c.name << " ===");
         const double dt = 1.0 / 60.0;
-        auto w = ap.compute(c.omega_body, inertiaDiag, dt);
+        bool settleClamp = false;
+        auto w = ap.compute(c.omega_body, inertiaDiag, dt, settleClamp);
         WARN("\n  Computed wrench: [" << w[0] << ", " << w[1] << ", " << w[2] << ", " << w[3] << ", " << w[4] << ", " << w[4] << " ]\n");
         m.solveAllocation(w);
         for (const auto& t : m.thrusters) {

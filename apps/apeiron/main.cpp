@@ -800,8 +800,11 @@ int main()
                             auto& ship = *spacecraft[playerIdx];
                             glm::dquat att     = ship.attitude();
                             glm::dvec3 w_body  = glm::conjugate(att) * ship.angularVelocity();
+                            bool settleClamp = false;
                             spacecraft::Wrench apWrench = autopilot.compute(
-                                w_body, glm::dvec3(orionModel.inertiaDiag), frameDt);
+                                w_body, glm::dvec3(orionModel.inertiaDiag), frameDt, settleClamp);
+                            if (settleClamp)
+                                ship.setAngularVelocity(glm::dvec3(0.0));
                             for (int i = 3; i < 6; ++i) desired[i] = apWrench[i];
                         } else {
                             // Manual rotation.

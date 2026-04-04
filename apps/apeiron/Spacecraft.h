@@ -54,6 +54,11 @@ public:
     glm::dquat attitude()        const { return m_state.R.q; }  // body→inertial
     glm::dvec3 angularVelocity() const { return m_state.R.w; }  // inertial frame
 
+    // Directly set angular velocity (inertial frame).
+    // Used by autopilot settle-clamp to zero residual below the hardware
+    // minimum-impulse floor.
+    void setAngularVelocity(const glm::dvec3& w) { m_state.R.w = w; }
+
     // Derived quantities.
     double altitudeKm(double bodyRadiusKm) const
         { return glm::length(m_state.P.r) - bodyRadiusKm; }

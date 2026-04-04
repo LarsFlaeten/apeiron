@@ -6,9 +6,12 @@ namespace spacecraft {
 
 Wrench Autopilot::compute(const glm::dvec3& omega_body,
                           const glm::dvec3& inertiaDiag,
-                          double            dt)
+                          double            dt,
+                          bool&             settleClamp)
 {
+    settleClamp = false;
     Wrench w{};
+
     if (mode == AutopilotMode::Off) {
         m_timedBurnActive = false;
         m_burnTimer       = 0.0;
@@ -26,11 +29,16 @@ Wrench Autopilot::compute(const glm::dvec3& omega_body,
             return w;
         }
         m_timedBurnActive = false;
-        // Fall through to re-evaluate ω — may trigger another timed burn
-        // if a residual remains above deadband.
+        // Fall through to re-evaluate ω.
     }
 
-    if (omegaMag < deadband) return w;  // settled
+    // --- Phase 3: settle clamp ---
+    // Below the hardware minimum-impulse floor, directly zero angular velocity.
+    if (omegaMag < settleClampThreshold) {
+        if (omegaMag > deadband)
+            settleClamp = true;  // caller will zero ω this frame
+        return w;
+    }
 
     // --- Phase 1: bang-bang ---
     if (omegaMag > timedBurnThreshold) {

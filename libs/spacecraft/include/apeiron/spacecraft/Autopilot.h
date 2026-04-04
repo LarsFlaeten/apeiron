@@ -37,17 +37,23 @@ struct Autopilot {
     double        maxTorqueNm          = 10000.0;  // N·m (saturates allocator)
     double        rcsAuthorityNm       = 2500.0;   // N·m/axis (conservative)
     double        timedBurnThreshold   = 0.035;    // rad/s (~2 °/s)
-    double        deadband             = 0.001;    // rad/s (~0.06 °/s)
+    double        settleClampThreshold = 0.0009;   // rad/s (~0.05 °/s) — below
+                                                   //   this the caller zeros ω
+    double        deadband             = 0.0001;   // rad/s — hysteresis gap so
+                                                   //   clamp doesn't re-trigger
 
     bool active() const { return mode != AutopilotMode::Off; }
 
     // Compute the desired wrench for the current body-frame angular velocity.
     // dt: frame time in seconds (used by the timed-burn phase).
     // inertiaDiag: principal moments of inertia in kg·m² (from SpacecraftModel).
+    // settleClamp [out]: set true when |ω| < deadband and the caller should
+    //   zero angular velocity directly (hardware minimum-impulse floor).
     // Resets internal state when mode is Off.
     Wrench compute(const glm::dvec3& omega_body,
                    const glm::dvec3& inertiaDiag,
-                   double            dt);
+                   double            dt,
+                   bool&             settleClamp);
 
 private:
     bool       m_timedBurnActive = false;
