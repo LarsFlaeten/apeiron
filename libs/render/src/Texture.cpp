@@ -1,12 +1,15 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include <webp/decode.h>
+
 #include "apeiron/render/Texture.h"
 #include "apeiron/render/Buffer.h"
 #include "apeiron/render/Context.h"
 #include "apeiron/render/GpuAllocator.h"
 
 #include <stdexcept>
+#include <cstring>
 
 namespace apeiron::render {
 
@@ -196,18 +199,44 @@ Texture Texture::makeBlack(const Context& ctx, GpuAllocator& allocator)
     return t;
 }
 
+// Detect WebP by its RIFF/WEBP header signature.
+static bool isWebP(const uint8_t* data, int byteLen)
+{
+    return byteLen >= 12 &&
+           std::memcmp(data,     "RIFF", 4) == 0 &&
+           std::memcmp(data + 8, "WEBP", 4) == 0;
+}
+
 Texture Texture::fromMemory(const Context& ctx, GpuAllocator& allocator,
                             const uint8_t* data, int byteLen, bool linear)
 {
-    int width{}, height{}, channels{};
-    uint8_t* pixels = stbi_load_from_memory(data, byteLen,
-                                             &width, &height, &channels, STBI_rgb_alpha);
-    if (!pixels)
-        throw std::runtime_error(std::string("Texture::fromMemory stb_image: ")
-                                 + stbi_failure_reason());
+    int width{}, height{};
+    uint8_t* pixels = nullptr;
+    bool usedWebP = false;
+
+    if (isWebP(data, byteLen)) {
+        pixels = WebPDecodeRGBA(data, static_cast<std::size_t>(byteLen),
+                                &width, &height);
+        if (!pixels)
+            throw std::runtime_error("Texture::fromMemory libwebp: decode failed");
+        usedWebP = true;
+    } else {
+        int channels{};
+        pixels = stbi_load_from_memory(data, byteLen,
+                                       &width, &height, &channels, STBI_rgb_alpha);
+        if (!pixels)
+            throw std::runtime_error(std::string("Texture::fromMemory stb_image: ")
+                                     + stbi_failure_reason());
+    }
+
     Texture t;
     t.upload(ctx, allocator, pixels, width, height, linear);
-    stbi_image_free(pixels);
+
+    if (usedWebP)
+        WebPFree(pixels);
+    else
+        stbi_image_free(pixels);
+
     return t;
 }
 

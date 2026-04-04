@@ -53,13 +53,14 @@ void MeshPipeline::createMaterialDescLayout()
     dslInfo.setBindings(bindings);
     m_matDescSetLayout = m_ctx.device().createDescriptorSetLayout(dslInfo);
 
-    // Descriptor pool — allow up to 256 material descriptor sets.
-    // (Orion has ~10 materials; 256 leaves ample headroom for future models.)
+    // Descriptor pool — allow up to 4096 material descriptor sets.
+    // Large models (e.g. ISS ~555 primitives, Orion ~41) require a pool
+    // large enough to cover all primitives across all loaded models.
     std::array<vk::DescriptorPoolSize, 2> poolSizes{};
-    poolSizes[0].setType(vk::DescriptorType::eUniformBuffer)        .setDescriptorCount(256);
-    poolSizes[1].setType(vk::DescriptorType::eCombinedImageSampler) .setDescriptorCount(256);
+    poolSizes[0].setType(vk::DescriptorType::eUniformBuffer)        .setDescriptorCount(4096);
+    poolSizes[1].setType(vk::DescriptorType::eCombinedImageSampler) .setDescriptorCount(4096);
     vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.setMaxSets   (256)
+    poolInfo.setMaxSets   (4096)
             .setPoolSizes (poolSizes);
     m_matDescPool = m_ctx.device().createDescriptorPool(poolInfo);
 }

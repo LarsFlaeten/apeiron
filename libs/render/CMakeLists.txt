@@ -6,6 +6,8 @@ find_package(Stb REQUIRED)
 find_package(tinyobjloader CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(fastgltf CONFIG REQUIRED)
+find_package(draco CONFIG REQUIRED)
+find_package(WebP CONFIG REQUIRED)
 find_package(glm CONFIG QUIET)
 if(NOT TARGET glm::glm)
     if(TARGET glm)
@@ -51,7 +53,7 @@ target_link_libraries(render
 )
 
 target_include_directories(render PRIVATE ${Stb_INCLUDE_DIR})
-target_link_libraries(render PRIVATE tinyobjloader::tinyobjloader fastgltf::fastgltf)
+target_link_libraries(render PRIVATE tinyobjloader::tinyobjloader fastgltf::fastgltf draco::draco WebP::webp)
 
 target_compile_features(render PUBLIC cxx_std_23)
 

@@ -10,6 +10,10 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/glm_element_traits.hpp>
 
+#include <draco/compression/decode.h>
+#include <draco/core/decoder_buffer.h>
+#include <draco/mesh/mesh.h>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -78,7 +82,10 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
                      MeshPipeline& pipeline, const std::filesystem::path& path)
 {
     // Parse.
-    fastgltf::Parser parser;
+    fastgltf::Parser parser(
+        fastgltf::Extensions::KHR_draco_mesh_compression |
+        fastgltf::Extensions::EXT_texture_webp);
+
     auto data = fastgltf::GltfDataBuffer::FromPath(path);
     if (data.error() != fastgltf::Error::None)
         throw std::runtime_error("fastgltf: cannot read " + path.string());
@@ -134,13 +141,118 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
 
     // Helper: resolve TextureInfo → m_textures index (0 = white fallback).
     // glTF image index i maps to m_textures[i+1].
+    // For EXT_texture_webp textures, imageIndex may be absent; use webpImageIndex.
     auto resolveTexIdx = [&](std::size_t texIdx) -> int {
         if (texIdx >= a.textures.size()) return 0;
         const auto& tex = a.textures[texIdx];
-        if (!tex.imageIndex.has_value()) return 0;
-        int imgIdx = static_cast<int>(tex.imageIndex.value());
+        // Prefer standard imageIndex; fall back to WebP extension image index.
+        std::optional<std::size_t> imgIdxOpt = tex.imageIndex;
+        if (!imgIdxOpt.has_value() && tex.webpImageIndex.has_value())
+            imgIdxOpt = tex.webpImageIndex;
+        if (!imgIdxOpt.has_value()) return 0;
+        int imgIdx = static_cast<int>(imgIdxOpt.value());
         int mIdx   = imgIdx + 1;
         return (mIdx < static_cast<int>(m_textures.size())) ? mIdx : 0;
+    };
+
+    // ---- Draco decode helper ----
+    // Returns decoded positions/normals/uvs/indices for a Draco-compressed primitive.
+    // Leaves vectors unchanged if the primitive is not Draco-compressed.
+    auto decodeDraco = [&](const fastgltf::Primitive& prim,
+                            std::vector<glm::vec3>& positions,
+                            std::vector<glm::vec3>& normals,
+                            std::vector<glm::vec2>& uvs,
+                            std::vector<uint32_t>&  indices) -> bool
+    {
+        if (!prim.dracoCompression) return false;
+
+        const auto& dc  = *prim.dracoCompression;
+        const auto& bv  = a.bufferViews[dc.bufferView];
+        const auto& buf = a.buffers[bv.bufferIndex];
+
+        const uint8_t* compressedData = nullptr;
+        std::size_t    compressedLen  = 0;
+
+        std::visit([&](const auto& src) {
+            using T = std::decay_t<decltype(src)>;
+            if constexpr (std::is_same_v<T, fastgltf::sources::Array>) {
+                compressedData = reinterpret_cast<const uint8_t*>(src.bytes.data()) + bv.byteOffset;
+                compressedLen  = bv.byteLength;
+            } else if constexpr (std::is_same_v<T, fastgltf::sources::Vector>) {
+                compressedData = reinterpret_cast<const uint8_t*>(src.bytes.data()) + bv.byteOffset;
+                compressedLen  = bv.byteLength;
+            }
+        }, buf.data);
+
+        if (!compressedData || compressedLen == 0) {
+            std::cerr << "[GltfModel] Draco: no compressed data in buffer\n";
+            return false;
+        }
+
+        draco::DecoderBuffer decBuf;
+        decBuf.Init(reinterpret_cast<const char*>(compressedData),
+                    static_cast<size_t>(compressedLen));
+
+        draco::Decoder decoder;
+        auto result = decoder.DecodeMeshFromBuffer(&decBuf);
+        if (!result.ok()) {
+            std::cerr << "[GltfModel] Draco decode failed: "
+                      << result.status().error_msg_string() << "\n";
+            return false;
+        }
+        const draco::Mesh* mesh = result.value().get();
+
+        // Positions.
+        const draco::PointAttribute* posAttr =
+            mesh->GetNamedAttribute(draco::GeometryAttribute::POSITION);
+        if (posAttr) {
+            positions.resize(mesh->num_points());
+            for (draco::PointIndex pi(0);
+                 pi < static_cast<uint32_t>(mesh->num_points()); ++pi) {
+                std::array<float, 3> v{};
+                posAttr->GetMappedValue(pi, v.data());
+                positions[pi.value()] = { v[0], v[1], v[2] };
+            }
+        }
+
+        // Normals.
+        const draco::PointAttribute* nrmAttr =
+            mesh->GetNamedAttribute(draco::GeometryAttribute::NORMAL);
+        normals.assign(positions.size(), glm::vec3(0, 1, 0));
+        if (nrmAttr) {
+            for (draco::PointIndex pi(0);
+                 pi < static_cast<uint32_t>(mesh->num_points()); ++pi) {
+                std::array<float, 3> v{};
+                nrmAttr->GetMappedValue(pi, v.data());
+                normals[pi.value()] = { v[0], v[1], v[2] };
+            }
+        }
+
+        // UVs.
+        const draco::PointAttribute* uvAttr =
+            mesh->GetNamedAttribute(draco::GeometryAttribute::TEX_COORD);
+        uvs.assign(positions.size(), glm::vec2(0.0f));
+        if (uvAttr) {
+            for (draco::PointIndex pi(0);
+                 pi < static_cast<uint32_t>(mesh->num_points()); ++pi) {
+                std::array<float, 2> v{};
+                uvAttr->GetMappedValue(pi, v.data());
+                uvs[pi.value()] = { v[0], v[1] };
+            }
+        }
+
+        // Indices from faces.
+        indices.clear();
+        indices.reserve(mesh->num_faces() * 3);
+        for (draco::FaceIndex fi(0);
+             fi < static_cast<uint32_t>(mesh->num_faces()); ++fi) {
+            const auto& face = mesh->face(fi);
+            indices.push_back(face[0].value());
+            indices.push_back(face[1].value());
+            indices.push_back(face[2].value());
+        }
+
+        return true;
     };
 
     // ---- Build mesh list ----
@@ -218,50 +330,53 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
                 m_textures[texIdx].imageView(),
                 m_textures[texIdx].sampler());
 
-            // Positions.
+            // Positions / normals / UVs / indices.
+            // For Draco-compressed primitives the geometry lives in a compressed
+            // buffer view; decodeDraco() fills all four vectors directly.
+            // For uncompressed primitives we read from accessors as normal.
             std::vector<glm::vec3> positions;
-            {
-                auto& acc = a.accessors[posIt->accessorIndex];
-                positions.resize(acc.count);
-                fastgltf::copyFromAccessor<glm::vec3>(a, acc, positions.data());
+            std::vector<glm::vec3> normals;
+            std::vector<glm::vec2> uvs;
+            std::vector<uint32_t>  indices;
+
+            if (!decodeDraco(prim, positions, normals, uvs, indices)) {
+                // Uncompressed path.
+                {
+                    auto& acc = a.accessors[posIt->accessorIndex];
+                    positions.resize(acc.count);
+                    fastgltf::copyFromAccessor<glm::vec3>(a, acc, positions.data());
+                }
+                normals.assign(positions.size(), glm::vec3(0, 1, 0));
+                if (auto nrmIt = prim.findAttribute("NORMAL");
+                    nrmIt != prim.attributes.end()) {
+                    auto& acc = a.accessors[nrmIt->accessorIndex];
+                    fastgltf::copyFromAccessor<glm::vec3>(a, acc, normals.data());
+                }
+                uvs.assign(positions.size(), glm::vec2(0.0f));
+                if (auto uvIt = prim.findAttribute("TEXCOORD_0");
+                    uvIt != prim.attributes.end()) {
+                    auto& acc = a.accessors[uvIt->accessorIndex];
+                    fastgltf::copyFromAccessor<glm::vec2>(a, acc, uvs.data());
+                }
+                if (prim.indicesAccessor.has_value()) {
+                    auto& acc = a.accessors[prim.indicesAccessor.value()];
+                    indices.resize(acc.count);
+                    fastgltf::copyFromAccessor<uint32_t>(a, acc, indices.data());
+                } else {
+                    indices.resize(positions.size());
+                    std::iota(indices.begin(), indices.end(), 0u);
+                }
             }
 
-            // Normals (optional).
-            std::vector<glm::vec3> normals(positions.size(), glm::vec3(0, 1, 0));
-            if (auto nrmIt = prim.findAttribute("NORMAL");
-                nrmIt != prim.attributes.end()) {
-                auto& acc = a.accessors[nrmIt->accessorIndex];
-                fastgltf::copyFromAccessor<glm::vec3>(a, acc, normals.data());
-            }
+            if (positions.empty()) continue;
 
-            // UVs (optional).
-            std::vector<glm::vec2> uvs(positions.size(), glm::vec2(0.0f));
-            if (auto uvIt = prim.findAttribute("TEXCOORD_0");
-                uvIt != prim.attributes.end()) {
-                auto& acc = a.accessors[uvIt->accessorIndex];
-                fastgltf::copyFromAccessor<glm::vec2>(a, acc, uvs.data());
-            }
-
-            // Vertex color is white — base colour lives in the MaterialUBO to avoid
-            // double-application (material colour × vertex colour × UBO colour).
-            // Emissive colour is handled separately via the node's colorOverride.
+            // Vertex color is white — base colour lives in the MaterialUBO.
             std::vector<Vertex> verts(positions.size());
             for (std::size_t i = 0; i < positions.size(); ++i) {
                 verts[i].position = positions[i];
                 verts[i].normal   = normals[i];
                 verts[i].color    = glm::vec3(1.0f);
                 verts[i].uv       = uvs[i];
-            }
-
-            // Indices.
-            std::vector<uint32_t> indices;
-            if (prim.indicesAccessor.has_value()) {
-                auto& acc = a.accessors[prim.indicesAccessor.value()];
-                indices.resize(acc.count);
-                fastgltf::copyFromAccessor<uint32_t>(a, acc, indices.data());
-            } else {
-                indices.resize(verts.size());
-                std::iota(indices.begin(), indices.end(), 0u);
             }
 
             m_meshes.emplace_back(allocator, verts, indices);

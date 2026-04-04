@@ -11,6 +11,8 @@
         "stb",
         "tinyobjloader",
         "fastgltf",
+        "draco",
+        "libwebp",
         {
             "name": "imgui",
             "features": ["vulkan-binding", "glfw-binding"]
