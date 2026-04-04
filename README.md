@@ -130,6 +130,42 @@ Shaders are compiled from GLSL to SPIR-V at build time by `glslc`; paths are bak
 
 ## Planned / backlog
 
+### Spacecraft — visual
+
+| Item | Notes |
+|---|---|
+| CM window lights at night | Interior glow visible on the dark side of orbit |
+| Nav lights / strobes | Running lights + strobe; especially useful near ISS/docking |
+| Ambient lighting from day/night side | Reduce ambient on Orion based on terminator position and planet distance |
+| Shadows + thruster hull glow | Cast shadows on hull; plume light reflected on nearby surfaces |
+| Auto-exposure on camera | Adapt exposure to scene luminance (bright Earth vs deep space) |
+
+### Spacecraft — GNC / controls
+
+| Item | Notes |
+|---|---|
+| Nav console thruster selector | Choose RCS-only or RCS+Aux for manual thrust commands |
+| Autopilot tuning | Prograde/retrograde oscillation damping — may revisit near interplanetary |
+
+### MFD / UI
+
+| Item | Notes |
+|---|---|
+| Orbit MFD fixup | Reference body input box not working; better ref-body illustration |
+| Orbit sync MFD | New module (or extend Orbit MFD) — match orbit with a target body |
+
+### Docking
+
+| Item | Notes |
+|---|---|
+| ISS model | Load existing ISS .glb, place on defined orbit |
+| Docking nav view | New F-key view mode for proximity ops — range, closing rate, alignment |
+| Docking MFD | Rendezvous guidance: phase angle, transfer, proximity |
+| Add docking refs to models | Reference node empties for Orion and ISS docking ports |
+| IDSS docking simulation | Soft + hard capture; active/passive role negotiation |
+
+### Rendering / atmosphere
+
 | Item | Notes |
 |---|---|
 | Multiple scattering | Adds ambient sky fill and inner-limb glow; requires 5-pass Bruneton precompute |
@@ -140,13 +176,12 @@ Shaders are compiled from GLSL to SPIR-V at build time by `glslc`; paths are bak
 | Gas giant atmospheres | Layered cloud-deck model; different from rocky-planet Bruneton |
 | Venus atmosphere | Extremely thick CO₂; needs higher integration step count |
 | Galilean moons | Requires large SPK satellite kernel (~1.1 GB) |
-| Orbital mechanics — propagator | Keplerian / N-body propagation for spacecraft state vectors |
-| Orbital mechanics — maneuvers | Delta-v planning, Hohmann transfers, burn execution |
-| Orbital mechanics — navigation | Orbit determination from simulated sensor data |
-| Orbital mechanics — rendezvous | Proximity operations, docking guidance |
-| Spacecraft — Dragon placeholder | Load Crew Dragon glTF; validate renderer and orbital mechanics |
-| Spacecraft — custom ship | Lifting-body multirole vessel: reentry, hover, landing, docking, space elevator (see `docs/design/spacecraft.md`) |
-| Spacecraft — IDSS docking | Soft + hard capture simulation; active/passive role negotiation |
+
+### Long-term
+
+| Item | Notes |
+|---|---|
+| Spacecraft — custom ship | Lifting-body multirole vessel: reentry, hover, landing, docking, space elevator |
 | Spacecraft — articulation | Engine pod swing, landing leg deploy via glTF animation or runtime bone control |
 | Utility drone / ROV | Astrobee-sized cold-gas vehicle for inspection and proximity ops |
 | Drone Cradle Interface (DCI) | Flush hull mount: hatch animation, latch/release, 28V charge, SpaceWire data |
