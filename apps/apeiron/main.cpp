@@ -707,7 +707,8 @@ int main()
         int  windowedX = 100, windowedY = 100;
 
         glfwSetWindowUserPointer(window, &windowState);
-        glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int mods) {
+        glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int scancode, int action, int mods) {
+            ImGui_ImplGlfw_KeyCallback(w, key, scancode, action, mods);
             if (action != GLFW_PRESS) return;
             auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w));
             if (key == GLFW_KEY_ESCAPE)
@@ -765,12 +766,30 @@ int main()
                 }
             }
         });
-        glfwSetScrollCallback(window, [](GLFWwindow* w, double, double yoff) {
+        glfwSetScrollCallback(window, [](GLFWwindow* w, double xoff, double yoff) {
+            ImGui_ImplGlfw_ScrollCallback(w, xoff, yoff);
             auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w));
-            // Always accumulate scroll so the 3D camera can use it,
-            // even when ImGui reports WantCaptureMouse (the HUD overlay
-            // is non-scrollable, so we own the scroll unconditionally).
             s->scrollDelta += yoff;
+        });
+
+        // Forward remaining events ImGui needs (char input, mouse buttons, cursor).
+        glfwSetCharCallback(window, [](GLFWwindow* w, unsigned int c) {
+            ImGui_ImplGlfw_CharCallback(w, c);
+        });
+        glfwSetMouseButtonCallback(window, [](GLFWwindow* w, int btn, int action, int mods) {
+            ImGui_ImplGlfw_MouseButtonCallback(w, btn, action, mods);
+        });
+        glfwSetCursorPosCallback(window, [](GLFWwindow* w, double x, double y) {
+            ImGui_ImplGlfw_CursorPosCallback(w, x, y);
+        });
+        glfwSetWindowFocusCallback(window, [](GLFWwindow* w, int focused) {
+            ImGui_ImplGlfw_WindowFocusCallback(w, focused);
+        });
+        glfwSetCursorEnterCallback(window, [](GLFWwindow* w, int entered) {
+            ImGui_ImplGlfw_CursorEnterCallback(w, entered);
+        });
+        glfwSetMonitorCallback([](GLFWmonitor* m, int event) {
+            ImGui_ImplGlfw_MonitorCallback(m, event);
         });
 
         // =================================================================

@@ -528,7 +528,9 @@ void Renderer::initImGui(GLFWwindow* window)
     m_imguiPool = device.createDescriptorPool(poolInfo);
 
     ImGui::CreateContext();
-    ImGui_ImplGlfw_InitForVulkan(window, /*install_callbacks=*/true);
+    // Don't let ImGui install its own callbacks — we set them manually in main
+    // and forward to ImGui from there, so both our code and ImGui receive events.
+    ImGui_ImplGlfw_InitForVulkan(window, /*install_callbacks=*/false);
 
     ImGui_ImplVulkan_InitInfo initInfo{};
     initInfo.Instance       = static_cast<VkInstance>       (m_ctx.instance());
