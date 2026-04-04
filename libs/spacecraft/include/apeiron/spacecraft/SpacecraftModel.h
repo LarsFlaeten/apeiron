@@ -41,11 +41,13 @@ public:
     void solveAllocation(const Wrench& desired);
 
     // Advance PWM phase accumulators by dt seconds and update firing state.
-    // Thrusters below minDutyCycle are never fired (avoids chatter).
+    // A thruster is silenced if its throttle < minDutyCycleFraction * max_throttle,
+    // so small but meaningful commands at low authority get through while
+    // negligible cross-couplings on a high-authority manoeuvre are cut.
     // pwmPeriod: cycle length in seconds (default 0.1 s = 10 Hz).
     void stepPWM(double dt,
-                 double pwmPeriod    = 0.1,
-                 double minDutyCycle = 0.05);
+                 double pwmPeriod            = 0.1,
+                 double minDutyCycleFraction = 0.1);
 
     // Apply the current firing state as body force + torque.
     // Outputs are in model space, SI units (N and N·m).

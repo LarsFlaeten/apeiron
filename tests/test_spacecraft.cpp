@@ -3,6 +3,8 @@
 
 #include "apeiron/spacecraft/SpacecraftModel.h"
 #include "apeiron/spacecraft/ManifestLoader.h"
+#include "apeiron/spacecraft/Autopilot.h"
+
 
 #include <glm/glm.hpp>
 #include <cmath>
@@ -17,10 +19,16 @@ using Catch::Matchers::WithinRel;
 // ---------------------------------------------------------------------------
 
 // Build the resultant wrench from current throttle state (ground truth check).
+// Uses throttle directly (not firing) so it works without stepping PWM.
 static Wrench computeActualWrench(const SpacecraftModel& m)
 {
-    glm::vec3 F{}, T{};
-    m.accumulateWrench(F, T);
+    glm::dvec3 F{}, T{};
+    for (const auto& t : m.thrusters) {
+        glm::dvec3 f   = glm::dvec3(t.direction) * static_cast<double>(t.thrustN * t.throttle);
+        glm::dvec3 arm = glm::dvec3(t.position - m.centerOfMass);
+        F += f;
+        T += glm::cross(arm, f);
+    }
     return { F.x, F.y, F.z, T.x, T.y, T.z };
 }
 
@@ -279,3 +287,42 @@ TEST_CASE("Orion — print thruster selection for each demand axis", "[orion][.]
              << "]  T=[" << achieved[3] << "," << achieved[4] << "," << achieved[5] << "]");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Section 4: Autopilot test
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Autopilot_killrot — check commanded thrust", "[autopilot]")
+{
+    Autopilot ap{};
+    ap.mode = AutopilotMode::Killrot;
+
+    if (!std::filesystem::exists(kOrionToml))
+        SKIP("Orion TOML not found at " + kOrionToml.string());
+
+    auto m = loadManifest(kOrionToml);
+    
+    struct Case { const char* name; glm::dvec3 omega_body; };
+    std::vector<Case> cases = {
+        {"Rot +X high",  { glm::radians(2.0), 0, 0}}
+    };
+
+    for (const auto& c : cases) {
+        WARN("\n=== " << c.name << " ===");
+        auto w = ap.compute(c.omega_body);
+        WARN("\n  Computed wrench: [" << w[0] << ", " << w[1] << ", " << w[2] << ", " << w[3] << ", " << w[4] << ", " << w[4] << " ]\n");
+        m.solveAllocation(w);
+        for (const auto& t : m.thrusters) {
+            if (t.throttle > 0.01f) {
+                WARN("  " << t.id << " (q" << t.quad << ")  " << t.throttle * 100.0f << "%");
+            }
+        }
+        auto achieved = computeActualWrench(m);
+        WARN("  Achieved: F=[" << achieved[0] << "," << achieved[1] << "," << achieved[2]
+             << "]  T=[" << achieved[3] << "," << achieved[4] << "," << achieved[5] << "]");
+    }
+        
+}
+
+
+

@@ -18,24 +18,28 @@ enum class AutopilotMode {
 // velocity.  The caller feeds the result straight into SpacecraftModel::
 // solveAllocation() — the autopilot knows nothing about actuators.
 //
-// Gains:
-//   kdRot    N·m·s/rad   Damping gain.  Natural value ≈ I / τ_settle where
-//                        τ_settle is the desired e-folding time in seconds.
-//                        For Orion (I ≈ 100 000 kg·m²) and τ = 5 s → 20 000.
-//   deadband rad/s       Below this |ω| no torque is commanded (prevents
-//                        chatter when nearly stopped).
+// Killrot uses a bang-bang strategy: while |ω| > deadband, command the
+// maximum counter-torque in the -ω direction.  The allocator saturates the
+// thrusters, producing full-strength discrete firings rather than the
+// fractional throttles of proportional control (which are too small for the
+// PWM cycle to produce visible or effective burns).
+//
+//   maxTorqueNm  N·m   Requested torque magnitude — set well above the
+//                      vehicle's actual RCS authority so the allocator always
+//                      saturates.  For Orion RCS (~3 000 N·m/axis) 10 000 is
+//                      a safe ceiling.
+//   deadband     rad/s Below this |ω| no torque is commanded.
 // ---------------------------------------------------------------------------
 struct Autopilot {
-    AutopilotMode mode     = AutopilotMode::Off;
-    double        kdRot    = 20000.0;   // N·m·s/rad
-    double        deadband = 0.002;     // rad/s  (~0.11 °/s)
+    AutopilotMode mode         = AutopilotMode::Off;
+    double        maxTorqueNm  = 10000.0;  // N·m  (deliberately > RCS authority)
+    double        deadband     = 0.005;    // rad/s (~0.29 °/s)
 
     bool active() const { return mode != AutopilotMode::Off; }
 
     // Compute the desired wrench for the current body-frame angular velocity.
-    // Returns a zero wrench when Off or |ω| < deadband.
-    // Returns desired wrench. May modify mode (auto-disengage on settle).
-    Wrench compute(const glm::dvec3& omega_body);
+    // Returns a zero wrench when Off or |ω| < deadband.  Does not modify mode.
+    Wrench compute(const glm::dvec3& omega_body) const;
 };
 
 } // namespace spacecraft

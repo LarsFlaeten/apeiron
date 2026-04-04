@@ -157,10 +157,16 @@ void SpacecraftModel::solveAllocation(const Wrench& desired)
     }
 }
 
-void SpacecraftModel::stepPWM(double dt, double pwmPeriod, double minDutyCycle)
+void SpacecraftModel::stepPWM(double dt, double pwmPeriod, double minDutyCycleFraction)
 {
+    float maxThrottle = 0.0f;
+    for (const auto& t : thrusters)
+        maxThrottle = std::max(maxThrottle, t.throttle);
+
+    const float cutoff = static_cast<float>(minDutyCycleFraction) * maxThrottle;
+
     for (auto& t : thrusters) {
-        if (t.throttle < static_cast<float>(minDutyCycle)) {
+        if (t.throttle < cutoff) {
             t.firing   = false;
             t.pwmPhase = 0.0f;
             continue;

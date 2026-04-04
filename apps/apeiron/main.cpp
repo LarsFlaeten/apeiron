@@ -283,31 +283,8 @@ int main()
         const double orbitRadius = static_cast<double>(earthRadius) + 400.0;
         const double circularV   = std::sqrt(kGM_Earth / orbitRadius);
 
-        // Player ship: starts at +X, velocity along +Y (prograde, ecliptic plane).
-        // Mass ~12 500 kg (Crew Dragon placeholder), inertia rough sphere estimate.
-        const double shipMass = 12519.0;
-        const double shipI    = 0.4 * shipMass * 4.5 * 4.5;  // kg·m²  (solid sphere, r=4.5 m)
-        astro::State shipState;
-        shipState.P.r = glm::dvec3(orbitRadius, 0.0, 0.0);
-        shipState.P.v = glm::dvec3(0.0, circularV, 0.0);
-        // Align body frame to RTN: +X=prograde, +Y=nadir, +Z=orbit-normal.
-        {
-            glm::dvec3 T = glm::normalize(shipState.P.v);                        // prograde
-            glm::dvec3 N = glm::normalize(glm::cross(shipState.P.r, shipState.P.v)); // orbit normal
-            glm::dvec3 R = glm::cross(T, N);                                     // radial outward
-            // Rotation matrix columns = where body axes land in inertial frame.
-            shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
-        }
-        shipState.R.w = glm::dvec3(0.0);
-
-        std::vector<std::unique_ptr<Spacecraft>> spacecraft;
-        spacecraft.push_back(std::make_unique<Spacecraft>(shipMass, glm::dmat3(shipI), shipState));
-        spacecraft[0]->addAttractor(earthAttractor);
-
-        // Index of the spacecraft the player controls / camera follows.
-        const size_t playerIdx = 0;
-
-        // Load Orion thruster manifest.  Falls back gracefully if the file is missing.
+        // Load Orion thruster manifest first so we can use its mass/inertia
+        // for the physics Spacecraft object.  Falls back gracefully if missing.
         spacecraft::SpacecraftModel orionModel;
         {
             std::filesystem::path toml =
@@ -322,6 +299,37 @@ int main()
                           << toml << " — using scalar fallback\n";
             }
         }
+
+        // Player ship: starts at +X, velocity along +Y (prograde, ecliptic plane).
+        // Use manifest mass/inertia when available; fall back to Orion estimates.
+        const double shipMass = orionModel.massKg > 1.0f
+                                ? static_cast<double>(orionModel.massKg)
+                                : 26500.0;
+        const glm::dmat3 shipInertia = glm::length(orionModel.inertiaDiag) > 0.0f
+            ? glm::dmat3(
+                glm::dvec3(orionModel.inertiaDiag.x, 0, 0),
+                glm::dvec3(0, orionModel.inertiaDiag.y, 0),
+                glm::dvec3(0, 0, orionModel.inertiaDiag.z))
+            : glm::dmat3(34000.0);  // fallback diagonal
+        astro::State shipState;
+        shipState.P.r = glm::dvec3(orbitRadius, 0.0, 0.0);
+        shipState.P.v = glm::dvec3(0.0, circularV, 0.0);
+        // Align body frame to RTN: +X=prograde, +Y=nadir, +Z=orbit-normal.
+        {
+            glm::dvec3 T = glm::normalize(shipState.P.v);                        // prograde
+            glm::dvec3 N = glm::normalize(glm::cross(shipState.P.r, shipState.P.v)); // orbit normal
+            glm::dvec3 R = glm::cross(T, N);                                     // radial outward
+            // Rotation matrix columns = where body axes land in inertial frame.
+            shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
+        }
+        shipState.R.w = glm::dvec3(0.0);
+
+        std::vector<std::unique_ptr<Spacecraft>> spacecraft;
+        spacecraft.push_back(std::make_unique<Spacecraft>(shipMass, shipInertia, shipState));
+        spacecraft[0]->addAttractor(earthAttractor);
+
+        // Index of the spacecraft the player controls / camera follows.
+        const size_t playerIdx = 0;
 
         // MFD apps — updated and rendered every frame in Nav view.
         OrbitalMFD orbitalMFD;
@@ -1065,13 +1073,15 @@ int main()
                 ImGui::Separator();
 
                 // Autopilot tuning.
-                ImGui::Text("Autopilot");
-                ImGui::SliderScalar("Kd rot (N·m·s/rad)", ImGuiDataType_Double,
-                    &autopilot.kdRot,
-                    (const double[]){100.0}, (const double[]){200'000.0},
+                ImGui::Text("Autopilot (bang-bang killrot)");
+                ImGui::SliderScalar("Max torque (N·m)", ImGuiDataType_Double,
+                    &autopilot.maxTorqueNm,
+                    (const double[]){1000.0}, (const double[]){50'000.0},
                     "%.0f", ImGuiSliderFlags_Logarithmic);
-                ImGui::TextDisabled("  τ_settle ≈ %.1f s  (I≈100 000 kg·m²)",
-                    100000.0 / autopilot.kdRot);
+                ImGui::SliderScalar("Deadband (°/s)", ImGuiDataType_Double,
+                    &autopilot.deadband,
+                    (const double[]){0.001}, (const double[]){1.0},
+                    "%.3f", ImGuiSliderFlags_Logarithmic);
                 ImGui::Separator();
 
                 ImGui::Text("Main engine (SPACE)");
