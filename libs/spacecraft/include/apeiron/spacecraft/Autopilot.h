@@ -57,8 +57,9 @@ struct Autopilot {
     glm::dvec3 omegaFF          {};                     // feedforward rate, body frame rad/s
 
     // Attitude hold gains / thresholds
-    double KdAtt         = 15.0;    // s — rate error weight
-    double fireThreshold = 0.005;   // rad — combined PD error below which: coast
+    double KdAtt              = 15.0;    // s — cross-axis rate damping weight
+    double attFireThreshold   = 0.010;   // rad  (~0.57°) — coast if att error below this
+    double rateFireThreshold  = 0.003;   // rad/s (~0.17°/s) — coast if rate error below this
 
     bool active() const { return mode != AutopilotMode::Off; }
 

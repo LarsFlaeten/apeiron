@@ -1119,10 +1119,14 @@ int main()
                     &autopilot.KdAtt,
                     (const double[]){1.0}, (const double[]){60.0},
                     "%.1f");
-                ImGui::SliderScalar("Fire threshold (°)", ImGuiDataType_Double,
-                    &autopilot.fireThreshold,
-                    (const double[]){0.001}, (const double[]){0.1},
+                ImGui::SliderScalar("Att fire threshold (°)", ImGuiDataType_Double,
+                    &autopilot.attFireThreshold,
+                    (const double[]){0.001}, (const double[]){1.0},
                     "%.3f", ImGuiSliderFlags_Logarithmic);
+                ImGui::SliderScalar("Rate fire threshold (°/s)", ImGuiDataType_Double,
+                    &autopilot.rateFireThreshold,
+                    (const double[]){0.0001}, (const double[]){0.1},
+                    "%.4f", ImGuiSliderFlags_Logarithmic);
                 ImGui::Separator();
 
                 ImGui::Text("Main engine (SPACE)");

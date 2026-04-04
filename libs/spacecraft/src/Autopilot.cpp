@@ -101,11 +101,10 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
     // Rate components perpendicular to error axis — damp these independently.
     const glm::dvec3 omega_perp = omega_err - omega_along * error_axis;
 
-    // Coast band: inside deadzone, feedforward carries us.
-    const double residual = std::abs(error_angle) + KdAtt * glm::length(omega_err);
-    if (residual < fireThreshold) {
-        if (glm::length(omega_err) < settleClampThreshold &&
-            glm::length(omega_err) > deadband)
+    // Coast band: both attitude error and rate error within thresholds.
+    const double omegaErrMag = glm::length(omega_err);
+    if (error_angle < attFireThreshold && omegaErrMag < rateFireThreshold) {
+        if (omegaErrMag < settleClampThreshold && omegaErrMag > deadband)
             settleClamp = true;
         return w;
     }
