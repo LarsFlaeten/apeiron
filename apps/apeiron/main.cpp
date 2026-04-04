@@ -516,6 +516,9 @@ int main()
             }
         } shipOrbit;
 
+        // Index of the spacecraft shown in F11 inspection view.
+        int inspectIdx = static_cast<int>(playerIdx);
+
         // Default focus: the observer body (first body matching cfg.observerBody).
         int selectedBodyIndex = 0;
         for (int i = 0; i < static_cast<int>(bodyInfos.size()); ++i)
@@ -692,7 +695,10 @@ int main()
             double*                     simSpeed    = nullptr;
             std::vector<std::string>*   navCams     = nullptr;
             int*                        navCamIdx   = nullptr;
-            spacecraft::Autopilot*      autopilot   = nullptr;
+            spacecraft::Autopilot*      autopilot     = nullptr;
+            int*                        inspectIdx    = nullptr;  // F11 object cycler
+            int                         numSpacecraft = 0;
+            float*                      inspectDist   = nullptr;  // reset on object cycle
         } windowState{&renderer, 0.0, &viewMode, &simSpeedTarget,
                       &navCamNodes, &navCamIdx, nullptr};
 
@@ -714,6 +720,14 @@ int main()
                 *s->viewMode = ViewMode::MfdFull;
             else if (key == GLFW_KEY_F11)
                 *s->viewMode = ViewMode::ShipInspect;
+            else if (key == GLFW_KEY_TAB &&
+                     *s->viewMode == ViewMode::ShipInspect &&
+                     s->inspectIdx && s->numSpacecraft > 0) {
+                *s->inspectIdx = (*s->inspectIdx + 1) % s->numSpacecraft;
+                // Default view distances: Orion ~30 m, ISS ~300 m for others.
+                if (s->inspectDist)
+                    *s->inspectDist = (*s->inspectIdx == 0) ? 30.0f : 300.0f;
+            }
             else if (key == GLFW_KEY_C &&
                      (*s->viewMode == ViewMode::Nav ||
                       *s->viewMode == ViewMode::MfdFull) &&
@@ -753,6 +767,9 @@ int main()
         });
         glfwSetScrollCallback(window, [](GLFWwindow* w, double, double yoff) {
             auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w));
+            // Always accumulate scroll so the 3D camera can use it,
+            // even when ImGui reports WantCaptureMouse (the HUD overlay
+            // is non-scrollable, so we own the scroll unconditionally).
             s->scrollDelta += yoff;
         });
 
@@ -767,7 +784,10 @@ int main()
 
         // Autopilot.
         spacecraft::Autopilot autopilot;
-        windowState.autopilot = &autopilot;
+        windowState.autopilot     = &autopilot;
+        windowState.inspectIdx    = &inspectIdx;
+        windowState.numSpacecraft = static_cast<int>(spacecraft.size());
+        windowState.inspectDist   = &shipOrbit.distanceM;
 
         // For finite-differencing angular rates in the Nav console.
         glm::dvec3 prevAngVelInertial(0.0);
@@ -993,12 +1013,15 @@ int main()
 
             // Recenter the floating origin.
             // In Nav view, track the player ship; in Map view, track the selected body.
-            if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull ||
-                viewMode == ViewMode::ShipInspect) {
+            if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull) {
                 // Recenter on the interpolated position — same point the camera sits at.
                 // Using the true physics position would leave a step-size-dependent offset
                 // between camera and origin, causing Earth to jump when time accel changes.
                 scene.origin().recenter(earthWorld + spacecraft[playerIdx]->position());
+            } else if (viewMode == ViewMode::ShipInspect) {
+                // Recenter on the inspected object so its render-space position is always
+                // near the float origin — prevents precision jitter for far-away objects.
+                scene.origin().recenter(earthWorld + spacecraft[inspectIdx]->position());
             } else if (selectedBodyIndex >= 0 && selectedBodyIndex < (int)bodyInfos.size()) {
                 scene.origin().recenter(
                     bodyInfos[selectedBodyIndex].node->worldPosition());
@@ -1054,19 +1077,21 @@ int main()
 
             // ---- F11 ship inspection camera ----
             if (viewMode == ViewMode::ShipInspect) {
-                auto& ship = *spacecraft[playerIdx];
+                auto& ship = *spacecraft[inspectIdx];
                 glm::vec3 shipRp = scene.origin().toRenderSpace(
                     earthWorld + ship.position());
 
-                if (!ImGui::GetIO().WantCaptureMouse) {
-                    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
-                        shipOrbit.azimuthDeg   -= dx * 0.4f;
-                        shipOrbit.elevationDeg += dy * 0.4f;
-                        shipOrbit.elevationDeg  = glm::clamp(shipOrbit.elevationDeg, -85.0f, 85.0f);
-                    }
-                    if (windowState.scrollDelta != 0.0)
-                        shipOrbit.distanceM *= std::exp(-0.2f * static_cast<float>(windowState.scrollDelta));
+                // Accept drag (left-button) only when ImGui isn't consuming mouse,
+                // but always accept scroll so touchpad two-finger zoom works even
+                // when the HUD overlay has focus.
+                if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS &&
+                    !ImGui::GetIO().WantCaptureMouse) {
+                    shipOrbit.azimuthDeg   -= dx * 0.4f;
+                    shipOrbit.elevationDeg += dy * 0.4f;
+                    shipOrbit.elevationDeg  = glm::clamp(shipOrbit.elevationDeg, -85.0f, 85.0f);
                 }
+                if (windowState.scrollDelta != 0.0)
+                    shipOrbit.distanceM *= std::exp(-0.3f * static_cast<float>(windowState.scrollDelta));
 
                 glm::vec3 offset = shipOrbit.localOffset();  // in km, local frame
 
@@ -1251,8 +1276,16 @@ int main()
 
             // ---- F11 Ship inspection view ----
             if (viewMode == ViewMode::ShipInspect) {
-                auto& ship = *spacecraft[playerIdx];
                 ImGuiIO& io = ImGui::GetIO();
+
+                // Object name list (parallel to spacecraft[]).
+                static const std::vector<std::string> kSpacecraftNames = {
+                    std::string("Orion"),
+                    issCfg.name.empty() ? std::string("ISS") : issCfg.name,
+                };
+                const std::string& objName = (inspectIdx < static_cast<int>(kSpacecraftNames.size()))
+                    ? kSpacecraftNames[inspectIdx]
+                    : "Object " + std::to_string(inspectIdx);
 
                 constexpr auto kFlags =
                     ImGuiWindowFlags_NoDecoration    |
@@ -1264,7 +1297,9 @@ int main()
                 ImGui::SetNextWindowBgAlpha(0.55f);
                 ImGui::Begin("##ShipInspect", nullptr, kFlags);
 
-                ImGui::TextColored({0.0f, 0.82f, 0.30f, 1.0f}, "SHIP INSPECT  [F11]");
+                ImGui::TextColored({0.0f, 0.82f, 0.30f, 1.0f},
+                    "SHIP INSPECT  [F11]  %s (%d/%d)",
+                    objName.c_str(), inspectIdx + 1, static_cast<int>(spacecraft.size()));
                 ImGui::Separator();
 
                 ImGui::Text("Dist: %.1f m", shipOrbit.distanceM);
@@ -1281,7 +1316,7 @@ int main()
                     shipOrbit.bodyFrame = false;
 
                 ImGui::Separator();
-                ImGui::TextDisabled("Drag to orbit  Scroll to zoom");
+                ImGui::TextDisabled("Drag to orbit  Scroll/pinch to zoom  Tab to cycle");
 
                 // Show active thrusters.
                 if (!orionModel.thrusters.empty()) {
@@ -1855,8 +1890,6 @@ int main()
                     glm::dvec3 worldPos = earthWorld + sc.position();
                     glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
                     glm::mat3  attRot   = glm::mat3_cast(glm::fquat(sc.attitude()));
-                    // ISS model is also in metres; same scale as Orion.
-                    // No roll correction needed until we know the model's orientation.
                     constexpr float kIssToKm = 1e-3f;
                     glm::mat4 issModel = glm::translate(glm::mat4(1.0f), rp)
                                       * glm::mat4(attRot)
