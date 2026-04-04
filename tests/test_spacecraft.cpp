@@ -302,6 +302,8 @@ TEST_CASE("Autopilot_killrot — check commanded thrust", "[autopilot]")
 
     auto m = loadManifest(kOrionToml);
     
+    const glm::dvec3 inertiaDiag = glm::dvec3(m.inertiaDiag);
+
     struct Case { const char* name; glm::dvec3 omega_body; };
     std::vector<Case> cases = {
         {"Rot +X high",  { glm::radians(2.0), 0, 0}}
@@ -309,7 +311,8 @@ TEST_CASE("Autopilot_killrot — check commanded thrust", "[autopilot]")
 
     for (const auto& c : cases) {
         WARN("\n=== " << c.name << " ===");
-        auto w = ap.compute(c.omega_body);
+        const double dt = 1.0 / 60.0;
+        auto w = ap.compute(c.omega_body, inertiaDiag, dt);
         WARN("\n  Computed wrench: [" << w[0] << ", " << w[1] << ", " << w[2] << ", " << w[3] << ", " << w[4] << ", " << w[4] << " ]\n");
         m.solveAllocation(w);
         for (const auto& t : m.thrusters) {

@@ -12,34 +12,47 @@ enum class AutopilotMode {
 };
 
 // ---------------------------------------------------------------------------
-// Autopilot
+// Autopilot — two-phase bang-bang killrot
 //
-// Computes a desired Wrench each frame from the current body-frame angular
-// velocity.  The caller feeds the result straight into SpacecraftModel::
-// solveAllocation() — the autopilot knows nothing about actuators.
+// Phase 1 — Bang-bang: while |ω| > timedBurnThreshold, request maxTorqueNm
+//   in the -ω direction.  The allocator saturates → full thruster firings.
 //
-// Killrot uses a bang-bang strategy: while |ω| > deadband, command the
-// maximum counter-torque in the -ω direction.  The allocator saturates the
-// thrusters, producing full-strength discrete firings rather than the
-// fractional throttles of proportional control (which are too small for the
-// PWM cycle to produce visible or effective burns).
+// Phase 2 — Timed burn: once |ω| drops below timedBurnThreshold, compute the
+//   exact burn duration needed to null the residual:
+//       t_burn = I_eff × |ω| / rcsAuthorityNm
+//   Fire for exactly t_burn seconds, then stop.  Any leftover residual
+//   (from inertia estimate error) re-triggers Phase 2 automatically.
 //
-//   maxTorqueNm  N·m   Requested torque magnitude — set well above the
-//                      vehicle's actual RCS authority so the allocator always
-//                      saturates.  For Orion RCS (~3 000 N·m/axis) 10 000 is
-//                      a safe ceiling.
-//   deadband     rad/s Below this |ω| no torque is commanded.
+//   maxTorqueNm        N·m    Requested torque — must exceed RCS authority
+//                             so the allocator always saturates (~10 000 for
+//                             Orion whose RCS delivers ~3 000 N·m/axis).
+//   rcsAuthorityNm     N·m    Conservative estimate of actual achieved torque
+//                             per axis.  Under-estimating is safer (slightly
+//                             long burn) than over-estimating (under-burn).
+//   timedBurnThreshold rad/s  |ω| at which Phase 1 hands off to Phase 2.
+//   deadband           rad/s  Below this |ω| no torque is commanded at all.
 // ---------------------------------------------------------------------------
 struct Autopilot {
-    AutopilotMode mode         = AutopilotMode::Off;
-    double        maxTorqueNm  = 10000.0;  // N·m  (deliberately > RCS authority)
-    double        deadband     = 0.005;    // rad/s (~0.29 °/s)
+    AutopilotMode mode                 = AutopilotMode::Off;
+    double        maxTorqueNm          = 10000.0;  // N·m (saturates allocator)
+    double        rcsAuthorityNm       = 2500.0;   // N·m/axis (conservative)
+    double        timedBurnThreshold   = 0.035;    // rad/s (~2 °/s)
+    double        deadband             = 0.001;    // rad/s (~0.06 °/s)
 
     bool active() const { return mode != AutopilotMode::Off; }
 
     // Compute the desired wrench for the current body-frame angular velocity.
-    // Returns a zero wrench when Off or |ω| < deadband.  Does not modify mode.
-    Wrench compute(const glm::dvec3& omega_body) const;
+    // dt: frame time in seconds (used by the timed-burn phase).
+    // inertiaDiag: principal moments of inertia in kg·m² (from SpacecraftModel).
+    // Resets internal state when mode is Off.
+    Wrench compute(const glm::dvec3& omega_body,
+                   const glm::dvec3& inertiaDiag,
+                   double            dt);
+
+private:
+    bool       m_timedBurnActive = false;
+    double     m_burnTimer       = 0.0;   // remaining burn time, seconds
+    glm::dvec3 m_burnTorqueDir   {};      // unit vector opposing ω at burn start
 };
 
 } // namespace spacecraft
