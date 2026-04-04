@@ -670,6 +670,14 @@ int main()
                 using M = spacecraft::AutopilotMode;
                 s->autopilot->mode = (s->autopilot->mode == M::Retrograde) ? M::Off : M::Retrograde;
             }
+            else if (key == GLFW_KEY_N && (mods & GLFW_MOD_SHIFT)) {
+                using M = spacecraft::AutopilotMode;
+                s->autopilot->mode = (s->autopilot->mode == M::NormalPlus) ? M::Off : M::NormalPlus;
+            }
+            else if (key == GLFW_KEY_M && (mods & GLFW_MOD_SHIFT)) {
+                using M = spacecraft::AutopilotMode;
+                s->autopilot->mode = (s->autopilot->mode == M::NormalMinus) ? M::Off : M::NormalMinus;
+            }
             else if (key == GLFW_KEY_T) {
                 if (mods & GLFW_MOD_SHIFT)
                     *s->simSpeed = std::max(1.0,   *s->simSpeed / 10.0);  // T = slower
@@ -812,18 +820,29 @@ int main()
 
                             // For attitude hold modes, update target each frame.
                             using M = spacecraft::AutopilotMode;
-                            if (autopilot.mode == M::Prograde || autopilot.mode == M::Retrograde) {
+                            if (autopilot.mode == M::Prograde   || autopilot.mode == M::Retrograde ||
+                                autopilot.mode == M::NormalPlus || autopilot.mode == M::NormalMinus) {
                                 glm::dvec3 r = ship.position();  // km, inertial
                                 glm::dvec3 v = ship.velocity();  // km/s, inertial
-                                glm::dvec3 T = glm::normalize(v);
-                                glm::dvec3 N = glm::normalize(glm::cross(r, v));
-                                glm::dvec3 R = glm::cross(T, N);  // radial outward
-                                // Prograde:  body+X=T, body+Y=nadir(-R), body+Z=N
-                                // Retrograde: body+X=-T, body+Y=zenith(R), body+Z=N
-                                if (autopilot.mode == M::Prograde)
-                                    autopilot.targetAttitude = glm::quat_cast(glm::dmat3(T, -R, N));
-                                else
-                                    autopilot.targetAttitude = glm::quat_cast(glm::dmat3(-T, R, N));
+                                glm::dvec3 T = glm::normalize(v);               // prograde
+                                glm::dvec3 N = glm::normalize(glm::cross(r, v)); // orbit normal
+                                glm::dvec3 R = glm::cross(T, N);                // radial outward
+                                // Frame columns: [nose(+X body), up(+Y body), right(+Z body)]
+                                // Prograde:      nose=T,  up=nadir(-R), right=N
+                                // Retrograde:    nose=-T, up=zenith(R), right=N
+                                // Normal+:       nose=N,  up=T,         right=-R
+                                // Normal-:       nose=-N, up=-T,        right=-R
+                                switch (autopilot.mode) {
+                                    case M::Prograde:
+                                        autopilot.targetAttitude = glm::quat_cast(glm::dmat3(T,  -R,  N)); break;
+                                    case M::Retrograde:
+                                        autopilot.targetAttitude = glm::quat_cast(glm::dmat3(-T,  R,  N)); break;
+                                    case M::NormalPlus:
+                                        autopilot.targetAttitude = glm::quat_cast(glm::dmat3(N,   T, -R)); break;
+                                    case M::NormalMinus:
+                                        autopilot.targetAttitude = glm::quat_cast(glm::dmat3(-N, -T, -R)); break;
+                                    default: break;
+                                }
                                 // Feedforward: orbital angular velocity (r × v) / |r|²
                                 glm::dvec3 omegaOrb = glm::cross(r, v) / glm::dot(r, r);
                                 autopilot.omegaFF = glm::dvec3(glm::conjugate(att) * omegaOrb);
@@ -1486,9 +1505,11 @@ int main()
                     auto apMode = autopilot.mode;
 
                     const char* apLabel = "off";
-                    if      (apMode == M::Killrot)   apLabel = "KILLROT";
-                    else if (apMode == M::Prograde)  apLabel = "PROGRADE";
-                    else if (apMode == M::Retrograde) apLabel = "RETROGRADE";
+                    if      (apMode == M::Killrot)     apLabel = "KILLROT";
+                    else if (apMode == M::Prograde)    apLabel = "PROGRADE";
+                    else if (apMode == M::Retrograde)  apLabel = "RETROGRADE";
+                    else if (apMode == M::NormalPlus)  apLabel = "NORMAL+";
+                    else if (apMode == M::NormalMinus) apLabel = "NORMAL-";
                     ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "AP:");
                     ImGui::SameLine();
                     ImGui::TextColored(apMode != M::Off
@@ -1505,6 +1526,8 @@ int main()
                     apButton("Kill Rot [⇧K]", M::Killrot);
                     apButton("Prograde [⇧P]", M::Prograde);
                     apButton("Retro [⇧R]",    M::Retrograde);
+                    apButton("Nrm+ [⇧N]",     M::NormalPlus);
+                    apButton("Nrm- [⇧M]",     M::NormalMinus);
                     ImGui::SameLine();
                     if (ImGui::Button("Nrm+")) { /* TODO */ }
                     ImGui::SameLine();

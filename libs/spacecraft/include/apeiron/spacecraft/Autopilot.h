@@ -9,9 +9,11 @@ namespace spacecraft {
 
 enum class AutopilotMode {
     Off,
-    Killrot,    // damp angular velocity to zero
-    Prograde,   // hold body +X along velocity vector
-    Retrograde, // hold body +X against velocity vector
+    Killrot,     // damp angular velocity to zero
+    Prograde,    // hold body +X along velocity vector
+    Retrograde,  // hold body +X against velocity vector
+    NormalPlus,  // hold body +X along orbit normal (r × v)
+    NormalMinus, // hold body +X against orbit normal
 };
 
 // ---------------------------------------------------------------------------
