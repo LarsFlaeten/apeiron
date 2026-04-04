@@ -121,27 +121,43 @@ static void computePseudoinverse(const std::vector<double>& B, int N,
 
 namespace spacecraft {
 
+static void fillBColumn(std::vector<double>& B, int col,
+                         const Thruster& t, const glm::vec3& com)
+{
+    glm::vec3 arm = t.position - com;
+    glm::vec3 f   = t.direction * t.thrustN;
+    glm::vec3 tau = glm::cross(arm, f);
+    B[0 + 6 * col] = f.x;
+    B[1 + 6 * col] = f.y;
+    B[2 + 6 * col] = f.z;
+    B[3 + 6 * col] = tau.x;
+    B[4 + 6 * col] = tau.y;
+    B[5 + 6 * col] = tau.z;
+}
+
 void SpacecraftModel::buildEffectivenessMatrix()
 {
     m_N = static_cast<int>(thrusters.size());
     if (m_N == 0) return;
 
-    // Build 6×N matrix B (col-major).
+    // Full effectiveness matrix.
     m_B.assign(6 * m_N, 0.0);
-    for (int col = 0; col < m_N; ++col) {
-        const auto& t   = thrusters[col];
-        glm::vec3   arm = t.position - centerOfMass;
-        glm::vec3   f   = t.direction * t.thrustN;
-        glm::vec3   tau = glm::cross(arm, f);
-        m_B[0 + 6 * col] = f.x;
-        m_B[1 + 6 * col] = f.y;
-        m_B[2 + 6 * col] = f.z;
-        m_B[3 + 6 * col] = tau.x;
-        m_B[4 + 6 * col] = tau.y;
-        m_B[5 + 6 * col] = tau.z;
-    }
-
+    for (int col = 0; col < m_N; ++col)
+        fillBColumn(m_B, col, thrusters[col], centerOfMass);
     computePseudoinverse(m_B, m_N, m_Bpinv);
+
+    // RCS-only subset.
+    m_rcsIdx.clear();
+    for (int i = 0; i < m_N; ++i)
+        if (thrusters[i].type == ThrusterType::RCS)
+            m_rcsIdx.push_back(i);
+    m_N_rcs = static_cast<int>(m_rcsIdx.size());
+    if (m_N_rcs > 0) {
+        std::vector<double> B_rcs(6 * m_N_rcs, 0.0);
+        for (int col = 0; col < m_N_rcs; ++col)
+            fillBColumn(B_rcs, col, thrusters[m_rcsIdx[col]], centerOfMass);
+        computePseudoinverse(B_rcs, m_N_rcs, m_Bpinv_rcs);
+    }
 }
 
 void SpacecraftModel::solveAllocation(const Wrench& desired)
@@ -154,6 +170,23 @@ void SpacecraftModel::solveAllocation(const Wrench& desired)
         for (int c = 0; c < 6; ++c)
             val += m_Bpinv[r + m_N * c] * desired[c];
         thrusters[r].throttle = static_cast<float>(std::clamp(val, 0.0, 1.0));
+    }
+}
+
+void SpacecraftModel::solveAllocationRcsOnly(const Wrench& desired)
+{
+    if (m_N == 0) return;
+
+    // Zero all throttles first.
+    for (auto& t : thrusters) t.throttle = 0.0f;
+
+    if (m_N_rcs == 0) return;
+
+    for (int r = 0; r < m_N_rcs; ++r) {
+        double val = 0.0;
+        for (int c = 0; c < 6; ++c)
+            val += m_Bpinv_rcs[r + m_N_rcs * c] * desired[c];
+        thrusters[m_rcsIdx[r]].throttle = static_cast<float>(std::clamp(val, 0.0, 1.0));
     }
 }
 

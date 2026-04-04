@@ -63,6 +63,11 @@ struct Autopilot {
 
     bool active() const { return mode != AutopilotMode::Off; }
 
+    // Set by compute() each frame — true when performing a large-angle slew
+    // (Phase 1 bang-bang or killrot at high rate).  Caller can use this to
+    // select full vs RCS-only thruster allocation.
+    bool inLargeSlew = false;
+
     // Compute the desired wrench.
     // currentAttitude: current body→inertial quaternion (used by attitude hold).
     // omega_body:      body-frame angular velocity, rad/s.

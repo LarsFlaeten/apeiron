@@ -12,6 +12,7 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
                           bool&             settleClamp)
 {
     settleClamp = false;
+    inLargeSlew = false;
     Wrench w{};
 
     if (mode == AutopilotMode::Off) {
@@ -42,6 +43,7 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
         }
 
         if (omegaMag > timedBurnThreshold) {
+            inLargeSlew = true;
             glm::dvec3 tau = -(maxTorqueNm / omegaMag) * omega_body;
             w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
             return w;
@@ -101,9 +103,19 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
     // Rate components perpendicular to error axis — damp these independently.
     const glm::dvec3 omega_perp = omega_err - omega_along * error_axis;
 
-    // Coast band: both attitude error and rate error within thresholds.
     const double omegaErrMag = glm::length(omega_err);
-    if (error_angle < attFireThreshold && omegaErrMag < rateFireThreshold) {
+
+    // Coast band — two independent conditions, both must be satisfied:
+    //   1. Attitude error small enough that one pulse would overshoot.
+    //   2. Rate error below the fire threshold.
+    // Also coast if the parabolic switch value is small (near the switch curve)
+    // and attitude error is already inside the threshold — prevents limit cycling
+    // when tiny rate noise keeps flipping the switch sign near settled state.
+    const bool attOk  = error_angle  < attFireThreshold;
+    const bool rateOk = omegaErrMag  < rateFireThreshold;
+    const bool switchNearZero = std::abs(s) < attFireThreshold;
+
+    if ((attOk && rateOk) || (attOk && switchNearZero)) {
         if (omegaErrMag < settleClampThreshold && omegaErrMag > deadband)
             settleClamp = true;
         return w;
@@ -116,6 +128,8 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
     if (tMag < 1e-9) return w;
 
     // Bang-bang: saturate allocator.
+    // Flag as large slew only when well outside the fine-correction band.
+    inLargeSlew = (error_angle > 10.0 * attFireThreshold);
     glm::dvec3 tau = (maxTorqueNm / tMag) * tau_dir;
     w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
     return w;

@@ -673,8 +673,11 @@ int main()
             else if (key == GLFW_KEY_T) {
                 if (mods & GLFW_MOD_SHIFT)
                     *s->simSpeed = std::max(1.0,   *s->simSpeed / 10.0);  // T = slower
-                else
+                else {
                     *s->simSpeed = std::min(1.0e6, *s->simSpeed * 10.0);  // t = faster
+                    // Disengage autopilot on time acceleration — physics is skipping frames.
+                    s->autopilot->mode = spacecraft::AutopilotMode::Off;
+                }
             }
         });
         glfwSetScrollCallback(window, [](GLFWwindow* w, double, double yoff) {
@@ -845,7 +848,12 @@ int main()
                             if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) desired[3] += rcsTorque;
                         }
 
-                        orionModel.solveAllocation(desired);
+                        // Use RCS-only allocation for small corrections to avoid
+                        // aux thruster over-impulse.  Large slews use all thrusters.
+                        if (autopilot.active() && !autopilot.inLargeSlew)
+                            orionModel.solveAllocationRcsOnly(desired);
+                        else
+                            orionModel.solveAllocation(desired);
                         orionModel.stepPWM(frameDt);
                         glm::vec3 F{}, T{};
                         orionModel.accumulateWrench(F, T);

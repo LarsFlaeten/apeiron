@@ -40,6 +40,11 @@ public:
     // scaled down if the desired wrench exceeds actuator capacity.
     void solveAllocation(const Wrench& desired);
 
+    // Like solveAllocation() but uses only RCS thrusters.
+    // All non-RCS throttles are set to zero.  Useful for small corrections
+    // where aux thrusters produce too large an impulse per PWM cycle.
+    void solveAllocationRcsOnly(const Wrench& desired);
+
     // Advance PWM phase accumulators by dt seconds and update firing state.
     // A thruster is silenced if its throttle < minDutyCycleFraction * max_throttle,
     // so small but meaningful commands at low authority get through while
@@ -56,9 +61,14 @@ public:
 private:
     // Stored as a flat column-major array: B[row + 6*col].
     // 6 rows (Fx Fy Fz Tx Ty Tz), N columns (one per thruster).
-    std::vector<double> m_B;       // effectiveness matrix
+    std::vector<double> m_B;       // effectiveness matrix (all thrusters)
     std::vector<double> m_Bpinv;   // pseudoinverse (N×6, column-major)
     int                 m_N = 0;
+
+    // RCS-only subset — indices into thrusters[], plus its own pseudoinverse.
+    std::vector<int>    m_rcsIdx;   // which thruster indices are RCS
+    std::vector<double> m_Bpinv_rcs; // pseudoinverse for RCS subset (Nrcs×6)
+    int                 m_N_rcs = 0;
 };
 
 } // namespace spacecraft
