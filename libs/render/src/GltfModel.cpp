@@ -233,6 +233,23 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
         m_textures.push_back(Texture::makeWhite(ctx, allocator));
     }
 
+    // Diagnostic: dump texture index structure for the first few textures.
+    {
+        std::size_t nShow = std::min(a.textures.size(), std::size_t(5));
+        std::cout << "[GltfModel] " << a.textures.size() << " textures, "
+                  << a.images.size() << " images (showing first " << nShow << "):\n";
+        for (std::size_t ti = 0; ti < nShow; ++ti) {
+            const auto& tex = a.textures[ti];
+            std::cout << "  tex[" << ti << "] imageIndex=";
+            if (tex.imageIndex.has_value()) std::cout << tex.imageIndex.value();
+            else                             std::cout << "none";
+            std::cout << " webpImageIndex=";
+            if (tex.webpImageIndex.has_value()) std::cout << tex.webpImageIndex.value();
+            else                                 std::cout << "none";
+            std::cout << "\n";
+        }
+    }
+
     // Helper: resolve TextureInfo → m_textures index (0 = white fallback).
     // glTF image index i maps to m_textures[i+1].
     // For EXT_texture_webp textures, imageIndex may be absent; use webpImageIndex.
@@ -352,6 +369,7 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
     // ---- Build mesh list ----
     m_meshes.reserve(a.meshes.size());
     m_materials.reserve(a.meshes.size());
+    bool uvDiagDone = false;  // fires once per load() call
 
     for (const auto& gMesh : a.meshes) {
         for (const auto& prim : gMesh.primitives) {
@@ -451,6 +469,16 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
                     uvIt != prim.attributes.end()) {
                     auto& acc = a.accessors[uvIt->accessorIndex];
                     fastgltf::copyFromAccessor<glm::vec2>(a, acc, uvs.data());
+                    // KHR_mesh_quantization stores UVs as normalized unsigned short.
+                    // fastgltf's glm::vec2 traits expect float components, so the
+                    // raw integer is cast without normalization — fix it here.
+                    if (acc.normalized && acc.componentType == fastgltf::ComponentType::UnsignedShort) {
+                        constexpr float kInv = 1.0f / 65535.0f;
+                        for (auto& uv : uvs) uv *= kInv;
+                    } else if (acc.normalized && acc.componentType == fastgltf::ComponentType::UnsignedByte) {
+                        constexpr float kInv = 1.0f / 255.0f;
+                        for (auto& uv : uvs) uv *= kInv;
+                    }
                 }
                 if (prim.indicesAccessor.has_value()) {
                     auto& acc = a.accessors[prim.indicesAccessor.value()];
@@ -463,6 +491,26 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
             }
 
             if (positions.empty()) continue;
+
+            // UV sanity check on the first textured primitive of each model load.
+            // (Not static — fires once per GltfModel::load() call.)
+            if (!uvDiagDone && texIdx > 0 && !uvs.empty()) {
+                uvDiagDone = true;
+                std::cout << "[GltfModel] UV sanity (first textured prim, "
+                          << uvs.size() << " verts): ";
+                for (std::size_t di = 0; di < std::min(uvs.size(), std::size_t(4)); ++di)
+                    std::cout << "(" << uvs[di].x << "," << uvs[di].y << ") ";
+                std::cout << "\n";
+                // Also report UV accessor component type to detect quantization.
+                if (auto uvIt2 = prim.findAttribute("TEXCOORD_0");
+                    uvIt2 != prim.attributes.end()) {
+                    const auto& acc2 = a.accessors[uvIt2->accessorIndex];
+                    std::cout << "[GltfModel] UV accessor: componentType="
+                              << static_cast<int>(acc2.componentType)
+                              << " normalized=" << acc2.normalized
+                              << " byteOffset=" << acc2.byteOffset << "\n";
+                }
+            }
 
             // Vertex color is white — base colour lives in the MaterialUBO.
             std::vector<Vertex> verts(positions.size());
