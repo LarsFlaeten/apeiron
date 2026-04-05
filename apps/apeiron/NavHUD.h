@@ -38,5 +38,6 @@ public:
                 const apeiron::universe::Scene&                scene,
                 const apeiron::render::Camera&                 camera,
                 float                                          screenW,
-                float                                          screenH);
+                float                                          screenH,
+                const std::vector<std::string>&                scNames);
 };

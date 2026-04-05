@@ -1559,7 +1559,7 @@ int main()
 
                 // ---- Helmet HUD overlay ----
                 navHUD.render(*spacecraft[playerIdx], spacecraft, nav,
-                              earthWorld, scene, camera, W, H);
+                              earthWorld, scene, camera, W, H, kSpacecraftNames);
             }
 
             // ---- Atmosphere LUT inspector (Map view only) ----

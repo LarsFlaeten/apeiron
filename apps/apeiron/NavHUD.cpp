@@ -4,8 +4,89 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cstdio>
+#include <cmath>
 #include <optional>
+#include <string>
 
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+namespace {
+
+// Project a world point to screen coords.
+// Returns the raw (possibly off-screen) sx/sy and the w value.
+// Caller checks w > 0 for "in front of camera".
+struct Projected {
+    float sx, sy;
+    float w;
+    bool onScreen(float W, float H, float margin = 50.0f) const {
+        return w > 0.0f
+            && sx >= -margin && sx <= W + margin
+            && sy >= -margin && sy <= H + margin;
+    }
+};
+
+Projected project(const glm::mat4& vp, const glm::vec3& worldPos, float W, float H)
+{
+    glm::vec4 clip = vp * glm::vec4(worldPos, 1.0f);
+    if (clip.w <= 0.0f) return {0.0f, 0.0f, clip.w};
+    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+    float sx = (ndc.x * 0.5f + 0.5f) * W;
+    float sy = (ndc.y * 0.5f + 0.5f) * H;
+    return {sx, sy, clip.w};
+}
+
+// Clamp a point that is (possibly) off-screen to the screen edge.
+// Returns the edge position and the normalised direction FROM edge TOWARD the off-screen point.
+struct EdgeHit {
+    ImVec2     pos;   // clamped position on screen boundary
+    ImVec2     dir;   // unit vector pointing toward the off-screen target
+};
+
+EdgeHit clampToEdge(float sx, float sy, float W, float H, float margin)
+{
+    float cx = W * 0.5f;
+    float cy = H * 0.5f;
+    float dx = sx - cx;
+    float dy = sy - cy;
+
+    // Find the smallest t > 0 such that (cx + t*dx, cy + t*dy) hits a boundary.
+    float t = 1e9f;
+    float L = margin, R = W - margin, T = margin, B = H - margin;
+    if (dx >  1e-4f) t = std::min(t, (R - cx) / dx);
+    if (dx < -1e-4f) t = std::min(t, (L - cx) / dx);
+    if (dy >  1e-4f) t = std::min(t, (B - cy) / dy);
+    if (dy < -1e-4f) t = std::min(t, (T - cy) / dy);
+
+    float ex = cx + t * dx;
+    float ey = cy + t * dy;
+    float len = std::sqrt(dx * dx + dy * dy);
+    return { ImVec2{ex, ey}, ImVec2{dx / len, dy / len} };
+}
+
+// Draw a filled arrow triangle at pos, pointing in dir.
+void drawArrow(ImDrawList* dl, ImVec2 pos, ImVec2 dir, float size, ImU32 col)
+{
+    // Perpendicular to dir.
+    ImVec2 perp{-dir.y, dir.x};
+    ImVec2 tip  { pos.x + dir.x  * size,        pos.y + dir.y  * size        };
+    ImVec2 base1{ pos.x - perp.x * size * 0.5f, pos.y - perp.y * size * 0.5f };
+    ImVec2 base2{ pos.x + perp.x * size * 0.5f, pos.y + perp.y * size * 0.5f };
+    dl->AddTriangleFilled(tip, base1, base2, col);
+}
+
+// Format a relative speed value.
+void fmtSpeed(char* buf, size_t sz, double rvMs)
+{
+    if (rvMs >= 1.0)
+        std::snprintf(buf, sz, "%.2f m/s", rvMs);
+    else
+        std::snprintf(buf, sz, "%.1f cm/s", rvMs * 100.0);
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
 void NavHUD::render(const Spacecraft&                              ship,
                     std::vector<std::unique_ptr<Spacecraft>>&      spacecraft,
                     const NavState&                                nav,
@@ -13,15 +94,18 @@ void NavHUD::render(const Spacecraft&                              ship,
                     const apeiron::universe::Scene&                scene,
                     const apeiron::render::Camera&                 camera,
                     float                                          W,
-                    float                                          H)
+                    float                                          H,
+                    const std::vector<std::string>&                scNames)
 {
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImDrawList* dl  = ImGui::GetForegroundDrawList();
+    const float cx  = W * 0.5f;
+    const float cy  = H * 0.5f;
 
-    const float  cx         = W * 0.5f;
-    const float  cy         = H * 0.5f;
-    const ImU32  kHudGreen  = IM_COL32(  0, 210,  75, 180);
-    const ImU32  kHudYellow = IM_COL32(220, 200,   0, 210);
-    const ImU32  kCyan      = IM_COL32(  0, 200, 255, 200);
+    const ImU32 kHudGreen  = IM_COL32(  0, 210,  75, 180);
+    const ImU32 kHudYellow = IM_COL32(220, 200,   0, 210);
+    const ImU32 kCyan      = IM_COL32(  0, 200, 255, 200);
+
+    constexpr float kEdgeMargin = 28.0f;  // px inset from window edge for clamping
 
     // ---- Center reticle ----
     constexpr float kInner = 5.0f, kOuter = 14.0f;
@@ -30,22 +114,16 @@ void NavHUD::render(const Spacecraft&                              ship,
     dl->AddLine({cx, cy - kOuter}, {cx, cy - kInner}, kHudGreen, 1.5f);
     dl->AddLine({cx, cy + kInner}, {cx, cy + kOuter}, kHudGreen, 1.5f);
 
-    // ---- Projection helper ----
-    glm::vec3  shipRp = scene.origin().toRenderSpace(earthWorld + ship.position());
-    glm::mat4  vp     = camera.viewProjection();
+    // ---- Projection setup ----
+    glm::vec3 shipRp = scene.origin().toRenderSpace(earthWorld + ship.position());
+    glm::mat4 vp     = camera.viewProjection();
 
-    auto projectDir = [&](glm::vec3 dir) -> std::optional<ImVec2> {
-        glm::vec4 clip = vp * glm::vec4(shipRp + dir * 1000.0f, 1.0f);
-        if (clip.w <= 0.0f) return std::nullopt;
-        glm::vec3 ndc = glm::vec3(clip) / clip.w;
-        float sx = (ndc.x * 0.5f + 0.5f) * W;
-        float sy = (ndc.y * 0.5f + 0.5f) * H;
-        if (sx < -50.0f || sx > W + 50.0f || sy < -50.0f || sy > H + 50.0f)
-            return std::nullopt;
-        return ImVec2{sx, sy};
+    // Project a direction 1000 km out from the ship.
+    auto projectDir = [&](glm::vec3 dir) -> Projected {
+        return project(vp, shipRp + dir * 1000.0f, W, H);
     };
 
-    // ---- Shared marker drawers ----
+    // ---- Standard marker drawers (on-screen) ----
     auto drawPrograde = [&](ImVec2 p, ImU32 col) {
         constexpr float r = 14.0f, tick = 8.0f;
         dl->AddCircle(p, r, col, 0, 1.5f);
@@ -63,64 +141,96 @@ void NavHUD::render(const Spacecraft&                              ship,
 
     // ==================================================================
     if (nav.navMode == NavMode::Orbit) {
-        // ---- Prograde / retrograde markers ----
+        // ---- Orbit: prograde / retrograde ----
         if (glm::length(ship.velocity()) > 1e-9) {
-            glm::vec3 progradeDir = glm::normalize(glm::vec3(ship.velocity()));
-            if (auto p = projectDir( progradeDir)) drawPrograde (*p, kHudYellow);
-            if (auto p = projectDir(-progradeDir)) drawRetrograde(*p, kHudYellow);
+            glm::vec3 pgDir = glm::normalize(glm::vec3(ship.velocity()));
+            auto pg  = projectDir( pgDir);
+            auto ret = projectDir(-pgDir);
+            if (pg.onScreen(W, H))  drawPrograde ({pg.sx,  pg.sy},  kHudYellow);
+            if (ret.onScreen(W, H)) drawRetrograde({ret.sx, ret.sy}, kHudYellow);
         }
     } else {
-        // ---- Docking mode ----
-        if (nav.dockTgtIdx >= 0) {
-            auto& tgt = *spacecraft[static_cast<size_t>(nav.dockTgtIdx)];
+        // ==============================================================
+        // Docking mode
+        // ==============================================================
+        if (nav.dockTgtIdx < 0) return;
 
-            // Relative velocity markers.
-            glm::dvec3 relVel = ship.velocity() - tgt.velocity();
-            const double rvMag = glm::length(relVel);
-            if (rvMag > 1e-9) {
-                glm::vec3 rvDir = glm::normalize(glm::vec3(relVel));
+        auto& tgt = *spacecraft[static_cast<size_t>(nav.dockTgtIdx)];
+        const char* tgtName = (nav.dockTgtIdx < static_cast<int>(scNames.size()))
+                              ? scNames[nav.dockTgtIdx].c_str() : "TGT";
 
-                char rvBuf[32];
-                double rvMs = rvMag * 1000.0;
-                if (rvMs >= 1.0)
-                    std::snprintf(rvBuf, sizeof(rvBuf), "%.2f m/s", rvMs);
-                else
-                    std::snprintf(rvBuf, sizeof(rvBuf), "%.1f cm/s", rvMs * 100.0);
+        // ---- Relative velocity markers ----
+        glm::dvec3 relVel = ship.velocity() - tgt.velocity();
+        const double rvMag = glm::length(relVel);
 
-                constexpr float kR = 14.0f, kD = 8.0f;
+        if (rvMag > 1e-9) {
+            glm::vec3 rvDir = glm::normalize(glm::vec3(relVel));
 
-                // O+ = direction of relative velocity (closing toward target if pointing at it)
-                auto drawRelVelPlus = [&](ImVec2 p, ImU32 col) {
-                    dl->AddCircle(p, kR, col, 0, 1.5f);
-                    dl->AddLine({p.x - kD, p.y}, {p.x + kD, p.y}, col, 1.5f);
-                    dl->AddLine({p.x, p.y - kD}, {p.x, p.y + kD}, col, 1.5f);
-                    dl->AddText({p.x + kR + 4.0f, p.y - 6.0f}, col, rvBuf);
-                };
-                // OX = opposite direction
-                auto drawRelVelMinus = [&](ImVec2 p, ImU32 col) {
-                    dl->AddCircle(p, kR, col, 0, 1.5f);
-                    dl->AddLine({p.x - kD, p.y - kD}, {p.x + kD, p.y + kD}, col, 1.5f);
-                    dl->AddLine({p.x + kD, p.y - kD}, {p.x - kD, p.y + kD}, col, 1.5f);
-                    dl->AddText({p.x + kR + 4.0f, p.y - 6.0f}, col, rvBuf);
-                };
+            char speedBuf[32];
+            fmtSpeed(speedBuf, sizeof(speedBuf), rvMag * 1000.0);
 
-                if (auto p = projectDir( rvDir)) drawRelVelPlus (*p, kCyan);
-                if (auto p = projectDir(-rvDir)) drawRelVelMinus(*p, kCyan);
+            constexpr float kR = 14.0f, kD = 8.0f;
+
+            // Draw O+ (closing) and OX (opening) with target name + speed label.
+            // If off-screen: draw edge arrow instead.
+            struct MarkerDef {
+                glm::vec3   dir;
+                const char* prefix;  // "V+" or "V-"
+                bool        isPlus;
+            } markers[2] = {
+                {  rvDir, "V+", true  },
+                { -rvDir, "V-", false },
+            };
+
+            for (auto& mk : markers) {
+                auto proj = projectDir(mk.dir);
+
+                if (proj.w > 0.0f && proj.onScreen(W, H, 50.0f)) {
+                    // --- On-screen ---
+                    ImVec2 p{proj.sx, proj.sy};
+                    dl->AddCircle(p, kR, kCyan, 0, 1.5f);
+                    if (mk.isPlus) {
+                        // O+ : inner cross
+                        dl->AddLine({p.x - kD, p.y}, {p.x + kD, p.y}, kCyan, 1.5f);
+                        dl->AddLine({p.x, p.y - kD}, {p.x, p.y + kD}, kCyan, 1.5f);
+                    } else {
+                        // OX : inner X
+                        dl->AddLine({p.x - kD, p.y - kD}, {p.x + kD, p.y + kD}, kCyan, 1.5f);
+                        dl->AddLine({p.x + kD, p.y - kD}, {p.x - kD, p.y + kD}, kCyan, 1.5f);
+                    }
+                    // Speed + target name to the right
+                    char lbl[64];
+                    std::snprintf(lbl, sizeof(lbl), "%s  %s  %s", mk.prefix, speedBuf, tgtName);
+                    dl->AddText({p.x + kR + 4.0f, p.y - 6.0f}, kCyan, lbl);
+                } else if (proj.w > 0.0f) {
+                    // --- Off-screen: edge indicator ---
+                    auto edge = clampToEdge(proj.sx, proj.sy, W, H, kEdgeMargin);
+                    drawArrow(dl, edge.pos, edge.dir, 9.0f, kCyan);
+
+                    // Label: "V+ 0.12 m/s  ISS" placed perpendicular to arrow, offset slightly
+                    char lbl[64];
+                    std::snprintf(lbl, sizeof(lbl), "%s %s  %s", mk.prefix, speedBuf, tgtName);
+                    // Offset the text away from the edge so it doesn't clip
+                    ImVec2 textPos{
+                        edge.pos.x + edge.dir.x * 14.0f - 10.0f,
+                        edge.pos.y + edge.dir.y * 14.0f - 6.0f
+                    };
+                    dl->AddText(textPos, kCyan, lbl);
+                }
+                // if w <= 0: behind camera, skip entirely
             }
+        }
 
-            // Target box with distance label.
+        // ---- Target box with distance label ----
+        {
             glm::dvec3 tgtWorld = earthWorld + tgt.position();
             glm::vec3  tgtRp    = scene.origin().toRenderSpace(tgtWorld);
-            glm::vec4  clip     = vp * glm::vec4(tgtRp, 1.0f);
-            if (clip.w > 0.0f) {
-                glm::vec3 ndc = glm::vec3(clip) / clip.w;
-                float sx = (ndc.x * 0.5f + 0.5f) * W;
-                float sy = (ndc.y * 0.5f + 0.5f) * H;
-                if (sx > -200.0f && sx < W + 200.0f &&
-                    sy > -200.0f && sy < H + 200.0f) {
+            auto proj = project(vp, tgtRp, W, H);
+            if (proj.w > 0.0f) {
+                if (proj.onScreen(W, H, 200.0f)) {
                     constexpr float kHalf = 40.0f;
-                    dl->AddRect({sx - kHalf, sy - kHalf},
-                                {sx + kHalf, sy + kHalf},
+                    dl->AddRect({proj.sx - kHalf, proj.sy - kHalf},
+                                {proj.sx + kHalf, proj.sy + kHalf},
                                 kCyan, 0.0f, 0, 1.5f);
                     double distM = glm::length(ship.position() - tgt.position()) * 1000.0;
                     char buf[32];
@@ -128,7 +238,22 @@ void NavHUD::render(const Spacecraft&                              ship,
                         std::snprintf(buf, sizeof(buf), "%.1f m", distM);
                     else
                         std::snprintf(buf, sizeof(buf), "%.3f km", distM * 1e-3);
-                    dl->AddText({sx - kHalf, sy + kHalf + 4.0f}, kCyan, buf);
+                    dl->AddText({proj.sx - kHalf, proj.sy + kHalf + 4.0f}, kCyan, buf);
+                } else {
+                    // Target is off-screen: show edge arrow for the target itself
+                    auto edge = clampToEdge(proj.sx, proj.sy, W, H, kEdgeMargin);
+                    drawArrow(dl, edge.pos, edge.dir, 9.0f, kCyan);
+                    double distM = glm::length(ship.position() - tgt.position()) * 1000.0;
+                    char buf[48];
+                    if (distM < 1000.0)
+                        std::snprintf(buf, sizeof(buf), "%s  %.0f m", tgtName, distM);
+                    else
+                        std::snprintf(buf, sizeof(buf), "%s  %.2f km", tgtName, distM * 1e-3);
+                    ImVec2 textPos{
+                        edge.pos.x + edge.dir.x * 14.0f - 10.0f,
+                        edge.pos.y + edge.dir.y * 14.0f - 6.0f
+                    };
+                    dl->AddText(textPos, kCyan, buf);
                 }
             }
         }
