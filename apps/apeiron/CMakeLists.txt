@@ -34,6 +34,8 @@ add_executable(apeiron
     Spacecraft.cpp
     MFD.cpp
     OrbitalMFD.cpp
+    NavConsole.cpp
+    NavHUD.cpp
 )
 
 add_dependencies(apeiron apeiron_shaders)

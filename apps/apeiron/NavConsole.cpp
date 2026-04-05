@@ -1,0 +1,232 @@
+#include "NavConsole.h"
+
+#include <imgui.h>
+#include <glm/gtc/quaternion.hpp>
+
+#include <cmath>
+#include <cstdarg>
+#include <cstdio>
+#include <numbers>
+
+// ---------------------------------------------------------------------------
+void NavConsole::update(const Spacecraft&  ship,
+                        const glm::dvec3&  shipForce,
+                        double             shipMass,
+                        float              frameDt)
+{
+    glm::dquat att    = ship.attitude();
+    glm::dvec3 w_in   = ship.angularVelocity();
+    glm::dvec3 w_bod  = glm::conjugate(att) * w_in;
+
+    // Angular acceleration via finite difference.
+    glm::dvec3 alpha_bod(0.0);
+    if (m_prevDt > 1e-6f) {
+        glm::dvec3 prevW_bod = glm::conjugate(att) * m_prevAngVelInertial;
+        alpha_bod = (w_bod - prevW_bod) / static_cast<double>(m_prevDt);
+    }
+    m_prevAngVelInertial = w_in;
+    m_prevDt             = frameDt;
+
+    // EMA (τ = 0.15 s).
+    constexpr double kTau = 0.15;
+    double emaAlpha = static_cast<double>(frameDt) / (static_cast<double>(frameDt) + kTau);
+
+    constexpr double kR2D = 180.0 / std::numbers::pi;
+    glm::dvec3 w_degs  = w_bod     * kR2D;
+    glm::dvec3 al_degs = alpha_bod * kR2D;
+    m_emaAngVel_degs += emaAlpha * (w_degs  - m_emaAngVel_degs);
+    m_emaAngAcc_degs += emaAlpha * (al_degs - m_emaAngAcc_degs);
+
+    // Felt linear acceleration (F/m, body frame, gravity excluded).
+    constexpr double kG = 9.80665;
+    m_linAcc_g = shipForce / (shipMass * kG);
+
+    // Prograde error (angle between nose +X and velocity vector).
+    glm::dvec3 vel    = ship.velocity();
+    double     vMag   = glm::length(vel);
+    m_progradeErrDeg  = 0.0;
+    if (vMag > 1e-6) {
+        glm::dvec3 nose = att * glm::dvec3(1.0, 0.0, 0.0);
+        double c = glm::clamp(glm::dot(nose, vel / vMag), -1.0, 1.0);
+        m_progradeErrDeg = std::acos(c) * 180.0 / std::numbers::pi;
+    }
+
+    // Vertical speed (radial component of velocity, km/s).
+    m_vsKms = 0.0;
+    if (glm::length(ship.position()) > 1e-6) {
+        glm::dvec3 rHat = glm::normalize(ship.position());
+        m_vsKms = glm::dot(vel, rHat);
+    }
+}
+
+// ---------------------------------------------------------------------------
+void NavConsole::render(float                                     posX,
+                        float                                     posY,
+                        float                                     width,
+                        NavState&                                 nav,
+                        spacecraft::Autopilot&                    autopilot,
+                        std::vector<std::unique_ptr<Spacecraft>>& spacecraft,
+                        size_t                                    playerIdx,
+                        const std::vector<std::string>&           scNames,
+                        bool                                      mainEngineOn)
+{
+    const float  consW  = width;
+    const ImU32  kGrn   = IM_COL32(  0, 210,  75, 210);
+    const ImU32  kDim   = IM_COL32(  0, 160,  55, 150);
+
+    constexpr auto kFlags =
+        ImGuiWindowFlags_NoDecoration     |
+        ImGuiWindowFlags_NoSavedSettings  |
+        ImGuiWindowFlags_NoFocusOnAppearing|
+        ImGuiWindowFlags_AlwaysAutoResize;
+
+    ImGui::SetNextWindowBgAlpha(0.30f);
+    ImGui::SetNextWindowPos(ImVec2(posX, posY), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowSize(ImVec2(consW, 0.0f));
+    ImGui::Begin("##NavConsole", nullptr, kFlags);
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kGrn));
+
+    // ---- Title + MODE button ----
+    {
+        const bool isOrbit = (nav.navMode == NavMode::Orbit);
+        ImGui::SetCursorPosX((consW - ImGui::CalcTextSize("-- NAV CONSOLE --").x) * 0.5f);
+        ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.8f}, "-- NAV CONSOLE --");
+        ImGui::SameLine();
+        if (isOrbit)
+            ImGui::TextColored({0.0f, 0.82f, 0.30f, 1.0f}, "[ORBIT]");
+        else
+            ImGui::TextColored({0.2f, 0.8f, 1.0f, 1.0f}, "[DOCK]");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("MODE")) {
+            nav.navMode    = isOrbit ? NavMode::Docking : NavMode::Orbit;
+            autopilot.mode = spacecraft::AutopilotMode::Off;
+        }
+    }
+
+    // ---- TRANS: FINE / AGGR selector ----
+    {
+        const bool isFine = (nav.transMode == TransMode::Fine);
+        ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "TRANS:");
+        ImGui::SameLine();
+        if (isFine)  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f,  0.45f, 0.1f,  1.0f));
+        if (ImGui::SmallButton("FINE"))  nav.transMode = TransMode::Fine;
+        if (isFine)  ImGui::PopStyleColor();
+        ImGui::SameLine();
+        if (!isFine) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.25f, 0.05f, 1.0f));
+        if (ImGui::SmallButton("AGGR"))  nav.transMode = TransMode::Aggressive;
+        if (!isFine) ImGui::PopStyleColor();
+    }
+    ImGui::Separator();
+
+    // Two-column row helper.
+    auto rowf = [&](const char* lbl, const char* fmt, ...) {
+        char buf[64]; va_list ap; va_start(ap, fmt);
+        std::vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kDim));
+        ImGui::Text("%s", lbl);
+        ImGui::PopStyleColor();
+        ImGui::SameLine(consW * 0.42f);
+        ImGui::Text("%s", buf);
+    };
+
+    // ---- Rotational rates ----
+    rowf("ω Pitch", "%+7.2f °/s",  m_emaAngVel_degs.y);
+    rowf("ω Yaw  ", "%+7.2f °/s",  m_emaAngVel_degs.z);
+    rowf("ω Roll ", "%+7.2f °/s",  m_emaAngVel_degs.x);
+    ImGui::Separator();
+
+    // ---- Angular accelerations ----
+    rowf("α Pitch", "%+7.2f °/s²", m_emaAngAcc_degs.y);
+    rowf("α Yaw  ", "%+7.2f °/s²", m_emaAngAcc_degs.z);
+    rowf("α Roll ", "%+7.2f °/s²", m_emaAngAcc_degs.x);
+    ImGui::Separator();
+
+    // ---- Felt linear acceleration ----
+    rowf("Acc X  ", "%+7.3f g", m_linAcc_g.x);
+    rowf("Acc Y  ", "%+7.3f g", m_linAcc_g.y);
+    rowf("Acc Z  ", "%+7.3f g", m_linAcc_g.z);
+    ImGui::Separator();
+
+    // ---- Orbit-mode flight data ----
+    if (nav.navMode == NavMode::Orbit) {
+        rowf("Pro∠   ", "%7.1f °",      m_progradeErrDeg);
+        rowf("Vspd   ", "%+7.3f km/s",  m_vsKms);
+        ImGui::Separator();
+    }
+
+    // ---- Main engine indicator ----
+    if (mainEngineOn)
+        ImGui::TextColored({1.0f, 0.50f, 0.10f, 1.0f}, "  *** MAIN ENGINE ***");
+    else
+        ImGui::TextColored({0.0f, 0.50f, 0.20f, 0.5f}, "  main engine off");
+    ImGui::Separator();
+
+    // ---- Docking mode: TGT selector + proximity data ----
+    if (nav.navMode == NavMode::Docking) {
+        const char* tgtName = (nav.dockTgtIdx < 0)
+            ? "NONE"
+            : (nav.dockTgtIdx < static_cast<int>(scNames.size())
+                ? scNames[nav.dockTgtIdx].c_str() : "?");
+        ImGui::TextColored({0.2f, 0.8f, 1.0f, 0.8f}, "TGT:");
+        ImGui::SameLine();
+        ImGui::TextColored({0.2f, 0.8f, 1.0f, 1.0f}, "%s", tgtName);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("[SEL]")) {
+            ++nav.dockTgtIdx;
+            if (nav.dockTgtIdx >= static_cast<int>(spacecraft.size()))
+                nav.dockTgtIdx = -1;
+            if (nav.dockTgtIdx == static_cast<int>(playerIdx))
+                ++nav.dockTgtIdx;  // skip player
+            if (nav.dockTgtIdx >= static_cast<int>(spacecraft.size()))
+                nav.dockTgtIdx = -1;
+        }
+        if (nav.dockTgtIdx >= 0) {
+            auto& tgt     = *spacecraft[static_cast<size_t>(nav.dockTgtIdx)];
+            auto& player  = *spacecraft[playerIdx];
+            double distKm = glm::length(player.position() - tgt.position());
+            double distM  = distKm * 1000.0;
+            double relVMs = glm::length(player.velocity() - tgt.velocity()) * 1000.0;
+            if (distM < 1000.0)
+                rowf("DIST   ", "%7.1f m",   distM);
+            else
+                rowf("DIST   ", "%7.3f km",  distKm);
+            rowf("VR     ", "%7.3f m/s", relVMs);
+        }
+        ImGui::Separator();
+    }
+
+    // ---- Autopilot status + buttons ----
+    using M = spacecraft::AutopilotMode;
+    auto apMode = autopilot.mode;
+
+    const char* apLabel = "off";
+    if      (apMode == M::Killrot)     apLabel = "KILLROT";
+    else if (apMode == M::Prograde)    apLabel = "PROGRADE";
+    else if (apMode == M::Retrograde)  apLabel = "RETROGRADE";
+    else if (apMode == M::NormalPlus)  apLabel = "NORMAL+";
+    else if (apMode == M::NormalMinus) apLabel = "NORMAL-";
+    ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "AP:");
+    ImGui::SameLine();
+    ImGui::TextColored(apMode != M::Off
+        ? ImVec4{0.2f, 1.0f, 0.4f, 1.0f}
+        : ImVec4{0.5f, 0.5f, 0.5f, 0.7f}, "%s", apLabel);
+
+    auto apButton = [&](const char* label, M m) {
+        bool active = (apMode == m);
+        if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
+        if (ImGui::Button(label)) autopilot.mode = active ? M::Off : m;
+        if (active) ImGui::PopStyleColor();
+        ImGui::SameLine();
+    };
+    apButton("Kill Rot [⇧K]", M::Killrot);
+    if (nav.navMode == NavMode::Orbit) {
+        apButton("Prograde [⇧P]", M::Prograde);
+        apButton("Retro [⇧R]",    M::Retrograde);
+        apButton("Nrm+ [⇧N]",     M::NormalPlus);
+        apButton("Nrm- [⇧M]",     M::NormalMinus);
+    }
+
+    ImGui::PopStyleColor();
+    ImGui::End();
+}
