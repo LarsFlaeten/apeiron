@@ -301,40 +301,11 @@ int main()
             }
         }
 
-        // Player ship: starts at +X, velocity along +Y (prograde, ecliptic plane).
-        // Use manifest mass/inertia when available; fall back to Orion estimates.
-        const double shipMass = orionModel.massKg > 1.0f
-                                ? static_cast<double>(orionModel.massKg)
-                                : 26500.0;
-        const glm::dmat3 shipInertia = glm::length(orionModel.inertiaDiag) > 0.0f
-            ? glm::dmat3(
-                glm::dvec3(orionModel.inertiaDiag.x, 0, 0),
-                glm::dvec3(0, orionModel.inertiaDiag.y, 0),
-                glm::dvec3(0, 0, orionModel.inertiaDiag.z))
-            : glm::dmat3(34000.0);  // fallback diagonal
-        astro::State shipState;
-        shipState.P.r = glm::dvec3(orbitRadius, 0.0, 0.0);
-        shipState.P.v = glm::dvec3(0.0, circularV, 0.0);
-        // Align body frame to RTN: +X=prograde, +Y=nadir, +Z=orbit-normal.
-        {
-            glm::dvec3 T = glm::normalize(shipState.P.v);                        // prograde
-            glm::dvec3 N = glm::normalize(glm::cross(shipState.P.r, shipState.P.v)); // orbit normal
-            glm::dvec3 R = glm::cross(T, N);                                     // radial outward
-            // Rotation matrix columns = where body axes land in inertial frame.
-            shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
-        }
-        shipState.R.w = glm::dvec3(0.0);
-
-        std::vector<std::unique_ptr<Spacecraft>> spacecraft;
-        spacecraft.push_back(std::make_unique<Spacecraft>(shipMass, shipInertia, shipState));
-        spacecraft[0]->addAttractor(earthAttractor);
-
-        // Index of the spacecraft the player controls / camera follows.
-        const size_t playerIdx = 0;
-
-        // ---- ISS — load orbit from TOML, propagate to sim-start epoch ----
+        // ---- ISS — load orbit config and propagate to sim-start epoch ----
+        // Must happen before Orion is placed so we can position Orion relative to ISS.
         const size_t issIdx = 1;
         spacecraft::OrbitConfig issCfg;
+        glm::dvec3 issR_init(0.0), issV_init(0.0);
         {
             std::filesystem::path toml =
                 std::filesystem::path(APEIRON_DATA_DIR)
@@ -347,19 +318,53 @@ int main()
                 std::cerr << "[Apeiron] WARNING: ISS orbit TOML not found at "
                           << toml << "\n";
             }
-
             astro::PosState issState = spacecraft::orbitStateAtEt(issCfg.elements, et);
-            glm::dvec3 issR(issState.r);
-            glm::dvec3 issV(issState.v);
+            issR_init = glm::dvec3(issState.r);
+            issV_init = glm::dvec3(issState.v);
+            std::cout << "[Apeiron] ISS initial position: "
+                      << issR_init.x << ", " << issR_init.y << ", " << issR_init.z << " km\n";
+        }
 
-            // Initial attitude: prograde-pointing.
-            glm::dvec3 T = glm::normalize(issV);
-            glm::dvec3 N = glm::normalize(glm::cross(issR, issV));
+        // ---- Orion — place 300 m ahead of ISS in the prograde direction ----
+        // Same velocity → same orbit. 300 m separation gives comfortable docking approach.
+        const double shipMass = orionModel.massKg > 1.0f
+                                ? static_cast<double>(orionModel.massKg)
+                                : 26500.0;
+        const glm::dmat3 shipInertia = glm::length(orionModel.inertiaDiag) > 0.0f
+            ? glm::dmat3(
+                glm::dvec3(orionModel.inertiaDiag.x, 0, 0),
+                glm::dvec3(0, orionModel.inertiaDiag.y, 0),
+                glm::dvec3(0, 0, orionModel.inertiaDiag.z))
+            : glm::dmat3(34000.0);
+        astro::State shipState;
+        {
+            constexpr double kSepKm = 0.3;  // 300 m ahead
+            glm::dvec3 prograde = glm::normalize(issV_init);
+            shipState.P.r = issR_init + kSepKm * prograde;
+            shipState.P.v = issV_init;  // identical velocity = co-elliptic, no drift
+            glm::dvec3 T = prograde;
+            glm::dvec3 N = glm::normalize(glm::cross(issR_init, issV_init));
+            glm::dvec3 R = glm::cross(T, N);
+            shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
+            shipState.R.w = glm::dvec3(0.0);
+        }
+
+        std::vector<std::unique_ptr<Spacecraft>> spacecraft;
+        spacecraft.push_back(std::make_unique<Spacecraft>(shipMass, shipInertia, shipState));
+        spacecraft[0]->addAttractor(earthAttractor);
+
+        // Index of the spacecraft the player controls / camera follows.
+        const size_t playerIdx = 0;
+
+        // ---- ISS — create physics object using pre-computed state ----
+        {
+            glm::dvec3 T = glm::normalize(issV_init);
+            glm::dvec3 N = glm::normalize(glm::cross(issR_init, issV_init));
             glm::dvec3 R = glm::cross(T, N);
 
             astro::State issSt;
-            issSt.P.r = issR;
-            issSt.P.v = issV;
+            issSt.P.r = issR_init;
+            issSt.P.v = issV_init;
             issSt.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
             issSt.R.w = glm::dvec3(0.0);
 
@@ -372,9 +377,6 @@ int main()
                 : glm::dmat3(1.0e10);
             spacecraft.push_back(std::make_unique<Spacecraft>(issM, issInertia, issSt));
             spacecraft[issIdx]->addAttractor(earthAttractor);
-
-            std::cout << "[Apeiron] ISS initial position: "
-                      << issR.x << ", " << issR.y << ", " << issR.z << " km\n";
         }
 
         // MFD apps — updated and rendered every frame in Nav view.
@@ -902,11 +904,16 @@ int main()
                         // Orion model space: +X = aft, engine pointing +X.
                         spacecraft::Wrench desired{};
 
-                        // Manual translation always available.
-                        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+                        // Main engine (SPACE) — tracked separately so allocation
+                        // always uses the full matrix when the main engine is firing.
+                        const bool mainEngineKey =
+                            glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+                        if (mainEngineKey) {
                             desired[0] += static_cast<double>(orionModel.thrusters[0].thrustN);
                             mainEngineOn = true;
                         }
+                        // RCS translation (WASD/QE) — always solved RCS-only so the
+                        // main engine is never allocated for lateral / retrograde moves.
                         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) desired[0] += rcsThrust;
                         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) desired[0] -= rcsThrust;
                         if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) desired[1] += rcsThrust;
@@ -969,15 +976,16 @@ int main()
                             if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) desired[3] += rcsTorque;
                         }
 
-                        // Use RCS-only allocation for small attitude corrections to avoid
-                        // aux thruster over-impulse.  Fall back to full allocation when:
-                        //   - autopilot is in a large slew, or
-                        //   - a force demand is present (main engine, translation RCS).
-                        const double forceDemand = std::abs(desired[0]) + std::abs(desired[1]) + std::abs(desired[2]);
-                        if (autopilot.active() && !autopilot.inLargeSlew && forceDemand < 1.0)
-                            orionModel.solveAllocationRcsOnly(desired);
-                        else
+                        // Allocation strategy:
+                        //  • Main engine (SPACE): full matrix — needs all thrusters.
+                        //  • Large autopilot slew: full matrix — needs aux thrusters for authority.
+                        //  • Everything else (WASD, small AP corrections): RCS-only.
+                        //    This ensures lateral/retrograde translations never route through
+                        //    the main engine, and aux thrusters stay quiet during fine control.
+                        if (mainEngineKey || (autopilot.active() && autopilot.inLargeSlew))
                             orionModel.solveAllocation(desired);
+                        else
+                            orionModel.solveAllocationRcsOnly(desired);
                         orionModel.stepPWM(frameDt);
                         glm::vec3 F{}, T{};
                         orionModel.accumulateWrench(F, T);
