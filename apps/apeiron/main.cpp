@@ -411,9 +411,13 @@ int main()
                          static_cast<double>(earthRadius), 399 };
 
         // Thruster parameters — adjustable from the Dev view.
-        double mainEngineThrust = 22'000.0;   // N  (SPACE)
-        double rcsThrust        =    400.0;   // N  (WASD/QE)
-        double rcsTorque        =  1'000.0;   // N·m (IJKL/UO)
+        double mainEngineThrust  = 22'000.0;  // N  (SPACE)
+        double rcsThrust         =    400.0;  // N  (WASD/QE)
+        double rcsTorque         =  1'000.0;  // N·m (IJKL/UO)
+        // In Docking mode WASD desired force is multiplied by this factor so the
+        // RCS thrusters get meaningful throttle (pseudoinverse otherwise spreads 400 N
+        // across many thrusters → ~14 % each).  Default 5× → ~70 % allocation.
+        double dockingTransBoost =      5.0;
 
         // Physics fixed-step accumulator (100 Hz simulation).
         constexpr double kPhysStep   = 0.01;  // seconds
@@ -938,12 +942,17 @@ int main()
                         }
                         // RCS translation (WASD/QE) — always solved RCS-only so the
                         // main engine is never allocated for lateral / retrograde moves.
-                        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) desired[0] += rcsThrust;
-                        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) desired[0] -= rcsThrust;
-                        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) desired[1] += rcsThrust;
-                        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) desired[1] -= rcsThrust;
-                        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) desired[2] += rcsThrust;
-                        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) desired[2] -= rcsThrust;
+                        // In Docking mode, scale up the desired force so pseudoinverse
+                        // gives each thruster meaningful throttle instead of ~14%.
+                        const double transF = (navMode == NavMode::Docking)
+                                              ? rcsThrust * dockingTransBoost
+                                              : rcsThrust;
+                        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) desired[0] += transF;
+                        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) desired[0] -= transF;
+                        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) desired[1] += transF;
+                        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) desired[1] -= transF;
+                        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) desired[2] += transF;
+                        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) desired[2] -= transF;
 
                         if (autopilot.active()) {
                             // Autopilot owns the rotation axes — manual torque keys ignored.
@@ -1314,6 +1323,11 @@ int main()
                     &rcsThrust,
                     (const double[]){10.0}, (const double[]){50'000.0},
                     "%.0f", ImGuiSliderFlags_Logarithmic);
+                ImGui::SliderScalar("Docking trans boost", ImGuiDataType_Double,
+                    &dockingTransBoost,
+                    (const double[]){1.0}, (const double[]){20.0},
+                    "%.1f×");
+                ImGui::TextDisabled("  Docking WASD = RCS thrust × boost");
 
                 ImGui::Separator();
                 ImGui::Text("RCS attitude (IJKL/UO)");
@@ -1667,10 +1681,12 @@ int main()
                     rowf("Acc Z  ", "%+7.3f g", linAcc_g.z);
                     ImGui::Separator();
 
-                    // Flight data.
-                    rowf("Pro∠   ", "%7.1f °",  progradeErrDeg);
-                    rowf("Vspd   ", "%+7.3f km/s", vsKms);
-                    ImGui::Separator();
+                    // Flight data (orbit-mode only).
+                    if (navMode == NavMode::Orbit) {
+                        rowf("Pro∠   ", "%7.1f °",  progradeErrDeg);
+                        rowf("Vspd   ", "%+7.3f km/s", vsKms);
+                        ImGui::Separator();
+                    }
 
                     // Main engine indicator.
                     if (mainEngineOn)
