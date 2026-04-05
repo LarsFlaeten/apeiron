@@ -41,6 +41,13 @@ public:
     // or an empty string when there is no pending request.
     std::string consumePendingRef();
 
+    // Set the list of target names for the TGT button to cycle through.
+    // Index -1 = no target. Call once after spacecraft are created.
+    void setTargets(std::vector<std::string> names);
+
+    // Returns the currently selected target index (-1 = none).
+    int targetIndex() const { return m_tgtIdx; }
+
     // Recompute every frame.
     //   mu           — GM of the reference body (km³/s²)
     //   bodyRadiusKm — equatorial radius for altitude conversion
@@ -48,6 +55,10 @@ public:
                 const astro::EphemerisTime& et,
                 double mu,
                 double bodyRadiusKm);
+
+    // Optional: provide target state this frame. Pass empty PosState to clear.
+    void updateTarget(const astro::PosState& state, double mu, double bodyRadiusKm);
+    void clearTarget();
 
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
@@ -69,6 +80,10 @@ private:
     // FRM cycling (slot 1)
     std::vector<MFDFrame> m_frames;
     int                   m_frameIdx = 0;
+
+    // TGT cycling (slot 2)
+    std::vector<std::string> m_tgtNames;  // display names; index matches spacecraft[]
+    int                      m_tgtIdx = -1;  // -1 = none
 
     // --- updated every frame ---
     double m_altKm        = 0.0;
@@ -109,4 +124,26 @@ private:
     // Identity = looking from frame +Z (top-down on reference plane).
     // Right-drag rotates; double-right-click resets.
     glm::dmat3 m_diagViewRot {1.0};
+
+    // --- Target orbit (optional) ---
+    bool   m_hasTgt      = false;
+    double m_tgtAltKm    = 0.0;
+    double m_tgtVelKms   = 0.0;
+    double m_tgtApoKm    = 0.0;
+    double m_tgtPerKm    = 0.0;
+    double m_tgtIncDeg   = 0.0;
+    double m_tgtRaanDeg  = 0.0;
+    double m_tgtEccen    = 0.0;
+    double m_tgtArgpeDeg = 0.0;
+    double m_tgtTrueDeg  = 0.0;
+    bool   m_tgtTrueValid = false;
+    double m_tgtSmaKm    = 0.0;
+    double m_tgtPeriodMin= -1.0;
+    bool   m_tgtHyp      = false;
+    double m_tgtBodyRadKm= 0.0;
+    // 3D geometry for target orbit diagram
+    glm::dvec3 m_tgtPeriDir {1.0, 0.0, 0.0};
+    glm::dvec3 m_tgtNormDir {0.0, 0.0, 1.0};
+    glm::dvec3 m_tgtQDir    {0.0, 1.0, 0.0};
+    glm::dvec3 m_tgtShipDir {1.0, 0.0, 0.0};
 };

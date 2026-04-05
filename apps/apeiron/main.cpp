@@ -382,6 +382,9 @@ int main()
         // MFD apps — updated and rendered every frame in Nav view.
         OrbitalMFD orbitalMFD;
         orbitalMFD.setContext("EARTH", "ECLIPJ2000");
+        // TGT list: all spacecraft except the player (index maps to spacecraft[]).
+        // We skip playerIdx; remaining names match spacecraft indices directly.
+        orbitalMFD.setTargets({ issCfg.name.empty() ? "ISS" : issCfg.name });
 
         // Frame options: ECLIPJ2000 (identity) and J2000 (equatorial).
         // pxform_c is constant for inertial frames; et=0 is fine.
@@ -1407,6 +1410,15 @@ int main()
                         ship.velocity() - glm::dvec3(refState[3], refState[4], refState[5]));
                 }
                 orbitalMFD.update(shipRelRef, currentEt, refBody.mu, refBody.radiusKm);
+                // Target: TGT index 0 = ISS (spacecraft[issIdx]).
+                if (orbitalMFD.targetIndex() == 0) {
+                    auto& tgt = *spacecraft[issIdx];
+                    orbitalMFD.updateTarget(
+                        astro::PosState(tgt.position(), tgt.velocity()),
+                        refBody.mu, refBody.radiusKm);
+                } else {
+                    orbitalMFD.clearTarget();
+                }
 
                 MFDPanel fullPanel;
                 fullPanel.pos  = { 0.0f, 0.0f };
@@ -1480,6 +1492,14 @@ int main()
 
                 orbitalMFD.update(shipRelRef, currentEt,
                                   refBody.mu, refBody.radiusKm);
+                if (orbitalMFD.targetIndex() == 0) {
+                    auto& tgt = *spacecraft[issIdx];
+                    orbitalMFD.updateTarget(
+                        astro::PosState(tgt.position(), tgt.velocity()),
+                        refBody.mu, refBody.radiusKm);
+                } else {
+                    orbitalMFD.clearTarget();
+                }
 
                 // Each MFD occupies 1/3 of screen width; height derived from 16:9.
                 const float kMfdW = std::round(W / 3.0f);
