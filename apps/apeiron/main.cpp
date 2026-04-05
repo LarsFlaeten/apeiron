@@ -331,8 +331,9 @@ int main()
                       << issR_init.x << ", " << issR_init.y << ", " << issR_init.z << " km\n";
         }
 
-        // ---- Orion — place 300 m ahead of ISS in the prograde direction ----
-        // Same velocity → same orbit. 300 m separation gives comfortable docking approach.
+        // ---- Orion — place 1 km behind ISS in the retrograde direction ----
+        // Same velocity → same orbit. Orion faces prograde (same attitude as ISS),
+        // so its docking port (+X) faces toward the ISS for a natural approach.
         const double shipMass = orionModel.massKg > 1.0f
                                 ? static_cast<double>(orionModel.massKg)
                                 : 26500.0;
@@ -344,14 +345,14 @@ int main()
             : glm::dmat3(34000.0);
         astro::State shipState;
         {
-            constexpr double kSepKm = 0.3;  // 300 m ahead
+            constexpr double kSepKm = 1.0;  // 1 km behind
             glm::dvec3 prograde = glm::normalize(issV_init);
-            shipState.P.r = issR_init + kSepKm * prograde;
+            shipState.P.r = issR_init - kSepKm * prograde;  // retrograde = behind ISS
             shipState.P.v = issV_init;  // identical velocity = co-elliptic, no drift
             glm::dvec3 T = prograde;
             glm::dvec3 N = glm::normalize(glm::cross(issR_init, issV_init));
             glm::dvec3 R = glm::cross(T, N);
-            shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
+            shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));  // same orientation as ISS
             shipState.R.w = glm::dvec3(0.0);
         }
 
@@ -863,6 +864,7 @@ int main()
         // MFD apps and persistent panels (panels must outlive the loop so
         // isInMenu / app selection survive across frames).
         DockingMFD dockingMFD;
+        dockingMFD.setCamNodes(navCamNodes);   // let DockingMFD cycle / auto-select
         MFDMenu    mfdMenu;
         mfdMenu.addApp(&orbitalMFD, "ORB");
         mfdMenu.addApp(&dockingMFD, "DOCK");
@@ -1186,8 +1188,16 @@ int main()
                 glm::mat4 shipRot = glm::mat4(glm::mat3(attRot3)) * rollFix;
 
                 if (orionGltf.isLoaded() && !navCamNodes.empty()) {
+                    // In MfdFull mode, let DockingMFD override the camera node.
+                    const std::string& dockCam = dockingMFD.preferredCamNode();
+                    const std::string& activeCam =
+                        (viewMode == ViewMode::MfdFull
+                         && mfdFullPanel.app == static_cast<MFDApp*>(&dockingMFD)
+                         && !dockCam.empty())
+                        ? dockCam
+                        : navCamNodes[navCamIdx];
                     // Node transform is in metres (model space); directions are unit vectors.
-                    glm::mat4 nodeTf = orionGltf.nodeWorldTransform(navCamNodes[navCamIdx]);
+                    glm::mat4 nodeTf = orionGltf.nodeWorldTransform(activeCam);
                     glm::mat4 camWorld = shipRot * nodeTf;
 
                     // Position: translate to ship, then apply node offset (metres → km).
@@ -1523,6 +1533,9 @@ int main()
                     orbitalMFD.clearTarget();
                 }
 
+                dockingMFD.update(*spacecraft[playerIdx], scPorts, playerIdx,
+                                  nav, spacecraft);
+
                 mfdFullPanel.pos  = { 0.0f, 0.0f };
                 mfdFullPanel.size = { W, H };
                 mfdFullPanel.render("##MFDFull");
@@ -1606,6 +1619,10 @@ int main()
                 } else {
                     orbitalMFD.clearTarget();
                 }
+
+                // Update DockingMFD geometry (works in both Nav and MfdFull view).
+                dockingMFD.update(*spacecraft[playerIdx], scPorts, playerIdx,
+                                  nav, spacecraft);
 
                 // Each MFD occupies 1/3 of screen width; height derived from 16:9.
                 const float kMfdW = std::round(W / 3.0f);

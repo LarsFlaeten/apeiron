@@ -111,8 +111,8 @@ public:
         std::string label;     // display name (suffix after last '_')
         bool        active;    // true = probe, false = drogue
         glm::vec3   posM;      // position in model space (metres)
-        glm::vec3   axisX;     // +X unit vector in model space
-        glm::vec3   axisZ;     // +Z unit vector in model space
+        glm::vec3   axisX;     // approach axis  = Blender +X (glTF col[0])
+        glm::vec3   axisZ;     // roll reference = Blender +Z (glTF col[1] = glTF Y)
     };
 
     // Returns all docking ports found in this model (empty if none / not loaded).

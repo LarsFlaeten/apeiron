@@ -642,8 +642,8 @@ std::vector<GltfModel::DockingPort> GltfModel::dockingPorts() const
         p.label    = label;
         p.active   = isActive;
         p.posM     = glm::vec3(tf[3]);                        // translation column
-        p.axisX    = glm::normalize(glm::vec3(tf[0]));        // model +X
-        p.axisZ    = glm::normalize(glm::vec3(tf[2]));        // model +Z
+        p.axisX    = glm::normalize(glm::vec3(tf[0]));        // model +X  (approach axis, Blender +X)
+        p.axisZ    = glm::normalize(glm::vec3(tf[1]));        // roll ref = glTF +Y = Blender +Z
         result.push_back(std::move(p));
     }
     return result;
