@@ -233,23 +233,6 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
         m_textures.push_back(Texture::makeWhite(ctx, allocator));
     }
 
-    // Diagnostic: dump texture index structure for the first few textures.
-    {
-        std::size_t nShow = std::min(a.textures.size(), std::size_t(5));
-        std::cout << "[GltfModel] " << a.textures.size() << " textures, "
-                  << a.images.size() << " images (showing first " << nShow << "):\n";
-        for (std::size_t ti = 0; ti < nShow; ++ti) {
-            const auto& tex = a.textures[ti];
-            std::cout << "  tex[" << ti << "] imageIndex=";
-            if (tex.imageIndex.has_value()) std::cout << tex.imageIndex.value();
-            else                             std::cout << "none";
-            std::cout << " webpImageIndex=";
-            if (tex.webpImageIndex.has_value()) std::cout << tex.webpImageIndex.value();
-            else                                 std::cout << "none";
-            std::cout << "\n";
-        }
-    }
-
     // Helper: resolve TextureInfo → m_textures index (0 = white fallback).
     // glTF image index i maps to m_textures[i+1].
     // For EXT_texture_webp textures, imageIndex may be absent; use webpImageIndex.
@@ -369,7 +352,6 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
     // ---- Build mesh list ----
     m_meshes.reserve(a.meshes.size());
     m_materials.reserve(a.meshes.size());
-    bool uvDiagDone = false;  // fires once per load() call
 
     for (const auto& gMesh : a.meshes) {
         for (const auto& prim : gMesh.primitives) {
@@ -385,6 +367,9 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
             bool  isEmissive = false;
             float emissiveScale = 1.0f;
             int   texIdx = 0;  // index into m_textures (0 = white fallback)
+            glm::vec2 uvOffset{0.0f};
+            glm::vec2 uvScale{1.0f};
+            float     uvRot = 0.0f;
 
             if (prim.materialIndex.has_value()) {
                 const auto& m = a.materials[prim.materialIndex.value()];
@@ -414,11 +399,15 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
                 // Base-colour texture.
                 if (m.pbrData.baseColorTexture.has_value()) {
                     texIdx = resolveTexIdx(m.pbrData.baseColorTexture->textureIndex);
-                    std::cout << "[GltfModel] mat \"" << m.name
-                              << "\" → texIdx=" << texIdx
-                              << " (gltfTex=" << m.pbrData.baseColorTexture->textureIndex << ")\n";
+                    // Stash UV transform (KHR_texture_transform) for application below.
+                    if (m.pbrData.baseColorTexture->transform) {
+                        const auto& xf = *m.pbrData.baseColorTexture->transform;
+                        uvOffset = glm::vec2(xf.uvOffset[0], xf.uvOffset[1]);
+                        uvScale  = glm::vec2(xf.uvScale[0],  xf.uvScale[1]);
+                        uvRot    = static_cast<float>(xf.rotation);
+                    }
                 } else {
-                    std::cout << "[GltfModel] mat \"" << m.name << "\" → no texture\n";
+                    // no texture — silent, avoid log spam
                 }
             }
 
@@ -479,6 +468,15 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
                         constexpr float kInv = 1.0f / 255.0f;
                         for (auto& uv : uvs) uv *= kInv;
                     }
+                    // Apply KHR_texture_transform: scale → rotate → offset.
+                    if (uvScale != glm::vec2(1.0f) || uvOffset != glm::vec2(0.0f) || uvRot != 0.0f) {
+                        const float cosR = std::cos(uvRot), sinR = std::sin(uvRot);
+                        for (auto& uv : uvs) {
+                            glm::vec2 s = uv * uvScale;
+                            uv = glm::vec2(cosR * s.x - sinR * s.y + uvOffset.x,
+                                           sinR * s.x + cosR * s.y + uvOffset.y);
+                        }
+                    }
                 }
                 if (prim.indicesAccessor.has_value()) {
                     auto& acc = a.accessors[prim.indicesAccessor.value()];
@@ -491,26 +489,6 @@ void GltfModel::load(const Context& ctx, GpuAllocator& allocator,
             }
 
             if (positions.empty()) continue;
-
-            // UV sanity check on the first textured primitive of each model load.
-            // (Not static — fires once per GltfModel::load() call.)
-            if (!uvDiagDone && texIdx > 0 && !uvs.empty()) {
-                uvDiagDone = true;
-                std::cout << "[GltfModel] UV sanity (first textured prim, "
-                          << uvs.size() << " verts): ";
-                for (std::size_t di = 0; di < std::min(uvs.size(), std::size_t(4)); ++di)
-                    std::cout << "(" << uvs[di].x << "," << uvs[di].y << ") ";
-                std::cout << "\n";
-                // Also report UV accessor component type to detect quantization.
-                if (auto uvIt2 = prim.findAttribute("TEXCOORD_0");
-                    uvIt2 != prim.attributes.end()) {
-                    const auto& acc2 = a.accessors[uvIt2->accessorIndex];
-                    std::cout << "[GltfModel] UV accessor: componentType="
-                              << static_cast<int>(acc2.componentType)
-                              << " normalized=" << acc2.normalized
-                              << " byteOffset=" << acc2.byteOffset << "\n";
-                }
-            }
 
             // Vertex color is white — base colour lives in the MaterialUBO.
             std::vector<Vertex> verts(positions.size());
