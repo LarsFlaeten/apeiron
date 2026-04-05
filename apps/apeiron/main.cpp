@@ -696,8 +696,9 @@ int main()
         ViewMode viewMode = ViewMode::Dev;
 
         // Navigation sub-mode (active within Nav/MfdFull views).
-        NavMode navMode    = NavMode::Orbit;
-        int     dockTgtIdx = -1;  // -1 = no docking TGT; ≥1 = index into spacecraft[]
+        NavMode   navMode    = NavMode::Orbit;
+        TransMode transMode  = TransMode::Fine;
+        int       dockTgtIdx = -1;  // -1 = no docking TGT; ≥1 = index into spacecraft[]
 
         // Spacecraft display names (index parallel to spacecraft[]).
         const std::vector<std::string> kSpacecraftNames = {
@@ -942,9 +943,9 @@ int main()
                         }
                         // RCS translation (WASD/QE) — always solved RCS-only so the
                         // main engine is never allocated for lateral / retrograde moves.
-                        // In Docking mode, scale up the desired force so pseudoinverse
-                        // gives each thruster meaningful throttle instead of ~14%.
-                        const double transF = (navMode == NavMode::Docking)
+                        // Aggressive mode scales up desired force so the pseudoinverse
+                        // gives each thruster meaningful throttle (fine = ~14%, aggr = ~70%).
+                        const double transF = (transMode == TransMode::Aggressive)
                                               ? rcsThrust * dockingTransBoost
                                               : rcsThrust;
                         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) desired[0] += transF;
@@ -1634,7 +1635,7 @@ int main()
 
                     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(kGrn));
 
-                    // Title row + MODE toggle button (always visible)
+                    // Title row + MODE toggle (always visible)
                     {
                         const bool isOrbit = (navMode == NavMode::Orbit);
                         ImGui::SetCursorPosX((consW - ImGui::CalcTextSize("-- NAV CONSOLE --").x) * 0.5f);
@@ -1649,6 +1650,21 @@ int main()
                             navMode = isOrbit ? NavMode::Docking : NavMode::Orbit;
                             autopilot.mode = spacecraft::AutopilotMode::Off;
                         }
+                    }
+                    // Translation mode selector (always visible)
+                    {
+                        const bool isFine = (transMode == TransMode::Fine);
+                        ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "TRANS:");
+                        ImGui::SameLine();
+                        // FINE button
+                        if (isFine) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.45f, 0.1f, 1.0f));
+                        if (ImGui::SmallButton("FINE")) transMode = TransMode::Fine;
+                        if (isFine) ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                        // AGGR button
+                        if (!isFine) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.25f, 0.05f, 1.0f));
+                        if (ImGui::SmallButton("AGGR")) transMode = TransMode::Aggressive;
+                        if (!isFine) ImGui::PopStyleColor();
                     }
                     ImGui::Separator();
 
@@ -1831,18 +1847,39 @@ int main()
 
                             // Relative velocity markers: O+ = closing direction, OX = opening.
                             glm::dvec3 relVel = ship.velocity() - tgt.velocity();
-                            if (glm::length(relVel) > 1e-9) {
+                            const double rvMag = glm::length(relVel);
+                            if (rvMag > 1e-9) {
                                 glm::vec3 rvDir = glm::normalize(glm::vec3(relVel));
+
+                                // Format relative speed label (m/s or cm/s).
+                                char rvBuf[32];
+                                double rvMs = rvMag * 1000.0;
+                                if (rvMs >= 1.0)
+                                    std::snprintf(rvBuf, sizeof(rvBuf), "%.2f m/s", rvMs);
+                                else
+                                    std::snprintf(rvBuf, sizeof(rvBuf), "%.1f cm/s", rvMs * 100.0);
+
+                                constexpr float kR = 14.0f;
 
                                 // Circle with inner plus (closing velocity direction).
                                 auto drawRelVelPlus = [&](ImVec2 p, ImU32 col) {
-                                    constexpr float r = 14.0f, d = 8.0f;
-                                    dl->AddCircle(p, r, col, 0, 1.5f);
+                                    constexpr float d = 8.0f;
+                                    dl->AddCircle(p, kR, col, 0, 1.5f);
                                     dl->AddLine({p.x - d, p.y}, {p.x + d, p.y}, col, 1.5f);
                                     dl->AddLine({p.x, p.y - d}, {p.x, p.y + d}, col, 1.5f);
+                                    // Speed label to the right of the marker
+                                    dl->AddText({p.x + kR + 4.0f, p.y - 6.0f}, col, rvBuf);
                                 };
-                                if (auto p = projectDir( rvDir)) drawRelVelPlus(*p, kCyan);
-                                if (auto p = projectDir(-rvDir)) drawRetrograde(*p, kCyan);
+                                // Circle with inner X (opening velocity direction).
+                                auto drawRelVelMinus = [&](ImVec2 p, ImU32 col) {
+                                    constexpr float d = 8.0f;
+                                    dl->AddCircle(p, kR, col, 0, 1.5f);
+                                    dl->AddLine({p.x - d, p.y - d}, {p.x + d, p.y + d}, col, 1.5f);
+                                    dl->AddLine({p.x + d, p.y - d}, {p.x - d, p.y + d}, col, 1.5f);
+                                    dl->AddText({p.x + kR + 4.0f, p.y - 6.0f}, col, rvBuf);
+                                };
+                                if (auto p = projectDir( rvDir)) drawRelVelPlus (*p, kCyan);
+                                if (auto p = projectDir(-rvDir)) drawRelVelMinus(*p, kCyan);
                             }
 
                             // Target box with distance label.
