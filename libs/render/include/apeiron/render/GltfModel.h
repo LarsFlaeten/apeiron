@@ -97,6 +97,27 @@ public:
     // or identity if not found.
     glm::mat4 nodeWorldTransform(std::string_view name) const;
 
+    // ---------------------------------------------------------------------------
+    // Docking port descriptor — extracted from nodes named:
+    //   docking_port_active_<label>    (probe / active mate)
+    //   docking_port_passive_<label>   (drogue / passive mate)
+    //
+    // Coordinate convention (model space, metres):
+    //   +X  outward approach direction (away from the docking surface)
+    //   +Z  "up" reference for roll alignment
+    // ---------------------------------------------------------------------------
+    struct DockingPort {
+        std::string nodeName;  // full node name
+        std::string label;     // display name (suffix after last '_')
+        bool        active;    // true = probe, false = drogue
+        glm::vec3   posM;      // position in model space (metres)
+        glm::vec3   axisX;     // +X unit vector in model space
+        glm::vec3   axisZ;     // +Z unit vector in model space
+    };
+
+    // Returns all docking ports found in this model (empty if none / not loaded).
+    std::vector<DockingPort> dockingPorts() const;
+
 private:
     // Recursively draw a node and its children.
     // plumePass: false = opaque geometry only, true = plumes only.

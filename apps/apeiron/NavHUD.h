@@ -2,6 +2,7 @@
 
 #include "NavState.h"
 #include "Spacecraft.h"
+#include "apeiron/render/GltfModel.h"
 
 #include <apeiron/render/Camera.h>
 #include <apeiron/universe/Scene.h>
@@ -31,6 +32,8 @@ public:
     //   scene       — for toRenderSpace()
     //   camera      — for viewProjection()
     //   screenW/H   — ImGui display size
+    using DockPort = apeiron::render::GltfModel::DockingPort;
+
     void render(const Spacecraft&                              ship,
                 std::vector<std::unique_ptr<Spacecraft>>&      spacecraft,
                 const NavState&                                nav,
@@ -39,5 +42,6 @@ public:
                 const apeiron::render::Camera&                 camera,
                 float                                          screenW,
                 float                                          screenH,
-                const std::vector<std::string>&                scNames);
+                const std::vector<std::string>&                scNames,
+                const std::vector<std::vector<DockPort>>&      scPorts);
 };

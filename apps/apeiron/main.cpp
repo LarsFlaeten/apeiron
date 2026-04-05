@@ -701,6 +701,21 @@ int main()
         // Navigation sub-mode state.
         NavState nav;
 
+        // Docking ports per spacecraft (index parallel to spacecraft[]).
+        // Extracted from the glTF nodes named docking_port_active_* / docking_port_passive_*.
+        using DockPort = apeiron::render::GltfModel::DockingPort;
+        std::vector<std::vector<DockPort>> scPorts(spacecraft.size());
+        scPorts[playerIdx] = orionGltf.dockingPorts();
+        scPorts[issIdx]    = issGltf.dockingPorts();
+        for (size_t i = 0; i < scPorts.size(); ++i) {
+            std::cout << "[Apeiron] Spacecraft[" << i << "] docking ports: "
+                      << scPorts[i].size() << "\n";
+            for (auto& p : scPorts[i])
+                std::cout << "  " << p.nodeName
+                          << " active=" << p.active
+                          << " pos=(" << p.posM.x << "," << p.posM.y << "," << p.posM.z << ")\n";
+        }
+
         // Spacecraft display names (index parallel to spacecraft[]).
         const std::vector<std::string> kSpacecraftNames = {
             "Orion",
@@ -1067,6 +1082,46 @@ int main()
 
             observerPos = observer.worldPosition(currentEt);
             scene.update(currentEt, observerPos);
+
+            // ---- Docking port proximity & matching logic ----
+            // Runs every frame; keeps nav.dockPortIdx and nav.compatiblePortCount fresh.
+            if (nav.navMode == NavMode::Docking && nav.dockTgtIdx >= 0) {
+                auto& player = *spacecraft[playerIdx];
+                auto& tgt    = *spacecraft[static_cast<size_t>(nav.dockTgtIdx)];
+                constexpr double kPortSelectKm = 5.0;
+                double distKm = glm::length(player.position() - tgt.position());
+
+                // Count compatible ports: player must have ≥1 port, and we count
+                // target ports whose active flag is opposite to any player port.
+                bool playerHasActive  = false;
+                bool playerHasPassive = false;
+                for (auto& pp : scPorts[playerIdx]) {
+                    if (pp.active)  playerHasActive  = true;
+                    else            playerHasPassive = true;
+                }
+
+                int compatible = 0;
+                if (distKm <= kPortSelectKm) {
+                    for (auto& tp : scPorts[static_cast<size_t>(nav.dockTgtIdx)]) {
+                        // active/passive match: probe docks with drogue
+                        if ((tp.active && playerHasPassive) ||
+                            (!tp.active && playerHasActive))
+                            ++compatible;
+                    }
+                }
+                nav.compatiblePortCount = compatible;
+
+                // If we move outside 5 km, fall back to spacecraft-level target.
+                if (distKm > kPortSelectKm && nav.dockPortIdx >= 0) {
+                    nav.dockPortIdx = -1;
+                }
+                // If no compatible ports, clear any port selection.
+                if (compatible == 0 && nav.dockPortIdx >= 0) {
+                    nav.dockPortIdx = -1;
+                }
+            } else {
+                nav.compatiblePortCount = 0;
+            }
 
             // Recenter the floating origin.
             // In Nav view, track the player ship; in Map view, track the selected body.
@@ -1554,12 +1609,12 @@ int main()
                 {
                     navConsole.update(*spacecraft[playerIdx], shipForce, shipMass, frameDt);
                     navConsole.render(kMfdW, H, kMfdW, nav, autopilot,
-                                      spacecraft, playerIdx, kSpacecraftNames, mainEngineOn);
+                                      spacecraft, playerIdx, kSpacecraftNames, scPorts, mainEngineOn);
                 }
 
                 // ---- Helmet HUD overlay ----
                 navHUD.render(*spacecraft[playerIdx], spacecraft, nav,
-                              earthWorld, scene, camera, W, H, kSpacecraftNames);
+                              earthWorld, scene, camera, W, H, kSpacecraftNames, scPorts);
             }
 
             // ---- Atmosphere LUT inspector (Map view only) ----

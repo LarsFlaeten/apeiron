@@ -618,6 +618,38 @@ glm::mat4 GltfModel::nodeWorldTransform(std::string_view name) const
 }
 
 // ---------------------------------------------------------------------------
+// dockingPorts
+// ---------------------------------------------------------------------------
+
+std::vector<GltfModel::DockingPort> GltfModel::dockingPorts() const
+{
+    std::vector<DockingPort> result;
+    for (auto& [name, idx] : m_nameIndex) {
+        bool isActive  = name.rfind("docking_port_active_",  0) == 0;
+        bool isPassive = name.rfind("docking_port_passive_", 0) == 0;
+        if (!isActive && !isPassive) continue;
+
+        glm::mat4 tf = nodeWorldTransform(name);
+
+        // Label = everything after the last '_'
+        std::string label = name;
+        auto pos = name.rfind('_');
+        if (pos != std::string::npos && pos + 1 < name.size())
+            label = name.substr(pos + 1);
+
+        DockingPort p;
+        p.nodeName = name;
+        p.label    = label;
+        p.active   = isActive;
+        p.posM     = glm::vec3(tf[3]);                        // translation column
+        p.axisX    = glm::normalize(glm::vec3(tf[0]));        // model +X
+        p.axisZ    = glm::normalize(glm::vec3(tf[2]));        // model +Z
+        result.push_back(std::move(p));
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // setNodeVisible / setNodeScale / setNodeColor
 // ---------------------------------------------------------------------------
 

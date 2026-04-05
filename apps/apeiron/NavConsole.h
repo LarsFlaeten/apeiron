@@ -3,6 +3,7 @@
 #include "NavState.h"
 #include "Spacecraft.h"
 #include "apeiron/spacecraft/Autopilot.h"
+#include "apeiron/render/GltfModel.h"
 
 #include <glm/glm.hpp>
 #include <imgui.h>
@@ -29,18 +30,22 @@ public:
                 double             shipMass,
                 float              frameDt);
 
+    using DockPort = apeiron::render::GltfModel::DockingPort;
+
     // Draw the console ImGui window.
-    //   posX, posY  — bottom-left anchor in screen space
-    //   width       — window width (== MFD width)
-    void render(float                                    posX,
-                float                                    posY,
-                float                                    width,
-                NavState&                                nav,
-                spacecraft::Autopilot&                   autopilot,
-                std::vector<std::unique_ptr<Spacecraft>>& spacecraft,
-                size_t                                   playerIdx,
-                const std::vector<std::string>&          scNames,
-                bool                                     mainEngineOn);
+    //   posX, posY   — bottom-left anchor in screen space
+    //   width        — window width (== MFD width)
+    //   scPorts      — docking port lists, index parallel to spacecraft[]
+    void render(float                                           posX,
+                float                                           posY,
+                float                                           width,
+                NavState&                                       nav,
+                spacecraft::Autopilot&                          autopilot,
+                std::vector<std::unique_ptr<Spacecraft>>&        spacecraft,
+                size_t                                          playerIdx,
+                const std::vector<std::string>&                 scNames,
+                const std::vector<std::vector<DockPort>>&       scPorts,
+                bool                                            mainEngineOn);
 
 private:
     // Finite-difference / EMA state

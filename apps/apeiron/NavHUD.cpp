@@ -95,7 +95,8 @@ void NavHUD::render(const Spacecraft&                              ship,
                     const apeiron::render::Camera&                 camera,
                     float                                          W,
                     float                                          H,
-                    const std::vector<std::string>&                scNames)
+                    const std::vector<std::string>&                scNames,
+                    const std::vector<std::vector<DockPort>>&      scPorts)
 {
     ImDrawList* dl  = ImGui::GetForegroundDrawList();
     const float cx  = W * 0.5f;
@@ -222,33 +223,51 @@ void NavHUD::render(const Spacecraft&                              ship,
         }
 
         // ---- Target box with distance label ----
+        // When a specific docking port is selected, aim at the port instead of CoM.
         {
-            glm::dvec3 tgtWorld = earthWorld + tgt.position();
-            glm::vec3  tgtRp    = scene.origin().toRenderSpace(tgtWorld);
+            glm::vec3 tgtRp;
+            double    distM;
+            std::string tgtLabel = tgtName;
+
+            if (nav.dockPortIdx >= 0 &&
+                nav.dockTgtIdx < static_cast<int>(scPorts.size())) {
+                const auto& ports = scPorts[static_cast<size_t>(nav.dockTgtIdx)];
+                if (nav.dockPortIdx < static_cast<int>(ports.size())) {
+                    const auto& port = ports[nav.dockPortIdx];
+                    // Port world pos = tgt render pos + tgt attitude * port offset (m→km)
+                    glm::vec3 tgtCoMRp = scene.origin().toRenderSpace(earthWorld + tgt.position());
+                    glm::mat3 tgtRot   = glm::mat3_cast(glm::fquat(tgt.attitude()));
+                    tgtRp = tgtCoMRp + tgtRot * (port.posM * 1e-3f);
+                    glm::vec3 portWorldKm = glm::vec3(tgt.position()) + glm::vec3(glm::mat3_cast(tgt.attitude()) * glm::dvec3(port.posM * 1e-3f));
+                    distM = glm::length(glm::vec3(ship.position()) - portWorldKm) * 1000.0;
+                    tgtLabel = std::string(tgtName) + "/" + port.label;
+                } else {
+                    tgtRp = scene.origin().toRenderSpace(earthWorld + tgt.position());
+                    distM = glm::length(ship.position() - tgt.position()) * 1000.0;
+                }
+            } else {
+                tgtRp = scene.origin().toRenderSpace(earthWorld + tgt.position());
+                distM = glm::length(ship.position() - tgt.position()) * 1000.0;
+            }
             auto proj = project(vp, tgtRp, W, H);
+            char distBuf[48];
+            if (distM < 1000.0)
+                std::snprintf(distBuf, sizeof(distBuf), "%.1f m", distM);
+            else
+                std::snprintf(distBuf, sizeof(distBuf), "%.3f km", distM * 1e-3);
+
             if (proj.w > 0.0f) {
                 if (proj.onScreen(W, H, 200.0f)) {
                     constexpr float kHalf = 40.0f;
                     dl->AddRect({proj.sx - kHalf, proj.sy - kHalf},
                                 {proj.sx + kHalf, proj.sy + kHalf},
                                 kCyan, 0.0f, 0, 1.5f);
-                    double distM = glm::length(ship.position() - tgt.position()) * 1000.0;
-                    char buf[32];
-                    if (distM < 1000.0)
-                        std::snprintf(buf, sizeof(buf), "%.1f m", distM);
-                    else
-                        std::snprintf(buf, sizeof(buf), "%.3f km", distM * 1e-3);
-                    dl->AddText({proj.sx - kHalf, proj.sy + kHalf + 4.0f}, kCyan, buf);
+                    dl->AddText({proj.sx - kHalf, proj.sy + kHalf + 4.0f}, kCyan, distBuf);
                 } else {
-                    // Target is off-screen: show edge arrow for the target itself
                     auto edge = clampToEdge(proj.sx, proj.sy, W, H, kEdgeMargin);
                     drawArrow(dl, edge.pos, edge.dir, 9.0f, kCyan);
-                    double distM = glm::length(ship.position() - tgt.position()) * 1000.0;
-                    char buf[48];
-                    if (distM < 1000.0)
-                        std::snprintf(buf, sizeof(buf), "%s  %.0f m", tgtName, distM);
-                    else
-                        std::snprintf(buf, sizeof(buf), "%s  %.2f km", tgtName, distM * 1e-3);
+                    char buf[64];
+                    std::snprintf(buf, sizeof(buf), "%s  %s", tgtLabel.c_str(), distBuf);
                     ImVec2 textPos{
                         edge.pos.x + edge.dir.x * 14.0f - 10.0f,
                         edge.pos.y + edge.dir.y * 14.0f - 6.0f

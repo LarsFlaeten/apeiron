@@ -60,15 +60,16 @@ void NavConsole::update(const Spacecraft&  ship,
 }
 
 // ---------------------------------------------------------------------------
-void NavConsole::render(float                                     posX,
-                        float                                     posY,
-                        float                                     width,
-                        NavState&                                 nav,
-                        spacecraft::Autopilot&                    autopilot,
-                        std::vector<std::unique_ptr<Spacecraft>>& spacecraft,
-                        size_t                                    playerIdx,
-                        const std::vector<std::string>&           scNames,
-                        bool                                      mainEngineOn)
+void NavConsole::render(float                                           posX,
+                        float                                           posY,
+                        float                                           width,
+                        NavState&                                       nav,
+                        spacecraft::Autopilot&                          autopilot,
+                        std::vector<std::unique_ptr<Spacecraft>>&        spacecraft,
+                        size_t                                          playerIdx,
+                        const std::vector<std::string>&                 scNames,
+                        const std::vector<std::vector<DockPort>>&       scPorts,
+                        bool                                            mainEngineOn)
 {
     const float  consW  = width;
     const ImU32  kGrn   = IM_COL32(  0, 210,  75, 210);
@@ -164,6 +165,7 @@ void NavConsole::render(float                                     posX,
 
     // ---- Docking mode: TGT selector + proximity data ----
     if (nav.navMode == NavMode::Docking) {
+        // Spacecraft-level target selector
         const char* tgtName = (nav.dockTgtIdx < 0)
             ? "NONE"
             : (nav.dockTgtIdx < static_cast<int>(scNames.size())
@@ -180,10 +182,61 @@ void NavConsole::render(float                                     posX,
                 ++nav.dockTgtIdx;  // skip player
             if (nav.dockTgtIdx >= static_cast<int>(spacecraft.size()))
                 nav.dockTgtIdx = -1;
+            nav.dockPortIdx = -1;  // reset port when switching spacecraft
         }
+
         if (nav.dockTgtIdx >= 0) {
-            auto& tgt     = *spacecraft[static_cast<size_t>(nav.dockTgtIdx)];
-            auto& player  = *spacecraft[playerIdx];
+            // Port sub-selector — only shown when compatible ports are available
+            if (nav.compatiblePortCount > 0) {
+                const auto& tgtPorts = (nav.dockTgtIdx < static_cast<int>(scPorts.size()))
+                                       ? scPorts[static_cast<size_t>(nav.dockTgtIdx)]
+                                       : std::vector<DockPort>{};
+
+                const char* portLabel = (nav.dockPortIdx < 0)
+                    ? "CoM"
+                    : (nav.dockPortIdx < static_cast<int>(tgtPorts.size())
+                        ? tgtPorts[nav.dockPortIdx].label.c_str() : "?");
+
+                ImGui::TextColored({0.2f, 0.8f, 1.0f, 0.6f}, "PORT:");
+                ImGui::SameLine();
+                ImGui::TextColored({0.2f, 0.8f, 1.0f, 1.0f}, "%s", portLabel);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("[PORT]")) {
+                    // Cycle: CoM(-1) → compatible port 0 → compatible port 1 → ... → CoM
+                    // Only cycle through ports that match active/passive
+                    bool playerHasActive  = false;
+                    bool playerHasPassive = false;
+                    for (auto& pp : (playerIdx < scPorts.size() ? scPorts[playerIdx]
+                                                                 : std::vector<DockPort>{})) {
+                        if (pp.active)  playerHasActive  = true;
+                        else            playerHasPassive = true;
+                    }
+
+                    // Build compatible index list
+                    std::vector<int> compatIdxs;
+                    for (int i = 0; i < static_cast<int>(tgtPorts.size()); ++i) {
+                        auto& tp = tgtPorts[i];
+                        if ((tp.active && playerHasPassive) || (!tp.active && playerHasActive))
+                            compatIdxs.push_back(i);
+                    }
+
+                    if (!compatIdxs.empty()) {
+                        // Find current position in the compatible list
+                        int cur = -1;
+                        for (int i = 0; i < static_cast<int>(compatIdxs.size()); ++i)
+                            if (compatIdxs[i] == nav.dockPortIdx) { cur = i; break; }
+                        // Advance; wrap -1 → first compatible, last → -1 (CoM)
+                        if (cur + 1 < static_cast<int>(compatIdxs.size()))
+                            nav.dockPortIdx = compatIdxs[cur + 1];
+                        else
+                            nav.dockPortIdx = -1;
+                    }
+                }
+            }
+
+            // Distance / relative velocity
+            auto& tgt    = *spacecraft[static_cast<size_t>(nav.dockTgtIdx)];
+            auto& player = *spacecraft[playerIdx];
             double distKm = glm::length(player.position() - tgt.position());
             double distM  = distKm * 1000.0;
             double relVMs = glm::length(player.velocity() - tgt.velocity()) * 1000.0;
