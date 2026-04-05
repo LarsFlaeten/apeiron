@@ -33,7 +33,9 @@ add_executable(apeiron
     ScenarioConfig.cpp
     Spacecraft.cpp
     MFD.cpp
+    MFDMenu.cpp
     OrbitalMFD.cpp
+    DockingMFD.cpp
     NavConsole.cpp
     NavHUD.cpp
 )

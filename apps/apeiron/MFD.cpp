@@ -1,4 +1,5 @@
 #include "MFD.h"
+#include "MFDMenu.h"
 
 #include <string>
 
@@ -20,11 +21,12 @@ void MFDPanel::render(const char* id)
     const ImU32 kGreen    = IM_COL32(  0, 210,  75, 210);
     const ImU32 kDimLine  = IM_COL32(  0, 140,  50, 120);
     const ImU32 kBgFill   = IM_COL32(  0,  20,   8,  55);
+    const ImU32 kMnuCol   = IM_COL32( 80, 180, 255, 220);  // distinct blue for MNU button
 
     const ImVec2 tl = pos;
     const ImVec2 br = { pos.x + size.x, pos.y + size.y };
 
-    // Background fill (very faint green tint for readability).
+    // Background fill.
     dl->AddRectFilled(tl, br, kBgFill, 3.0f);
     // Outer border.
     dl->AddRect(tl, br, kGreen, 3.0f, 0, 1.5f);
@@ -33,8 +35,11 @@ void MFDPanel::render(const char* id)
     const float titleBottom = pos.y + kTitleH;
     dl->AddLine({ tl.x, titleBottom }, { br.x, titleBottom }, kGreen, 1.0f);
 
-    if (app) {
-        const char* title = app->name();
+    // Active app: menu when isInMenu, otherwise the normal app.
+    MFDApp* activeApp = isInMenu ? static_cast<MFDApp*>(menuApp) : app;
+
+    if (activeApp) {
+        const char* title = activeApp->name();
         ImVec2 tsz = ImGui::CalcTextSize(title);
         dl->AddText(
             { tl.x + (size.x - tsz.x) * 0.5f,
@@ -46,6 +51,7 @@ void MFDPanel::render(const char* id)
     const float contentH  = size.y - kTitleH;
     const float btnRowH   = contentH / static_cast<float>(MFDApp::kSlots);
     const float rightBtnX = pos.x + size.x - kBtnW;
+    const int   kLastSlot = MFDApp::kSlots - 1;
 
     // Vertical dividers between buttons and content area.
     dl->AddLine({ tl.x + kBtnW, titleBottom }, { tl.x + kBtnW, br.y }, kGreen, 1.0f);
@@ -57,13 +63,13 @@ void MFDPanel::render(const char* id)
 
         // Horizontal dividers inside button columns.
         if (s > 0) {
-            dl->AddLine({ tl.x,     y0 }, { tl.x + kBtnW, y0 }, kDimLine, 0.5f);
+            dl->AddLine({ tl.x,      y0 }, { tl.x + kBtnW, y0 }, kDimLine, 0.5f);
             dl->AddLine({ rightBtnX, y0 }, { br.x,         y0 }, kDimLine, 0.5f);
         }
 
-        if (app) {
-            // Left label — centred inside the button cell.
-            const char* ll = app->leftLabel(s);
+        // Left label — always delegate to active app.
+        if (activeApp) {
+            const char* ll = activeApp->leftLabel(s);
             if (ll && *ll) {
                 ImVec2 lsz = ImGui::CalcTextSize(ll);
                 dl->AddText(
@@ -71,37 +77,57 @@ void MFDPanel::render(const char* id)
                       y0   + (btnRowH - lsz.y) * 0.5f },
                     kGreen, ll);
             }
+        }
 
-            // Right label.
-            const char* rl = app->rightLabel(s);
-            if (rl && *rl) {
-                ImVec2 rsz = ImGui::CalcTextSize(rl);
-                dl->AddText(
-                    { rightBtnX + (kBtnW - rsz.x) * 0.5f,
-                      y0        + (btnRowH - rsz.y) * 0.5f },
-                    kGreen, rl);
-            }
+        // Right label — slot kLastSlot is permanently "MNU"; others delegate to app.
+        const char* rl    = "";
+        ImU32       rlCol = kGreen;
+        if (s == kLastSlot && menuApp) {
+            rl    = "MNU";
+            rlCol = isInMenu ? kGreen : kMnuCol;
+        } else if (activeApp && !isInMenu) {
+            rl = activeApp->rightLabel(s);
+        }
+        if (rl && *rl) {
+            ImVec2 rsz = ImGui::CalcTextSize(rl);
+            dl->AddText(
+                { rightBtnX + (kBtnW - rsz.x) * 0.5f,
+                  y0        + (btnRowH - rsz.y) * 0.5f },
+                rlCol, rl);
         }
 
         // Invisible buttons for click detection.
-        // IDs are unique per slot + per panel (id suffix).
         std::string lid = std::string("##L") + std::to_string(s) + id;
         std::string rid = std::string("##R") + std::to_string(s) + id;
 
         ImGui::SetCursorScreenPos({ tl.x, y0 });
-        if (ImGui::InvisibleButton(lid.c_str(), { kBtnW, btnRowH }) && app)
-            app->onLeft(s);
+        if (ImGui::InvisibleButton(lid.c_str(), { kBtnW, btnRowH }) && activeApp && !isInMenu)
+            activeApp->onLeft(s);
 
         ImGui::SetCursorScreenPos({ rightBtnX, y0 });
-        if (ImGui::InvisibleButton(rid.c_str(), { kBtnW, btnRowH }) && app)
-            app->onRight(s);
+        if (ImGui::InvisibleButton(rid.c_str(), { kBtnW, btnRowH })) {
+            if (s == kLastSlot && menuApp) {
+                // MNU: toggle menu.
+                isInMenu = !isInMenu;
+            } else if (activeApp && !isInMenu) {
+                activeApp->onRight(s);
+            }
+        }
     }
 
-    // Content area — delegate to app.
-    if (app) {
+    // Content area — delegate to active app.
+    if (activeApp) {
         const ImVec2 contentOrigin = { tl.x + kBtnW,   titleBottom };
         const ImVec2 contentSize   = { size.x - 2.0f * kBtnW, contentH };
-        app->render(dl, contentOrigin, contentSize);
+        activeApp->render(dl, contentOrigin, contentSize);
+    }
+
+    // If in menu mode, check whether the user selected an app this frame.
+    if (isInMenu && menuApp) {
+        if (MFDApp* sel = menuApp->consumeSelection()) {
+            app      = sel;
+            isInMenu = false;
+        }
     }
 
     ImGui::End();

@@ -38,6 +38,8 @@
 #include "NavHUD.h"
 #include "NavState.h"
 #include "OrbitalMFD.h"
+#include "DockingMFD.h"
+#include "MFDMenu.h"
 #include "apeiron/spacecraft/Autopilot.h"
 #include "apeiron/spacecraft/ManifestLoader.h"
 #include "apeiron/spacecraft/OrbitLoader.h"
@@ -858,6 +860,25 @@ int main()
         NavConsole navConsole;
         NavHUD     navHUD;
 
+        // MFD apps and persistent panels (panels must outlive the loop so
+        // isInMenu / app selection survive across frames).
+        DockingMFD dockingMFD;
+        MFDMenu    mfdMenu;
+        mfdMenu.addApp(&orbitalMFD, "ORB");
+        mfdMenu.addApp(&dockingMFD, "DOCK");
+
+        MFDPanel mfdFullPanel;
+        mfdFullPanel.app     = &orbitalMFD;
+        mfdFullPanel.menuApp = &mfdMenu;
+
+        MFDPanel mfdLeftPanel;
+        mfdLeftPanel.app     = &orbitalMFD;
+        mfdLeftPanel.menuApp = &mfdMenu;
+
+        MFDPanel mfdRightPanel;
+        mfdRightPanel.app     = &dockingMFD;
+        mfdRightPanel.menuApp = &mfdMenu;
+
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
 
@@ -1502,11 +1523,9 @@ int main()
                     orbitalMFD.clearTarget();
                 }
 
-                MFDPanel fullPanel;
-                fullPanel.pos  = { 0.0f, 0.0f };
-                fullPanel.size = { W, H };
-                fullPanel.app  = &orbitalMFD;
-                fullPanel.render("##MFDFull");
+                mfdFullPanel.pos  = { 0.0f, 0.0f };
+                mfdFullPanel.size = { W, H };
+                mfdFullPanel.render("##MFDFull");
             }
 
             // ---- Nav view HUD ----
@@ -1593,17 +1612,13 @@ int main()
                 const float kMfdH = std::round(kMfdW * (9.0f / 16.0f));
                 const float mfdY  = H - kMfdH;
 
-                MFDPanel leftPanel;
-                leftPanel.pos  = { 0.0f, mfdY };
-                leftPanel.size = { kMfdW, kMfdH };
-                leftPanel.app  = &orbitalMFD;
-                leftPanel.render("##MFD0");
+                mfdLeftPanel.pos  = { 0.0f, mfdY };
+                mfdLeftPanel.size = { kMfdW, kMfdH };
+                mfdLeftPanel.render("##MFD0");
 
-                MFDPanel rightPanel;
-                rightPanel.pos  = { W - kMfdW, mfdY };
-                rightPanel.size = { kMfdW, kMfdH };
-                rightPanel.app  = &orbitalMFD;
-                rightPanel.render("##MFD1");
+                mfdRightPanel.pos  = { W - kMfdW, mfdY };
+                mfdRightPanel.size = { kMfdW, kMfdH };
+                mfdRightPanel.render("##MFD1");
 
                 // ---- Nav Console — bottom centre ----
                 {
