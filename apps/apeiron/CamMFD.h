@@ -30,6 +30,7 @@ public:
     void setTexture(ImTextureID tex) { m_texture = tex; }
     bool hasTexture() const          { return m_texture != 0; }
 
+    bool fullBleed() const override { return true; }
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
     const char* leftLabel(int slot) const override;

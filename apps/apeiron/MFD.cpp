@@ -26,17 +26,22 @@ void MFDPanel::render(const char* id)
     const ImVec2 tl = pos;
     const ImVec2 br = { pos.x + size.x, pos.y + size.y };
 
+    // Active app: menu when isInMenu, otherwise the normal app.
+    MFDApp* activeApp = isInMenu ? static_cast<MFDApp*>(menuApp) : app;
+
     // Background fill.
     dl->AddRectFilled(tl, br, kBgFill, 3.0f);
+
+    // Full-bleed apps render first (before chrome) so borders/buttons appear on top.
+    if (activeApp && activeApp->fullBleed())
+        activeApp->render(dl, tl, size);
+
     // Outer border.
     dl->AddRect(tl, br, kGreen, 3.0f, 0, 1.5f);
 
     // Title bar.
     const float titleBottom = pos.y + kTitleH;
     dl->AddLine({ tl.x, titleBottom }, { br.x, titleBottom }, kGreen, 1.0f);
-
-    // Active app: menu when isInMenu, otherwise the normal app.
-    MFDApp* activeApp = isInMenu ? static_cast<MFDApp*>(menuApp) : app;
 
     if (activeApp) {
         const char* title = activeApp->name();
@@ -115,8 +120,8 @@ void MFDPanel::render(const char* id)
         }
     }
 
-    // Content area — delegate to active app.
-    if (activeApp) {
+    // Content area — delegate to active app (skipped for full-bleed apps, already drawn).
+    if (activeApp && !activeApp->fullBleed()) {
         const ImVec2 contentOrigin = { tl.x + kBtnW,   titleBottom };
         const ImVec2 contentSize   = { size.x - 2.0f * kBtnW, contentH };
         activeApp->render(dl, contentOrigin, contentSize);

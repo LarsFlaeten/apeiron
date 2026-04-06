@@ -20,8 +20,14 @@ public:
     virtual const char* name() const = 0;
 
     // Draw content into the rectangle [origin, origin+size).
-    // Called from MFDPanel::render() with the inner content area (buttons excluded).
+    // Called from MFDPanel::render() with the inner content area (buttons excluded),
+    // unless fullBleed() returns true — in that case origin/size cover the full panel
+    // and render() is called before borders/buttons so the chrome appears on top.
     virtual void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) = 0;
+
+    // Return true to receive the full panel rect (title bar + button columns included).
+    // The panel draws its borders and buttons on top of the app's output.
+    virtual bool fullBleed() const { return false; }
 
     virtual const char* leftLabel (int /*slot*/) const { return ""; }
     virtual const char* rightLabel(int /*slot*/) const { return ""; }
