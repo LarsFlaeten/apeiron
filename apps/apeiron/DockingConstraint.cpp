@@ -25,7 +25,7 @@ void DockingConstraint::arm(Spacecraft* active,  DockPort activePort,
     m_activePort  = activePort;
     m_passivePort = passivePort;
     m_params      = params;
-    m_phase       = Phase::Armed;
+    m_phase       = Phase::Unarmed;
     m_holdTimer   = 0.0f;
     m_rangeM      = 0.0f;
     m_attErrDeg   = 0.0f;
@@ -40,10 +40,16 @@ void DockingConstraint::disarm()
     m_holdTimer = 0.0f;
 }
 
+void DockingConstraint::activate()
+{
+    if (m_phase == Phase::Unarmed)
+        m_phase = Phase::Armed;
+}
+
 // ---------------------------------------------------------------------------
 void DockingConstraint::update(double dt_s)
 {
-    if (m_phase == Phase::Idle || !m_active || !m_passive) return;
+    if (m_phase == Phase::Idle || m_phase == Phase::Unarmed || !m_active || !m_passive) return;
 
     if (m_phase == Phase::HardCapture) {
         // Rigid lock is handled in enforcePostStep(), called after spacecraft integrate.
@@ -216,9 +222,22 @@ void DockingConstraint::initiateHardCapture()
 void DockingConstraint::release()
 {
     if (!m_active) return;
+
+    // Apply a small separation impulse along the active port outward axis so the
+    // two vehicles drift apart and cannot immediately re-soft-capture.
+    // 0.05 m/s = 5e-5 km/s is gentle enough not to disturb the orbit appreciably
+    // but large enough to guarantee a clean separation.
+    constexpr double kSepKms = 0.05e-3;  // 0.05 m/s in km/s
+    const glm::dvec3 pAxisX  = m_active->attitude() * glm::dvec3(m_activePort.axisX);
+    // Active moves in -pAxisX direction (away from passive); passive moves in +pAxisX.
+    m_active ->setVelocity(m_active ->velocity() - pAxisX * kSepKms);
+    if (m_passive)
+        m_passive->setVelocity(m_passive->velocity() + pAxisX * kSepKms);
+
     m_active->clearParent();
-    // Return to Armed so capture can be re-attempted on the same port.
-    m_phase     = Phase::Armed;
+    // Return to Unarmed (not Armed) so the user must explicitly re-arm before
+    // the next capture attempt, preventing immediate re-soft-capture.
+    m_phase     = Phase::Unarmed;
     m_holdTimer = 0.0f;
 }
 

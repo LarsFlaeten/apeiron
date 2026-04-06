@@ -891,6 +891,7 @@ int main()
         DockingMFD         dockingMFD;
         dockingMFD.setCamNodes(navCamNodes);   // let DockingMFD cycle / auto-select
         DockingConstraint  dockingConstraint;
+        dockingMFD.setConstraint(&dockingConstraint);
         windowState.dockConstraint = &dockingConstraint;
         MFDMenu    mfdMenu;
         mfdMenu.addApp(&orbitalMFD, "ORB");
@@ -1179,13 +1180,14 @@ int main()
             }
 
             // ---- Docking constraint arm/disarm ----
-            // Arm whenever docking mode has a valid target + port; disarm otherwise.
-            // Hard capture is self-sustaining once initiated — never auto-disarm it.
+            // Configure the constraint whenever docking mode has a valid target + port.
+            // arm() sets phase to Unarmed; the user must press ARM in the MFD to activate
+            // capture monitoring.  Hard capture is self-sustaining — never auto-disarm it.
             {
                 const bool hardCaptured =
                     dockingConstraint.phase() == DockingConstraint::Phase::HardCapture;
 
-                const bool shouldArm =
+                const bool shouldConfigure =
                     !hardCaptured &&
                     nav.navMode == NavMode::Docking &&
                     nav.dockTgtIdx >= 0 &&
@@ -1197,8 +1199,9 @@ int main()
                 static int lastArmedTgt  = -2;
                 static int lastArmedPort = -2;
 
-                if (shouldArm) {
+                if (shouldConfigure) {
                     if (nav.dockTgtIdx != lastArmedTgt || nav.dockPortIdx != lastArmedPort) {
+                        // Port selection changed — reconfigure (resets to Unarmed).
                         dockingConstraint.arm(
                             spacecraft[playerIdx].get(),
                             scPorts[playerIdx][0],
@@ -1609,6 +1612,7 @@ int main()
                     using DP = DockingConstraint::Phase;
                     CP cp = CP::None;
                     switch (dockingConstraint.phase()) {
+                        case DP::Unarmed:     cp = CP::Unarmed;     break;
                         case DP::Armed:       cp = CP::Armed;       break;
                         case DP::SoftCapture: cp = CP::SoftCapture; break;
                         case DP::HardCapture: cp = CP::HardCapture; break;
@@ -1711,6 +1715,7 @@ int main()
                     using DP = DockingConstraint::Phase;
                     CP cp = CP::None;
                     switch (dockingConstraint.phase()) {
+                        case DP::Unarmed:     cp = CP::Unarmed;     break;
                         case DP::Armed:       cp = CP::Armed;       break;
                         case DP::SoftCapture: cp = CP::SoftCapture; break;
                         case DP::HardCapture: cp = CP::HardCapture; break;

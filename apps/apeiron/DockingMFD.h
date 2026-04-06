@@ -3,6 +3,7 @@
 #include "MFD.h"
 #include "Spacecraft.h"
 #include "NavState.h"
+#include "DockingConstraint.h"
 #include "apeiron/render/GltfModel.h"
 
 #include <glm/glm.hpp>
@@ -52,8 +53,11 @@ public:
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
     // Feed the current capture phase from DockingConstraint so the MFD can show it.
-    enum class CapturePhase { None, Armed, SoftCapture, HardCapture };
+    enum class CapturePhase { None, Unarmed, Armed, SoftCapture, HardCapture };
     void setCapturePhase(CapturePhase p) { m_capturePhase = p; }
+
+    // Provide a pointer to the constraint so the ARM button can call activate().
+    void setConstraint(DockingConstraint* c) { m_constraint = c; }
 
     // Feed capture thresholds for colour-coding the range / velocity readouts.
     void setCaptureThresholds(float maxRangeM, float maxClosureMs, float maxAttErrDeg) {
@@ -86,8 +90,9 @@ private:
     float  m_rollErrDeg  = 0.0f;  // port roll mismatch
     float  m_fullScaleM  = 50.0f; // half-width of indicator in metres (dynamic)
 
-    CapturePhase m_capturePhase   = CapturePhase::None;
-    float        m_threshRangeM    = 0.15f;
-    float        m_threshClosureMs = 0.03f;
-    float        m_threshAttErrDeg = 5.0f;
+    CapturePhase       m_capturePhase     = CapturePhase::None;
+    DockingConstraint* m_constraint       = nullptr;
+    float              m_threshRangeM     = 0.15f;
+    float              m_threshClosureMs  = 0.03f;
+    float              m_threshAttErrDeg  = 5.0f;
 };

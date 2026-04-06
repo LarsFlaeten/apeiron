@@ -169,6 +169,7 @@ void DockingMFD::update(
 const char* DockingMFD::leftLabel(int slot) const
 {
     if (slot == 0) return "CAM";
+    if (slot == 1) return "ARM";
     return "";
 }
 
@@ -176,6 +177,8 @@ void DockingMFD::onLeft(int slot)
 {
     if (slot == 0 && !m_camNodes.empty())
         m_camIdx = (m_camIdx + 1) % static_cast<int>(m_camNodes.size());
+    else if (slot == 1 && m_constraint)
+        m_constraint->activate();
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +332,7 @@ void DockingMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         const char* label = nullptr;
         ImU32 col = kDim;
         switch (m_capturePhase) {
+            case CapturePhase::Unarmed:     label = "UNARMED";      col = kDim;    break;
             case CapturePhase::Armed:       label = "ARMED";        col = kCyan;   break;
             case CapturePhase::SoftCapture: label = "SOFT CAPTURE"; col = kGreen;  break;
             case CapturePhase::HardCapture: label = "HARD CAPTURE"; col = kYellow; break;

@@ -57,16 +57,20 @@ public:
     using DockPort = apeiron::render::GltfModel::DockingPort;
     using Params   = DockingConstraintParams;
 
-    enum class Phase { Idle, Armed, SoftCapture, HardCapture };
+    enum class Phase { Idle, Unarmed, Armed, SoftCapture, HardCapture };
 
     // Arm the constraint.  active = probe (Orion), passive = drogue (ISS).
     // Ports must already be transformed into spacecraft body frame (rollFix applied).
+    // Sets phase to Unarmed — the user must call activate() to start capture monitoring.
     void arm(Spacecraft* active,  DockPort activePort,
              Spacecraft* passive, DockPort passivePort,
              const Params& params = Params{});
 
     // Disarm and reset to Idle.
     void disarm();
+
+    // User-initiated transition from Unarmed → Armed.  Starts capture monitoring.
+    void activate();
 
     // Pre-step: apply spring-damper forces and check capture conditions.
     // Call BEFORE Spacecraft::update() so forces are included in this tick.
@@ -81,8 +85,8 @@ public:
     // range is within maxHardCaptureM (default 0.5 m).
     void initiateHardCapture();
 
-    // Release from dock (any phase).  Clears parent, returns to Armed if a
-    // port is still selected, otherwise Idle.
+    // Release from dock (any phase).  Applies a small separation impulse,
+    // clears parent, and returns to Unarmed (not Armed) to prevent immediate re-capture.
     void release();
 
     // ---- Query ----
