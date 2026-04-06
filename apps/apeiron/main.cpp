@@ -345,7 +345,7 @@ int main()
             : glm::dmat3(34000.0);
         astro::State shipState;
         {
-            constexpr double kSepKm = 1.0;  // 1 km behind
+            constexpr double kSepKm = 0.25;  // 250 m behind
             glm::dvec3 prograde = glm::normalize(issV_init);
             shipState.P.r = issR_init - kSepKm * prograde;  // retrograde = behind ISS
             shipState.P.v = issV_init;  // identical velocity = co-elliptic, no drift
@@ -709,7 +709,20 @@ int main()
         using DockPort = apeiron::render::GltfModel::DockingPort;
         std::vector<std::vector<DockPort>> scPorts(spacecraft.size());
         scPorts[playerIdx] = orionGltf.dockingPorts();
-        scPorts[issIdx]    = issGltf.dockingPorts();
+        // Orion's GLB is exported with a 90° Rx rollFix applied during rendering
+        // (attRot * Rx(90°) * model).  Bake the same rotation into the port axes so
+        // that DockingMFD can use body-frame directions directly.
+        {
+            const glm::mat3 rf = glm::mat3(glm::rotate(glm::mat4(1.0f),
+                                                        glm::radians(90.0f),
+                                                        glm::vec3(1.0f, 0.0f, 0.0f)));
+            for (auto& p : scPorts[playerIdx]) {
+                p.posM  = rf * p.posM;
+                p.axisX = glm::normalize(rf * p.axisX);
+                p.axisZ = glm::normalize(rf * p.axisZ);
+            }
+        }
+        scPorts[issIdx] = issGltf.dockingPorts();
         for (size_t i = 0; i < scPorts.size(); ++i) {
             std::cout << "[Apeiron] Spacecraft[" << i << "] docking ports: "
                       << scPorts[i].size() << "\n";
