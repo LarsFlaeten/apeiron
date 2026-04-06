@@ -55,6 +55,13 @@ public:
     enum class CapturePhase { None, Armed, SoftCapture, HardCapture };
     void setCapturePhase(CapturePhase p) { m_capturePhase = p; }
 
+    // Feed capture thresholds for colour-coding the range / velocity readouts.
+    void setCaptureThresholds(float maxRangeM, float maxClosureMs, float maxAttErrDeg) {
+        m_threshRangeM    = maxRangeM;
+        m_threshClosureMs = maxClosureMs;
+        m_threshAttErrDeg = maxAttErrDeg;
+    }
+
     const char* leftLabel(int slot) const override;
     void        onLeft   (int slot) override;
 
@@ -79,5 +86,8 @@ private:
     float  m_rollErrDeg  = 0.0f;  // port roll mismatch
     float  m_fullScaleM  = 50.0f; // half-width of indicator in metres (dynamic)
 
-    CapturePhase m_capturePhase = CapturePhase::None;
+    CapturePhase m_capturePhase   = CapturePhase::None;
+    float        m_threshRangeM    = 0.15f;
+    float        m_threshClosureMs = 0.03f;
+    float        m_threshAttErrDeg = 5.0f;
 };

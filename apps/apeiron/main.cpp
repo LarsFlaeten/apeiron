@@ -834,6 +834,11 @@ int main()
                      s->dockConstraint) {
                 s->dockConstraint->initiateHardCapture();
             }
+            else if (key == GLFW_KEY_BACKSPACE &&
+                     s->nav && s->nav->navMode == NavMode::Docking &&
+                     s->dockConstraint) {
+                s->dockConstraint->release();
+            }
         });
         glfwSetScrollCallback(window, [](GLFWwindow* w, double xoff, double yoff) {
             ImGui_ImplGlfw_ScrollCallback(w, xoff, yoff);
@@ -1607,6 +1612,8 @@ int main()
                         default: break;
                     }
                     dockingMFD.setCapturePhase(cp);
+                    const DockingConstraintParams& dp = DockingConstraintParams{};
+                    dockingMFD.setCaptureThresholds(dp.maxRangeM, dp.maxClosureMs, dp.maxAttErrDeg);
                 }
 
                 mfdFullPanel.pos  = { 0.0f, 0.0f };
@@ -1707,6 +1714,8 @@ int main()
                         default: break;
                     }
                     dockingMFD.setCapturePhase(cp);
+                    const DockingConstraintParams& dp = DockingConstraintParams{};
+                    dockingMFD.setCaptureThresholds(dp.maxRangeM, dp.maxClosureMs, dp.maxAttErrDeg);
                 }
 
                 // Each MFD occupies 1/3 of screen width; height derived from 16:9.

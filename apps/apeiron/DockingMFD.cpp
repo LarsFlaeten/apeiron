@@ -212,14 +212,20 @@ void DockingMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
     // ---- Range + closure velocity ----
     {
+        // Range: green = within capture threshold, yellow = close, red = far
+        ImU32 rngCol = (m_rangeM <= m_threshRangeM)          ? kGreen  :
+                       (m_rangeM <= m_threshRangeM * 10.0f)  ? kYellow : kRed;
         if (m_rangeM < 1000.0f)
             std::snprintf(buf, sizeof(buf), "RNG %6.1f m", m_rangeM);
         else
             std::snprintf(buf, sizeof(buf), "RNG %6.3f km", m_rangeM * 1e-3f);
-        dl->AddText({ origin.x + pad, y }, kGreen, buf);
+        dl->AddText({ origin.x + pad, y }, rngCol, buf);
 
-        // Colour: green = closing (positive), red = opening
-        ImU32 velCol = m_closureMs >= 0.0f ? kGreen : kRed;
+        // Velocity: green = within threshold, yellow = moderate, red = too fast or opening
+        const float absVel = std::abs(m_closureMs);
+        ImU32 velCol = (absVel <= m_threshClosureMs)         ? kGreen  :
+                       (absVel <= m_threshClosureMs * 3.0f)  ? kYellow : kRed;
+        if (m_closureMs < 0.0f) velCol = kRed;  // opening = always red
         std::snprintf(buf, sizeof(buf), "%+.2f m/s", m_closureMs);
         ImVec2 vsz = ImGui::CalcTextSize(buf);
         dl->AddText({ origin.x + size.x - vsz.x - pad, y }, velCol, buf);
@@ -296,10 +302,15 @@ void DockingMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // ---- Attitude errors (P / Y / R) ----
     if (m_hasPort) {
         // Colour: green if all within 2°, yellow otherwise
-        bool aligned = std::abs(m_pitchErrDeg) < 2.0f
-                    && std::abs(m_yawErrDeg)   < 2.0f
-                    && std::abs(m_rollErrDeg)  < 5.0f;
-        ImU32 attCol = aligned ? kGreen : kYellow;
+        const float maxPY = m_threshAttErrDeg * 0.4f;  // pitch/yaw tighter than combined
+        const float maxR  = m_threshAttErrDeg;
+        bool aligned = std::abs(m_pitchErrDeg) < maxPY
+                    && std::abs(m_yawErrDeg)   < maxPY
+                    && std::abs(m_rollErrDeg)  < maxR;
+        bool tooFar  = std::abs(m_pitchErrDeg) > maxPY * 3.0f
+                    || std::abs(m_yawErrDeg)   > maxPY * 3.0f
+                    || std::abs(m_rollErrDeg)  > maxR  * 3.0f;
+        ImU32 attCol = aligned ? kGreen : (tooFar ? kRed : kYellow);
 
         std::snprintf(buf, sizeof(buf), "P %+5.1f°  Y %+5.1f°",
                       m_pitchErrDeg, m_yawErrDeg);

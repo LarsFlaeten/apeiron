@@ -24,6 +24,11 @@ struct DockingConstraintParams {
     double cTrans = 100'000.0;  // N·s/m
     double kRot   = 400'000.0;  // N·m/rad
     double cRot   = 250'000.0;  // N·m·s/rad
+
+    // Hard capture only allowed within this range (m); prevents accidental lock at distance.
+    float maxHardCaptureM   = 0.5f;
+    // If soft-capture range diverges beyond this, auto-release back to Armed (m).
+    float softCaptureBreakM = 2.0f;
 };
 
 // ---------------------------------------------------------------------------
@@ -66,8 +71,13 @@ public:
     // Call once per physics tick before Spacecraft::update().
     void update(double dt_s);
 
-    // User-initiated hard capture.  Only takes effect in SoftCapture phase.
+    // User-initiated hard capture.  Only valid in SoftCapture phase AND when
+    // range is within maxHardCaptureM (default 0.5 m).
     void initiateHardCapture();
+
+    // Release from dock (any phase).  Clears parent, returns to Armed if a
+    // port is still selected, otherwise Idle.
+    void release();
 
     // ---- Query ----
     Phase phase()     const { return m_phase; }

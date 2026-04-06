@@ -118,6 +118,12 @@ void DockingConstraint::update(double dt_s)
     }
 
     // ---- SoftCapture: spring-damper force ----
+    // Auto-break if the spring has diverged (ships too far apart).
+    if (m_rangeM > m_params.softCaptureBreakM) {
+        m_phase     = Phase::Armed;
+        m_holdTimer = 0.0f;
+        return;
+    }
     applySoftCaptureForces();
 }
 
@@ -189,25 +195,32 @@ void DockingConstraint::applySoftCaptureForces()
 void DockingConstraint::initiateHardCapture()
 {
     if (m_phase != Phase::SoftCapture || !m_active || !m_passive) return;
+    if (m_rangeM > m_params.maxHardCaptureM) return;  // too far away
 
     const glm::dquat tAtt    = m_passive->attitude();
     const glm::dquat tAttInv = glm::conjugate(tAtt);
 
-    // Store active CoM position in passive body frame (km)
+    // Store active CoM position in passive body frame (km).
     m_hardRelPos = tAttInv * (m_active->position() - m_passive->position());
-
-    // Store active attitude relative to passive
+    // Store active attitude relative to passive.
     m_hardRelAtt = tAttInv * m_active->attitude();
 
-    // Mark active as a child so the main loop skips its own integration
-    // (index 0 = Orion, index 1 = ISS — caller should ensure correct indices,
-    //  but the parent-tracking is done here for convenience; the index used
-    //  here is the passive's position in the spacecraft vector, which we
-    //  approximate as 1 since ISS is always index 1 in the current setup.
-    //  A cleaner future refactor would pass spacecraft indices to arm().)
+    // Mark active as a child so the main loop skips its own integration.
     m_active->setParent(1);
-
     m_phase = Phase::HardCapture;
+
+    // Enforce immediately so the first rendered frame shows no discontinuity.
+    enforceHardCapture();
+}
+
+// ---------------------------------------------------------------------------
+void DockingConstraint::release()
+{
+    if (!m_active) return;
+    m_active->clearParent();
+    // Return to Armed so capture can be re-attempted on the same port.
+    m_phase     = Phase::Armed;
+    m_holdTimer = 0.0f;
 }
 
 // ---------------------------------------------------------------------------
