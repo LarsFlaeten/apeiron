@@ -227,7 +227,7 @@ void Renderer::recreateFramebuffers()
     }
 }
 
-bool Renderer::beginFrame()
+bool Renderer::acquireFrame()
 {
     auto device = m_ctx.device();
     int  frame  = m_currentFrame;
@@ -246,6 +246,13 @@ bool Renderer::beginFrame()
     auto& cmd = m_commandBuffers[frame];
     cmd.reset();
     cmd.begin(vk::CommandBufferBeginInfo{});
+    return true;
+}
+
+void Renderer::beginHDRPass()
+{
+    int   frame = m_currentFrame;
+    auto& cmd   = m_commandBuffers[frame];
 
     std::array<vk::ClearValue, 2> clearValues{};
     clearValues[0].color        = vk::ClearColorValue{std::array<float,4>{0.0f, 0.0f, 0.0f, 1.0f}};
@@ -268,7 +275,12 @@ bool Renderer::beginFrame()
     };
     cmd.setViewport(0, vp);
     cmd.setScissor (0, vk::Rect2D{{0, 0}, m_swapchain.extent()});
+}
 
+bool Renderer::beginFrame()
+{
+    if (!acquireFrame()) return false;
+    beginHDRPass();
     return true;
 }
 

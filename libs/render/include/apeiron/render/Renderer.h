@@ -50,6 +50,23 @@ public:
     // Returns false if the swapchain is out of date (resize) — skip the frame.
     bool beginFrame();
 
+    // Split form of beginFrame() for inserting auxiliary GPU passes before
+    // the main HDR pass (e.g. offscreen camera views).
+    //
+    //   if (!renderer.acquireFrame()) continue;
+    //   // record auxiliary passes here using currentCmd()
+    //   renderer.beginHDRPass();
+    //   // normal draw calls
+    //   renderer.endFrame();
+    //
+    // acquireFrame() — wait fence, acquire image, begin command buffer.
+    // beginHDRPass() — begin the HDR render pass + set viewport/scissor.
+    bool acquireFrame();
+    void beginHDRPass();
+
+    // Active frame-in-flight index.  Valid after acquireFrame(), before endFrame().
+    int currentFrameIndex() const { return m_currentFrame; }
+
     // Record one mesh draw.
     // sunDir/viewDir are normalised world-space vectors (computed by caller).
     // isEmissive = true for self-luminous bodies (the sun); skips lighting.

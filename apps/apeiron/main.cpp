@@ -40,6 +40,8 @@
 #include "OrbitalMFD.h"
 #include "DockingMFD.h"
 #include "DockingConstraint.h"
+#include "OffscreenCam.h"
+#include "CamMFD.h"
 #include "MFDMenu.h"
 #include "apeiron/spacecraft/Autopilot.h"
 #include "apeiron/spacecraft/ManifestLoader.h"
@@ -650,6 +652,11 @@ int main()
             }
         }
 
+        // OffscreenCam declared BEFORE Renderer so it is destroyed AFTER Renderer
+        // (C++ reverse-construction order).  Renderer::~Renderer() calls device.waitIdle()
+        // first, ensuring the GPU is idle when OffscreenCam resources are released.
+        OffscreenCam offscreenCam;
+
         // Renderer last — its destructor calls waitIdle before anything else frees.
         apeiron::render::Renderer renderer(ctx, swapchain, pipeline, tonemap, bloom,
                                            atmospherePipeline);
@@ -697,6 +704,10 @@ int main()
                 static_cast<VkImageView> (ap.lutView()),
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
+
+        // Initialise offscreen camera render target (must follow initImGui so that
+        // ImGui_ImplVulkan_AddTexture is available for the per-frame color images).
+        offscreenCam.init(ctx, allocator, pipeline, swapchain);
 
         // View mode: F1=Nav, F2=MFD fullscreen, F11=Ship inspect, F12=Dev.
         enum class ViewMode { Dev, Nav, MfdFull, ShipInspect };
@@ -893,9 +904,14 @@ int main()
         DockingConstraint  dockingConstraint;
         dockingMFD.setConstraint(&dockingConstraint);
         windowState.dockConstraint = &dockingConstraint;
+
+        CamMFD camMFD;
+        camMFD.setCamNodes(navCamNodes);
+
         MFDMenu    mfdMenu;
         mfdMenu.addApp(&orbitalMFD, "ORB");
         mfdMenu.addApp(&dockingMFD, "DOCK");
+        mfdMenu.addApp(&camMFD,     "CAM");
 
         MFDPanel mfdFullPanel;
         mfdFullPanel.app     = &orbitalMFD;
@@ -1798,7 +1814,67 @@ int main()
             viewRot[3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
             const glm::mat4 vpRot = camera.projectionMatrix() * viewRot;
 
-            if (!renderer.beginFrame()) continue;
+            // ---- Pre-compute model matrices for the offscreen cam pre-pass ----
+            // These duplicate a small amount of work from the spacecraft draw section
+            // below, but keep the main draw code unchanged.
+            glm::mat4 offVP       = glm::mat4(1.0f);  // identity = no perspective (fallback)
+            glm::vec3 offCamPos   = glm::vec3(0.0f);
+            glm::mat4 offOrion    = glm::mat4(1.0f);
+            glm::mat4 offIss      = glm::mat4(1.0f);
+            glm::vec3 offSunDir   = (sunIndex >= 0)
+                ? glm::normalize(sunRenderPos - scene.origin().toRenderSpace(earthWorld))
+                : glm::vec3(0.0f, 1.0f, 0.0f);
+            {
+                auto& sc   = *spacecraft[playerIdx];
+                glm::vec3 rp  = scene.origin().toRenderSpace(earthWorld + sc.position());
+                glm::mat3 ar  = glm::mat3_cast(glm::fquat(sc.attitude()));
+                const glm::mat4 rf = glm::rotate(glm::mat4(1.0f),
+                                                  glm::radians(90.0f),
+                                                  glm::vec3(1.0f, 0.0f, 0.0f));
+                offOrion = glm::translate(glm::mat4(1.0f), rp)
+                         * glm::mat4(ar) * rf
+                         * glm::scale(glm::mat4(1.0f), glm::vec3(1e-3f));
+
+                if (orionGltf.isLoaded() && !camMFD.activeCamNode().empty()) {
+                    glm::mat4 nodeTf   = orionGltf.nodeWorldTransform(camMFD.activeCamNode());
+                    glm::mat4 shipRot  = glm::mat4(ar) * rf;
+                    glm::mat4 camWorld = shipRot * nodeTf;
+                    glm::vec3 pos = rp + glm::vec3(camWorld[3]) * 1e-3f;
+                    glm::vec3 fwd = glm::normalize(glm::vec3(camWorld[0]));
+                    glm::vec3 up  = glm::normalize(glm::vec3(camWorld[1]));
+                    offCamPos = pos;
+                    glm::mat4 view = glm::lookAt(pos, pos + fwd, up);
+                    glm::mat4 proj = glm::perspective(glm::radians(70.0f), 1.0f, 1e-4f, 200.0f);
+                    proj[1][1] *= -1.0f;  // Vulkan Y-flip (matches Camera::projectionMatrix())
+                    offVP = proj * view;
+                }
+            }
+            if (issGltf.isLoaded()) {
+                auto& sc  = *spacecraft[issIdx];
+                glm::vec3 rp = scene.origin().toRenderSpace(earthWorld + sc.position());
+                glm::mat3 ar = glm::mat3_cast(glm::fquat(sc.attitude()));
+                offIss = glm::translate(glm::mat4(1.0f), rp)
+                       * glm::mat4(ar)
+                       * glm::scale(glm::mat4(1.0f), glm::vec3(1e-3f));
+            }
+
+            if (!renderer.acquireFrame()) continue;
+
+            // ---- Offscreen cam pre-pass (before the main HDR pass) ----
+            {
+                const int fi = renderer.currentFrameIndex();
+                offscreenCam.begin(renderer.currentCmd(), fi);
+                if (orionGltf.isLoaded())
+                    orionGltf.draw(renderer.currentCmd(), meshPipeline,
+                                   offVP, offOrion, offSunDir, offCamPos);
+                if (issGltf.isLoaded())
+                    issGltf.draw(renderer.currentCmd(), meshPipeline,
+                                 offVP, offIss, offSunDir, offCamPos);
+                offscreenCam.end(renderer.currentCmd());
+                camMFD.setTexture(offscreenCam.imguiTexture(fi));
+            }
+
+            renderer.beginHDRPass();
 
             starField.draw(renderer.currentCmd(), vpRot);
 
