@@ -833,6 +833,12 @@ int main()
                     s->autopilot->mode = (s->autopilot->mode == M::NormalMinus) ? M::Off : M::NormalMinus;
                 }
             }
+            else if (key == GLFW_KEY_V && (mods & GLFW_MOD_SHIFT)) {
+                if (s->nav && s->nav->navMode == NavMode::Docking && s->nav->dockTgtIdx >= 0) {
+                    using M = spacecraft::AutopilotMode;
+                    s->autopilot->mode = (s->autopilot->mode == M::NullV) ? M::Off : M::NullV;
+                }
+            }
             else if (key == GLFW_KEY_T) {
                 if (mods & GLFW_MOD_SHIFT)
                     *s->simSpeed = std::max(1.0,   *s->simSpeed / 10.0);  // T = slower
@@ -1041,6 +1047,18 @@ int main()
                             glm::dquat att    = ship.attitude();
                             glm::dvec3 w_body = glm::conjugate(att) * ship.angularVelocity();
 
+                            // NullV: update relative velocity in player body frame each frame.
+                            if (autopilot.mode == spacecraft::AutopilotMode::NullV &&
+                                nav.dockTgtIdx >= 0) {
+                                glm::dvec3 relVel_inertial =
+                                    (ship.velocity() - spacecraft[static_cast<size_t>(nav.dockTgtIdx)]->velocity())
+                                    * 1000.0;  // km/s → m/s
+                                autopilot.relVelBody = glm::dvec3(glm::conjugate(att) * relVel_inertial);
+                            }
+                            // Auto-cancel once done.
+                            if (autopilot.nullVDone)
+                                autopilot.mode = spacecraft::AutopilotMode::Off;
+
                             // For attitude hold modes, update target each frame.
                             using M = spacecraft::AutopilotMode;
                             if (autopilot.mode == M::Prograde   || autopilot.mode == M::Retrograde ||
@@ -1079,7 +1097,9 @@ int main()
                                 glm::dvec3 w_ff_inertial = att * autopilot.omegaFF;
                                 ship.setAngularVelocity(w_ff_inertial);
                             }
-                            for (int i = 3; i < 6; ++i) desired[i] = apWrench[i];
+                            // NullV fills [0..2] (translation); attitude modes fill [3..5].
+                            for (int i = 0; i < 3; ++i) desired[i] += apWrench[i];
+                            for (int i = 3; i < 6; ++i) desired[i]  = apWrench[i];
                         } else {
                             // Manual rotation.
                             if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) desired[4] += rcsTorque;

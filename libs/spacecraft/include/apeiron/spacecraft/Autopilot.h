@@ -14,6 +14,7 @@ enum class AutopilotMode {
     Retrograde,  // hold body +X against velocity vector
     NormalPlus,  // hold body +X along orbit normal (r × v)
     NormalMinus, // hold body +X against orbit normal
+    NullV,       // null relative velocity to a target body (docking mode)
 };
 
 // ---------------------------------------------------------------------------
@@ -65,10 +66,22 @@ struct Autopilot {
 
     bool active() const { return mode != AutopilotMode::Off; }
 
+    // NullV — set by caller before enabling NullV mode.
+    // relVelBody: current relative velocity in the *player body frame* (m/s).
+    // Caller must update this each frame from fresh state.
+    // compute() writes the desired body-frame translational force into Wrench[0..2].
+    glm::dvec3 relVelBody   {};         // m/s, player body frame
+    double     nullVAuthN   = 4000.0;   // N — per-axis authority cap (≈ 4 kN RCS cluster)
+    double     nullVDoneThr = 0.02;     // m/s — declared done below this residual speed
+
     // Set by compute() each frame — true when performing a large-angle slew
     // (Phase 1 bang-bang or killrot at high rate).  Caller can use this to
     // select full vs RCS-only thruster allocation.
     bool inLargeSlew = false;
+
+    // Set by compute() when NullV residual drops below nullVDoneThr.
+    // Caller should reset mode to Off when this is true.
+    bool nullVDone = false;
 
     // Compute the desired wrench.
     // currentAttitude: current body→inertial quaternion (used by attitude hold).

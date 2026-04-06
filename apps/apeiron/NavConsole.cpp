@@ -276,6 +276,7 @@ void NavConsole::render(float                                           posX,
     else if (apMode == M::Retrograde)  apLabel = "RETROGRADE";
     else if (apMode == M::NormalPlus)  apLabel = "NORMAL+";
     else if (apMode == M::NormalMinus) apLabel = "NORMAL-";
+    else if (apMode == M::NullV)       apLabel = "NULL V";
     ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "AP:");
     ImGui::SameLine();
     ImGui::TextColored(apMode != M::Off
@@ -295,6 +296,9 @@ void NavConsole::render(float                                           posX,
         apButton("Retro [⇧R]",    M::Retrograde);
         apButton("Nrm+ [⇧N]",     M::NormalPlus);
         apButton("Nrm- [⇧M]",     M::NormalMinus);
+    }
+    if (nav.navMode == NavMode::Docking && nav.dockTgtIdx >= 0) {
+        apButton("NULL V", M::NullV);
     }
 
     ImGui::PopStyleColor();

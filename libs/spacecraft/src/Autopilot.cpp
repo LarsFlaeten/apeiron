@@ -15,9 +15,33 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
     inLargeSlew = false;
     Wrench w{};
 
+    nullVDone = false;
+
     if (mode == AutopilotMode::Off) {
         m_timedBurnActive = false;
         m_burnTimer       = 0.0;
+        return w;
+    }
+
+    // =========================================================
+    // NullV — null relative velocity to a target body.
+    // relVelBody (m/s, body frame) is set by the caller each frame.
+    // Outputs a body-frame translational force in Wrench[0..2].
+    // Rotation is not touched (caller can combine with Killrot via
+    // separate wrench, or let the pilot handle attitude).
+    // =========================================================
+    if (mode == AutopilotMode::NullV) {
+        const double vMag = glm::length(relVelBody);
+        if (vMag < nullVDoneThr) {
+            nullVDone = true;
+            return w;
+        }
+        // Desired force: oppose the relative velocity, clamped per-axis to authority.
+        // F = -relVelBody / |relVelBody| * nullVAuthN  (direction × magnitude)
+        // This is effectively a bang-bang in direction, which is fine for translation.
+        glm::dvec3 fDir = -relVelBody / vMag;
+        glm::dvec3 F    = fDir * nullVAuthN;
+        w[0] = F.x; w[1] = F.y; w[2] = F.z;
         return w;
     }
 
