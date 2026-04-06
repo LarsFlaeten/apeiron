@@ -72,8 +72,13 @@ public:
         m_threshAttErrDeg = maxAttErrDeg;
     }
 
-    const char* leftLabel(int slot) const override;
-    void        onLeft   (int slot) override;
+    // Camera FOV for the offscreen docking cam (main.cpp reads this each frame).
+    float fovDeg() const { return m_fovDeg; }
+
+    const char* leftLabel (int slot) const override;
+    void        onLeft    (int slot) override;
+    const char* rightLabel(int slot) const override;
+    void        onRight   (int slot) override;
 
 private:
     // Try to auto-select a cam for the given port label.
@@ -99,6 +104,7 @@ private:
     CapturePhase       m_capturePhase     = CapturePhase::None;
     DockingConstraint* m_constraint       = nullptr;
     ImTextureID        m_texture          = 0;
+    float              m_fovDeg           = 70.0f;  // camera zoom (narrow = zoomed in)
     float              m_threshRangeM     = 0.15f;
     float              m_threshClosureMs  = 0.03f;
     float              m_threshAttErrDeg  = 5.0f;

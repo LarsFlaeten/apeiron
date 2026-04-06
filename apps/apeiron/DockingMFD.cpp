@@ -2,6 +2,7 @@
 #include "MFD.h"
 
 #include <glm/gtc/quaternion.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <numbers>
@@ -182,6 +183,22 @@ void DockingMFD::onLeft(int slot)
         m_constraint->activate();
 }
 
+const char* DockingMFD::rightLabel(int slot) const
+{
+    if (slot == 0) return "Z+";
+    if (slot == 1) return "Z-";
+    return "";
+}
+
+void DockingMFD::onRight(int slot)
+{
+    // Each step multiplies/divides FOV by ~1.4 (≈ 1 stop).
+    // Clamped: 5° (extreme zoom) … 90° (wide).
+    constexpr float kStep = 1.4142f;
+    if (slot == 0) m_fovDeg = std::max( 5.0f, m_fovDeg / kStep);
+    if (slot == 1) m_fovDeg = std::min(90.0f, m_fovDeg * kStep);
+}
+
 // ---------------------------------------------------------------------------
 void DockingMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 {
@@ -234,13 +251,23 @@ void DockingMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
     float y = cOrig.y + pad;
 
-    // ---- Camera label (top, centred) ----
+    // ---- Camera label (top, centred) + zoom level (top-right) ----
     if (!m_camNodes.empty()) {
         const char* camName = m_camNodes[static_cast<size_t>(m_camIdx)].c_str();
         ImVec2 tsz = ImGui::CalcTextSize(camName);
         float tx = cOrig.x + (cSize.x - tsz.x) * 0.5f;
         if (m_texture != 0) pill(tx, y, tsz);
         dl->AddText({ tx, y }, kDim, camName);
+    }
+    {
+        // Zoom expressed as a magnification relative to 70° baseline: x = tan(35°)/tan(fov/2)
+        const float zoomX = std::tan(glm::radians(35.0f))
+                          / std::tan(glm::radians(m_fovDeg * 0.5f));
+        std::snprintf(buf, sizeof(buf), "%.1fx", zoomX);
+        ImVec2 zsz = ImGui::CalcTextSize(buf);
+        float zx = cOrig.x + cSize.x - zsz.x - pad;
+        if (m_texture != 0) pill(zx, y, zsz);
+        dl->AddText({ zx, y }, kDim, buf);
     }
     y += lh + pad;
 

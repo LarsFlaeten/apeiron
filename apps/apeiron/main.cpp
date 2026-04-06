@@ -1848,7 +1848,7 @@ int main()
             }
 
             // Build VP for a named cam node on the player ship (square 1:1 aspect).
-            auto buildCamVP = [&](const std::string& nodeName,
+            auto buildCamVP = [&](const std::string& nodeName, float fovDeg,
                                   glm::mat4& vpOut, glm::vec3& camPosOut) {
                 if (!orionGltf.isLoaded() || nodeName.empty()) return;
                 auto& sc  = *spacecraft[playerIdx];
@@ -1863,7 +1863,7 @@ int main()
                 glm::vec3 fwd = glm::normalize(glm::vec3(camWorld[0]));
                 glm::vec3 up  = glm::normalize(glm::vec3(camWorld[1]));
                 camPosOut = pos;
-                glm::mat4 proj = glm::perspective(glm::radians(70.0f), 1.0f, 1e-4f, 200.0f);
+                glm::mat4 proj = glm::perspective(glm::radians(fovDeg), 1.0f, 1e-4f, 200.0f);
                 proj[1][1] *= -1.0f;
                 vpOut = proj * glm::lookAt(pos, pos + fwd, up);
             };
@@ -1872,8 +1872,8 @@ int main()
             glm::vec3 offCamPos  = glm::vec3(0.0f);
             glm::mat4 dockVP     = glm::mat4(1.0f);
             glm::vec3 dockCamPos = glm::vec3(0.0f);
-            buildCamVP(camMFD.activeCamNode(),            offVP,  offCamPos);
-            buildCamVP(dockingMFD.preferredCamNode(),     dockVP, dockCamPos);
+            buildCamVP(camMFD.activeCamNode(),        70.0f,                  offVP,  offCamPos);
+            buildCamVP(dockingMFD.preferredCamNode(), dockingMFD.fovDeg(),    dockVP, dockCamPos);
 
             if (!renderer.acquireFrame()) continue;
 
