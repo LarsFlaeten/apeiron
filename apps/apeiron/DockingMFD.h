@@ -56,6 +56,12 @@ public:
     enum class CapturePhase { None, Unarmed, Armed, SoftCapture, HardCapture };
     void setCapturePhase(CapturePhase p) { m_capturePhase = p; }
 
+    // Feed the offscreen camera texture each frame (0 = no texture, normal layout).
+    void setTexture(ImTextureID tex) { m_texture = tex; }
+
+    // Full-bleed only when a camera texture is available.
+    bool fullBleed() const override { return m_texture != 0; }
+
     // Provide a pointer to the constraint so the ARM button can call activate().
     void setConstraint(DockingConstraint* c) { m_constraint = c; }
 
@@ -92,6 +98,7 @@ private:
 
     CapturePhase       m_capturePhase     = CapturePhase::None;
     DockingConstraint* m_constraint       = nullptr;
+    ImTextureID        m_texture          = 0;
     float              m_threshRangeM     = 0.15f;
     float              m_threshClosureMs  = 0.03f;
     float              m_threshAttErrDeg  = 5.0f;
