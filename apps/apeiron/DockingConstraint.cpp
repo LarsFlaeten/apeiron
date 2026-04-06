@@ -46,7 +46,7 @@ void DockingConstraint::update(double dt_s)
     if (m_phase == Phase::Idle || !m_active || !m_passive) return;
 
     if (m_phase == Phase::HardCapture) {
-        enforceHardCapture();
+        // Rigid lock is handled in enforcePostStep(), called after spacecraft integrate.
         return;
     }
 
@@ -208,9 +208,8 @@ void DockingConstraint::initiateHardCapture()
     // Mark active as a child so the main loop skips its own integration.
     m_active->setParent(1);
     m_phase = Phase::HardCapture;
-
-    // Enforce immediately so the first rendered frame shows no discontinuity.
-    enforceHardCapture();
+    // enforceHardCapture() will be called in enforcePostStep() after ISS integrates,
+    // so Orion tracks ISS's new position rather than the pre-tick position.
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +220,13 @@ void DockingConstraint::release()
     // Return to Armed so capture can be re-attempted on the same port.
     m_phase     = Phase::Armed;
     m_holdTimer = 0.0f;
+}
+
+// ---------------------------------------------------------------------------
+void DockingConstraint::enforcePostStep()
+{
+    if (m_phase == Phase::HardCapture)
+        enforceHardCapture();
 }
 
 // ---------------------------------------------------------------------------

@@ -68,8 +68,14 @@ public:
     // Disarm and reset to Idle.
     void disarm();
 
-    // Call once per physics tick before Spacecraft::update().
+    // Pre-step: apply spring-damper forces and check capture conditions.
+    // Call BEFORE Spacecraft::update() so forces are included in this tick.
     void update(double dt_s);
+
+    // Post-step: enforce rigid lock for hard capture.
+    // Call AFTER all Spacecraft::update() calls so Orion follows ISS's
+    // newly-integrated position (avoids the ~77 m one-tick orbital lag).
+    void enforcePostStep();
 
     // User-initiated hard capture.  Only valid in SoftCapture phase AND when
     // range is within maxHardCaptureM (default 0.5 m).

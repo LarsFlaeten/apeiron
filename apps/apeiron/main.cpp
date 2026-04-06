@@ -1123,11 +1123,14 @@ int main()
 
                 physAccum += simDt;
                 while (physAccum >= step) {
-                    // Apply constraint forces / rigid lock before integration.
+                    // Pre-step: apply spring-damper forces before integration.
                     dockingConstraint.update(step);
                     for (auto& sc : spacecraft)
                         if (!sc->parentId())
                             sc->update(step, currentEt);
+                    // Post-step: enforce rigid lock AFTER ISS has integrated so
+                    // Orion tracks ISS's new position (avoids ~77 m orbital-velocity lag).
+                    dockingConstraint.enforcePostStep();
                     physAccum -= step;
                 }
             }
