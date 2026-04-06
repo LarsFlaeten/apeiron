@@ -32,6 +32,7 @@ add_executable(apeiron
     main.cpp
     ScenarioConfig.cpp
     Spacecraft.cpp
+    DockingConstraint.cpp
     MFD.cpp
     MFDMenu.cpp
     OrbitalMFD.cpp

@@ -39,6 +39,7 @@
 #include "NavState.h"
 #include "OrbitalMFD.h"
 #include "DockingMFD.h"
+#include "DockingConstraint.h"
 #include "MFDMenu.h"
 #include "apeiron/spacecraft/Autopilot.h"
 #include "apeiron/spacecraft/ManifestLoader.h"
@@ -753,6 +754,7 @@ int main()
             int                         numSpacecraft = 0;
             float*                      inspectDist   = nullptr;  // reset on object cycle
             NavState*                   nav           = nullptr;
+            DockingConstraint*          dockConstraint = nullptr;
         } windowState{&renderer, 0.0, &viewMode, &simSpeedTarget,
                       &navCamNodes, &navCamIdx, nullptr};
 
@@ -827,6 +829,11 @@ int main()
                     s->autopilot->mode = spacecraft::AutopilotMode::Off;
                 }
             }
+            else if (key == GLFW_KEY_ENTER &&
+                     s->nav && s->nav->navMode == NavMode::Docking &&
+                     s->dockConstraint) {
+                s->dockConstraint->initiateHardCapture();
+            }
         });
         glfwSetScrollCallback(window, [](GLFWwindow* w, double xoff, double yoff) {
             ImGui_ImplGlfw_ScrollCallback(w, xoff, yoff);
@@ -876,8 +883,10 @@ int main()
 
         // MFD apps and persistent panels (panels must outlive the loop so
         // isInMenu / app selection survive across frames).
-        DockingMFD dockingMFD;
+        DockingMFD         dockingMFD;
         dockingMFD.setCamNodes(navCamNodes);   // let DockingMFD cycle / auto-select
+        DockingConstraint  dockingConstraint;
+        windowState.dockConstraint = &dockingConstraint;
         MFDMenu    mfdMenu;
         mfdMenu.addApp(&orbitalMFD, "ORB");
         mfdMenu.addApp(&dockingMFD, "DOCK");
@@ -1109,6 +1118,8 @@ int main()
 
                 physAccum += simDt;
                 while (physAccum >= step) {
+                    // Apply constraint forces / rigid lock before integration.
+                    dockingConstraint.update(step);
                     for (auto& sc : spacecraft)
                         if (!sc->parentId())
                             sc->update(step, currentEt);
@@ -1157,6 +1168,43 @@ int main()
                 }
             } else {
                 nav.compatiblePortCount = 0;
+            }
+
+            // ---- Docking constraint arm/disarm ----
+            // Arm whenever docking mode has a valid target + port; disarm otherwise.
+            // Hard capture is self-sustaining once initiated — never auto-disarm it.
+            {
+                const bool hardCaptured =
+                    dockingConstraint.phase() == DockingConstraint::Phase::HardCapture;
+
+                const bool shouldArm =
+                    !hardCaptured &&
+                    nav.navMode == NavMode::Docking &&
+                    nav.dockTgtIdx >= 0 &&
+                    nav.dockPortIdx >= 0 &&
+                    !scPorts[playerIdx].empty() &&
+                    nav.dockPortIdx < static_cast<int>(
+                        scPorts[static_cast<size_t>(nav.dockTgtIdx)].size());
+
+                static int lastArmedTgt  = -2;
+                static int lastArmedPort = -2;
+
+                if (shouldArm) {
+                    if (nav.dockTgtIdx != lastArmedTgt || nav.dockPortIdx != lastArmedPort) {
+                        dockingConstraint.arm(
+                            spacecraft[playerIdx].get(),
+                            scPorts[playerIdx][0],
+                            spacecraft[static_cast<size_t>(nav.dockTgtIdx)].get(),
+                            scPorts[static_cast<size_t>(nav.dockTgtIdx)][
+                                static_cast<size_t>(nav.dockPortIdx)]);
+                        lastArmedTgt  = nav.dockTgtIdx;
+                        lastArmedPort = nav.dockPortIdx;
+                    }
+                } else if (!hardCaptured &&
+                           dockingConstraint.phase() != DockingConstraint::Phase::Idle) {
+                    dockingConstraint.disarm();
+                    lastArmedTgt = lastArmedPort = -2;
+                }
             }
 
             // Recenter the floating origin.
@@ -1548,6 +1596,18 @@ int main()
 
                 dockingMFD.update(*spacecraft[playerIdx], scPorts, playerIdx,
                                   nav, spacecraft);
+                {
+                    using CP = DockingMFD::CapturePhase;
+                    using DP = DockingConstraint::Phase;
+                    CP cp = CP::None;
+                    switch (dockingConstraint.phase()) {
+                        case DP::Armed:       cp = CP::Armed;       break;
+                        case DP::SoftCapture: cp = CP::SoftCapture; break;
+                        case DP::HardCapture: cp = CP::HardCapture; break;
+                        default: break;
+                    }
+                    dockingMFD.setCapturePhase(cp);
+                }
 
                 mfdFullPanel.pos  = { 0.0f, 0.0f };
                 mfdFullPanel.size = { W, H };
@@ -1636,6 +1696,18 @@ int main()
                 // Update DockingMFD geometry (works in both Nav and MfdFull view).
                 dockingMFD.update(*spacecraft[playerIdx], scPorts, playerIdx,
                                   nav, spacecraft);
+                {
+                    using CP = DockingMFD::CapturePhase;
+                    using DP = DockingConstraint::Phase;
+                    CP cp = CP::None;
+                    switch (dockingConstraint.phase()) {
+                        case DP::Armed:       cp = CP::Armed;       break;
+                        case DP::SoftCapture: cp = CP::SoftCapture; break;
+                        case DP::HardCapture: cp = CP::HardCapture; break;
+                        default: break;
+                    }
+                    dockingMFD.setCapturePhase(cp);
+                }
 
                 // Each MFD occupies 1/3 of screen width; height derived from 16:9.
                 const float kMfdW = std::round(W / 3.0f);

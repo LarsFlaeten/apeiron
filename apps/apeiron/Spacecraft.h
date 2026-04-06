@@ -41,9 +41,15 @@ public:
     void addAttractor(const astro::Attractor& a);
 
     // Set instantaneous applied force/torque (body frame, SI units).
-    // Call before each update() step.  Both default to zero.
+    // Call once per frame before the physics sub-step loop.  Both default to zero.
     void setBodyForce (const glm::dvec3& forceN);   // Newtons
     void setBodyTorque(const glm::dvec3& torqueNm); // Newton-metres
+
+    // Accumulate additional force/torque (body frame, SI units) for this physics tick.
+    // Intended for constraint forces (spring-dampers, hard-dock reactions, etc.).
+    // Extras are applied once in update() and then cleared automatically.
+    void addBodyForce (const glm::dvec3& N)  { m_extraForceN  += N; }
+    void addBodyTorque(const glm::dvec3& Nm) { m_extraTorqueNm += Nm; }
 
     // Advance dynamics by dt_s seconds of simulation time.
     void update(double dt_s, const astro::EphemerisTime& et);
@@ -58,6 +64,11 @@ public:
     // Used by autopilot settle-clamp to zero residual below the hardware
     // minimum-impulse floor.
     void setAngularVelocity(const glm::dvec3& w) { m_state.R.w = w; }
+
+    // Direct state setters — for hard-capture rigid-body following only.
+    void setPosition(const glm::dvec3& km)   { m_state.P.r = km; }
+    void setVelocity(const glm::dvec3& kmps) { m_state.P.v = kmps; }
+    void setAttitude(const glm::dquat& q)    { m_state.R.q = glm::normalize(q); }
 
     // Derived quantities.
     double altitudeKm(double bodyRadiusKm) const
@@ -82,6 +93,13 @@ private:
     astro::State    m_state;
     astro::ODE      m_ode;
     astro::RotODE   m_rotOde;
+
+    // Base force/torque set by setBodyForce/Torque (frame-level, persists across ticks).
+    glm::dvec3 m_baseForceN   {0.0};
+    glm::dvec3 m_baseTorqueNm {0.0};
+    // Extra force/torque accumulated by addBodyForce/Torque (cleared each tick in update()).
+    glm::dvec3 m_extraForceN  {0.0};
+    glm::dvec3 m_extraTorqueNm{0.0};
 
     // Adaptive step hint carried between update() calls.
     astro::TimeDelta m_dtHint;

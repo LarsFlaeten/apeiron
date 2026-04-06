@@ -24,18 +24,29 @@ void Spacecraft::addAttractor(const astro::Attractor& a)
 
 void Spacecraft::setBodyForce(const glm::dvec3& forceN)
 {
-    // Convert N → km-consistent units, rotate body→inertial via attitude.
-    m_ode.setBodyForce(forceN * kNtoKm, m_state.R.q);
+    m_baseForceN = forceN;
+    // Actual ODE force will be applied (with current attitude) in update().
 }
 
 void Spacecraft::setBodyTorque(const glm::dvec3& torqueNm)
 {
-    m_rotOde.setBodyTorque(torqueNm);
+    m_baseTorqueNm = torqueNm;
+    // Actual RotODE torque will be applied in update().
 }
 
 void Spacecraft::update(double dt_s, const astro::EphemerisTime& et)
 {
     astro::TimeDelta dt(dt_s);
+
+    // Combine base (per-frame) and extra (per-tick constraint) forces, then apply.
+    // Re-rotating each tick ensures the inertial-frame force tracks attitude changes
+    // correctly even when multiple physics ticks run per render frame.
+    m_ode.setBodyForce((m_baseForceN + m_extraForceN) * kNtoKm, m_state.R.q);
+    m_rotOde.setBodyTorque(m_baseTorqueNm + m_extraTorqueNm);
+
+    // Extra forces are consumed each tick; base forces persist until next setBodyForce.
+    m_extraForceN   = glm::dvec3{0.0};
+    m_extraTorqueNm = glm::dvec3{0.0};
 
     // Integrate translational state.
     auto transResult = astro::RKF78::doStep(m_ode, m_state.P, et, dt);
@@ -45,7 +56,6 @@ void Spacecraft::update(double dt_s, const astro::EphemerisTime& et)
     auto rotResult = astro::PCDM::doStep(m_rotOde, m_state.R, et, dt);
     m_state.R = rotResult.rs;
 
-    // Carry the adaptive step hint forward (not used yet with fixed-step
-    // physics, but useful when switching to adaptive integration later).
+    // Carry the adaptive step hint forward.
     m_dtHint = transResult.dt_next;
 }

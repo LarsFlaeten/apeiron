@@ -227,8 +227,8 @@ void DockingMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     y += lh + pad;
 
     // ---- Lateral indicator ----
-    // Takes up the remaining height minus a two-row footer.
-    const float footerH = 2.0f * (lh + pad);
+    // Takes up the remaining height minus a three-row footer: P/Y, R, capture phase.
+    const float footerH = 3.0f * (lh + pad);
     const float availH  = size.y - (y - origin.y) - footerH;
     const float sqSide  = std::max(20.0f, std::min(size.x - 2.0f * pad, availH));
     const ImVec2 sqTL   { origin.x + (size.x - sqSide) * 0.5f, y };
@@ -310,5 +310,22 @@ void DockingMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         std::snprintf(buf, sizeof(buf), "R %+5.1f°", m_rollErrDeg);
         tsz = ImGui::CalcTextSize(buf);
         dl->AddText({ origin.x + (size.x - tsz.x) * 0.5f, y }, attCol, buf);
+        y += lh + pad;
+    }
+
+    // ---- Capture phase status ----
+    {
+        const char* label = nullptr;
+        ImU32 col = kDim;
+        switch (m_capturePhase) {
+            case CapturePhase::Armed:       label = "ARMED";        col = kCyan;   break;
+            case CapturePhase::SoftCapture: label = "SOFT CAPTURE"; col = kGreen;  break;
+            case CapturePhase::HardCapture: label = "HARD CAPTURE"; col = kYellow; break;
+            default: break;
+        }
+        if (label) {
+            ImVec2 tsz = ImGui::CalcTextSize(label);
+            dl->AddText({ origin.x + (size.x - tsz.x) * 0.5f, y }, col, label);
+        }
     }
 }

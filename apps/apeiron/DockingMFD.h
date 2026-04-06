@@ -51,6 +51,10 @@ public:
 
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
+    // Feed the current capture phase from DockingConstraint so the MFD can show it.
+    enum class CapturePhase { None, Armed, SoftCapture, HardCapture };
+    void setCapturePhase(CapturePhase p) { m_capturePhase = p; }
+
     const char* leftLabel(int slot) const override;
     void        onLeft   (int slot) override;
 
@@ -74,4 +78,6 @@ private:
     float  m_yawErrDeg   = 0.0f;  // approach axis yaw mismatch
     float  m_rollErrDeg  = 0.0f;  // port roll mismatch
     float  m_fullScaleM  = 50.0f; // half-width of indicator in metres (dynamic)
+
+    CapturePhase m_capturePhase = CapturePhase::None;
 };

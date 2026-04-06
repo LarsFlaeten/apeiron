@@ -237,7 +237,24 @@ void NavConsole::render(float                                           posX,
             // Distance / relative velocity
             auto& tgt    = *spacecraft[static_cast<size_t>(nav.dockTgtIdx)];
             auto& player = *spacecraft[playerIdx];
+
+            // When a specific target port is selected, measure port-to-port distance.
             double distKm = glm::length(player.position() - tgt.position());
+            const auto& tPorts = (nav.dockTgtIdx < static_cast<int>(scPorts.size()))
+                                 ? scPorts[static_cast<size_t>(nav.dockTgtIdx)]
+                                 : std::vector<DockPort>{};
+            const auto& pPorts = (playerIdx < scPorts.size()) ? scPorts[playerIdx]
+                                                               : std::vector<DockPort>{};
+            if (nav.dockPortIdx >= 0 &&
+                nav.dockPortIdx < static_cast<int>(tPorts.size()) &&
+                !pPorts.empty()) {
+                const auto& tp = tPorts[static_cast<size_t>(nav.dockPortIdx)];
+                const auto& pp = pPorts[0];
+                glm::dvec3 tPortPos = tgt.position()    + tgt.attitude()    * glm::dvec3(tp.posM) * 1e-3;
+                glm::dvec3 pPortPos = player.position() + player.attitude() * glm::dvec3(pp.posM) * 1e-3;
+                distKm = glm::length(tPortPos - pPortPos);
+            }
+
             double distM  = distKm * 1000.0;
             double relVMs = glm::length(player.velocity() - tgt.velocity()) * 1000.0;
             if (distM < 1000.0)
