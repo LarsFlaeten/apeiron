@@ -57,6 +57,8 @@ void NavConsole::update(const Spacecraft&  ship,
         glm::dvec3 rHat = glm::normalize(ship.position());
         m_vsKms = glm::dot(vel, rHat);
     }
+
+    m_shipMass = shipMass;
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +264,28 @@ void NavConsole::render(float                                           posX,
             else
                 rowf("DIST   ", "%7.3f km",  distKm);
             rowf("VR     ", "%7.3f m/s", relVMs);
+
+            // Time and distance to null relative velocity, assuming NullV autopilot
+            // engages now with current RCS authority in the relative-velocity direction.
+            // a = F/m where F is the authority the autopilot would command.
+            {
+                const double aMs2 = autopilot.nullVAuthN / m_shipMass;  // m/s²
+                if (aMs2 > 1e-9 && relVMs > 1e-3) {
+                    double tNull = relVMs / aMs2;                        // s
+                    double dNull = (relVMs * relVMs) / (2.0 * aMs2);    // m
+                    if (tNull < 60.0)
+                        rowf("T-NV   ", "%7.1f s",  tNull);
+                    else
+                        rowf("T-NV   ", "%7.1f min", tNull / 60.0);
+                    if (dNull < 1000.0)
+                        rowf("D-NV   ", "%7.1f m",  dNull);
+                    else
+                        rowf("D-NV   ", "%7.3f km", dNull / 1000.0);
+                } else {
+                    rowf("T-NV   ", "  --");
+                    rowf("D-NV   ", "  --");
+                }
+            }
         }
         ImGui::Separator();
     }

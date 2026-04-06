@@ -58,4 +58,5 @@ private:
     glm::dvec3 m_linAcc_g          {0.0};
     double     m_progradeErrDeg    = 0.0;
     double     m_vsKms             = 0.0;
+    double     m_shipMass          = 1.0;  // kg — stored for NullV time/distance estimates
 };
