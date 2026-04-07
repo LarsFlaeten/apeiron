@@ -58,6 +58,11 @@ public:
     // Outputs are in model space, SI units (N and N·m).
     void accumulateWrench(glm::vec3& forceOut, glm::vec3& torqueOut) const;
 
+    // Non-mutating: simulate what force (N, model space) the RCS subset would
+    // actually achieve for the given desired wrench, after pseudoinverse solve
+    // and throttle clamping.  Does NOT modify thruster state.
+    glm::vec3 simulateRcsForce(const Wrench& desired) const;
+
 private:
     // Stored as a flat column-major array: B[row + 6*col].
     // 6 rows (Fx Fy Fz Tx Ty Tz), N columns (one per thruster).

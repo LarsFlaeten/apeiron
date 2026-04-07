@@ -222,4 +222,28 @@ void SpacecraftModel::accumulateWrench(glm::vec3& forceOut, glm::vec3& torqueOut
     }
 }
 
+glm::vec3 SpacecraftModel::simulateRcsForce(const Wrench& desired) const
+{
+    if (m_N_rcs == 0) return {};
+
+    // Solve throttles: t = B⁺_rcs * desired, clamped to [0,1].
+    std::vector<double> throttles(m_N_rcs);
+    for (int r = 0; r < m_N_rcs; ++r) {
+        double val = 0.0;
+        for (int c = 0; c < 6; ++c)
+            val += m_Bpinv_rcs[r + m_N_rcs * c] * desired[c];
+        throttles[r] = std::clamp(val, 0.0, 1.0);
+    }
+
+    // Back-project: achieved_wrench = B_rcs * throttles.
+    // We only need the force part (rows 0-2).
+    glm::vec3 force{0.0f};
+    for (int r = 0; r < m_N_rcs; ++r) {
+        const Thruster& t = thrusters[m_rcsIdx[r]];
+        glm::vec3 f = t.direction * t.thrustN * static_cast<float>(throttles[r]);
+        force += f;
+    }
+    return force;
+}
+
 } // namespace spacecraft

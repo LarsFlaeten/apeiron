@@ -1048,12 +1048,29 @@ int main()
                             glm::dvec3 w_body = glm::conjugate(att) * ship.angularVelocity();
 
                             // NullV: update relative velocity in player body frame each frame.
-                            if (autopilot.mode == spacecraft::AutopilotMode::NullV &&
-                                nav.dockTgtIdx >= 0) {
+                            if (nav.dockTgtIdx >= 0) {
                                 glm::dvec3 relVel_inertial =
                                     (ship.velocity() - spacecraft[static_cast<size_t>(nav.dockTgtIdx)]->velocity())
                                     * 1000.0;  // km/s → m/s
                                 autopilot.relVelBody = glm::dvec3(glm::conjugate(att) * relVel_inertial);
+
+                                // Update actual RCS authority: simulate what force the
+                                // allocator achieves opposing the current relative velocity.
+                                const double vMag = glm::length(autopilot.relVelBody);
+                                if (vMag > 1e-6) {
+                                    glm::dvec3 fDir = -autopilot.relVelBody / vMag;
+                                    // Use a saturating magnitude so throttles clamp to [0,1]
+                                    // and we get the true bang-bang achievable force.
+                                    constexpr double kSatN = 1.0e6;
+                                    spacecraft::Wrench testW{};
+                                    testW[0] = fDir.x * kSatN;
+                                    testW[1] = fDir.y * kSatN;
+                                    testW[2] = fDir.z * kSatN;
+                                    glm::vec3 achieved = orionModel.simulateRcsForce(testW);
+                                    // Project achieved force onto desired direction for scalar authority.
+                                    double auth = glm::dot(glm::dvec3(achieved), fDir);
+                                    autopilot.nullVAuthN = std::max(1.0, auth);
+                                }
                             }
                             // Auto-cancel once done.
                             if (autopilot.nullVDone)
