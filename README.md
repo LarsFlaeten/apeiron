@@ -8,14 +8,13 @@ Apeiron is a physically-correct space simulator built from first principles: rea
 
 ## Screenshots
 
-![Earth from orbit](docs/screenshots/Earth.png)
-*Earth with Bruneton single-scattering atmosphere — blue limb glow and terminator haze*
+![Docking approach to ISS](docs/screenshots/DockingISS.png)
+*Orion approaching the ISS — docking MFD with live cam view, alignment cues, and relative velocity readout*
 
 ![Mars from orbit](docs/screenshots/Mars.png)
 *Mars with dust-reddened atmosphere — reddish-orange limb characteristic of iron-oxide aerosols*
 
-![Saturn rings](docs/screenshots/Saturn.png)
-*Saturn's ring system with Lommel-Seeliger opposition surge*
+[Full gallery](docs/GALLERY.md)
 
 ---
 
@@ -63,6 +62,35 @@ Bruneton & Neyret single-scattering model, precomputed at load time:
 - Click-to-focus body selection; orbital camera (azimuth/elevation/distance)
 - Distance display in km and AU
 
+### Spacecraft — Orion CSM/ESM
+
+- **Orion CM+SM** rendered from a glTF model with full PBR materials
+- **41 RCS / ACS thrusters** loaded from a TOML manifest — positions, directions, thrust, type (RCS / AUX / MAIN)
+- **Control effectiveness matrix** (6×N, pseudoinverse via Jacobi SVD) allocates per-thruster throttles from a desired 6-DOF wrench
+- **PWM firing simulation** — duty-cycle modulation per thruster, minimum duty-cycle cutoff to suppress noise
+- **Exhaust plumes** — cone mesh scaled by throttle, additive blending
+- **Docking ports** — named glTF nodes exposed as attach points; port-to-port distance measurement in the nav console
+
+### Docking system
+
+- **ISS model** loaded from glTF, placed on a user-defined orbit
+- **Proximity ops nav mode** — dedicated view with range, closing rate, and alignment cues
+- **IDSS-style capture sequence**: soft capture (cone-in-drogue alignment + contact detection) → hard capture (rigid weld); release applies a separation impulse and returns to *Unarmed* state to prevent immediate re-capture
+- **Docking MFD** — live offscreen camera view from a `cam_*` node on the model; Z+/Z− FOV zoom; overlaid guidance text (range, closing rate, alignment error)
+- **Camera MFD** — dedicated MFD page for any onboard camera, cycles through all `cam_*` nodes; aspect-ratio-correct display with camera name overlay
+
+### Autopilots (GNC)
+
+- **Kill Rotation** — parabolic bang-bang torque with timed-burn near settle; large-slew flag suppresses AUX thrusters
+- **Attitude hold** (Prograde / Retrograde / Normal±) — quaternion error + rate damping, PD-style parabolic switch
+- **NullV** — nulls relative velocity to docking target using RCS; authority computed from the actual pseudoinverse + throttle-clamped RCS solution so stopping estimates are accurate
+- T-NV / D-NV readouts in nav console: estimated time and distance to zero relative velocity given current orientation
+
+### Offscreen rendering
+
+- Per-MFD camera rendered to a 512×512 RGBA16F texture each frame (ping-pong for frames-in-flight)
+- Textures registered with ImGui via `ImGui_ImplVulkan_AddTexture`; `Renderer::acquireFrame()` / `beginHDRPass()` split allows pre-pass insertion
+
 ### Developer tools
 - **ImGui** dev view: FPS, exposure, bloom controls, simulation speed, camera info, body distance list
 - Atmosphere LUT inspector with per-planet LUT display
@@ -75,17 +103,19 @@ Bruneton & Neyret single-scattering model, precomputed at load time:
 ```
 apeiron/
 ├── libs/
-│   ├── astro/       # SPICE wrapper, time system, coordinate frames
-│   ├── universe/    # Scene graph, body catalogue, SPICE ephemeris queries
-│   └── render/      # Vulkan renderer — pipelines, meshes, atmosphere, rings
+│   ├── astro/        # SPICE wrapper, time system, coordinate frames
+│   ├── universe/     # Scene graph, body catalogue, SPICE ephemeris queries
+│   ├── render/       # Vulkan renderer — pipelines, meshes, atmosphere, rings
+│   └── spacecraft/   # Thruster manifest, control allocator, autopilots
 ├── apps/
-│   └── apeiron/     # Main executable + GLSL shaders
+│   └── apeiron/      # Main executable, MFDs, docking system, GLSL shaders
 ├── data/
-│   ├── scenarios/   # scenario.toml — bodies, kernels, atmosphere params
-│   ├── kernels/     # SPICE kernels (LSK, PCK, SPK)
-│   ├── textures/    # Planet texture maps
-│   └── meshes/      # Phobos / Deimos shape models
-└── docs/design/     # Design notes (atmosphere scattering, etc.)
+│   ├── scenarios/    # scenario.toml — bodies, kernels, atmosphere params
+│   ├── kernels/      # SPICE kernels (LSK, PCK, SPK)
+│   ├── textures/     # Planet texture maps
+│   ├── meshes/       # Phobos / Deimos shape models
+│   └── spacecraft/   # Orion thruster manifest (TOML), glTF models
+└── docs/             # Design notes, gallery
 ```
 
 All physics is **C++ namespaced** under `apeiron::astro`, `apeiron::universe`, `apeiron::render`.
@@ -107,6 +137,8 @@ All physics is **C++ namespaced** under `apeiron::astro`, `apeiron::universe`, `
 | Atmosphere | Bruneton precomputed scattering (Vulkan compute) |
 | Star catalog | HYG Database v4.2 |
 | Shape models | TinyObjLoader |
+| Spacecraft models | tinygltf (glTF 2.0 + PBR materials) |
+| Thruster manifest | TOML++ |
 | Testing | Catch2 |
 
 ---
@@ -145,7 +177,8 @@ Shaders are compiled from GLSL to SPIR-V at build time by `glslc`; paths are bak
 | Item | Notes |
 |---|---|
 | Nav console thruster selector | Choose RCS-only or RCS+Aux for manual thrust commands |
-| Autopilot tuning | Prograde/retrograde oscillation damping — may revisit near interplanetary |
+| RVD autopilots | Station-keeping hold, approach corridor guidance |
+| Trajectory MFD | Patched-conics transfer planner, Lambert/Izzo solver, porkchop plot |
 
 ### MFD / UI
 
@@ -158,11 +191,8 @@ Shaders are compiled from GLSL to SPIR-V at build time by `glslc`; paths are bak
 
 | Item | Notes |
 |---|---|
-| ISS model | Load existing ISS .glb, place on defined orbit |
-| Docking nav view | New F-key view mode for proximity ops — range, closing rate, alignment |
-| Docking MFD | Rendezvous guidance: phase angle, transfer, proximity |
-| Add docking refs to models | Reference node empties for Orion and ISS docking ports |
-| IDSS docking simulation | Soft + hard capture; active/passive role negotiation |
+| Docking audio / haptics | Contact sound, hard-capture clunk |
+| Multi-port ISS | Expose all ISS docking ports; route-plan to correct port |
 
 ### Rendering / atmosphere
 
