@@ -11,7 +11,7 @@ Apeiron is a physically-correct space simulator built from first principles: rea
 ![Docking approach to ISS](docs/screenshots/DockingISS.png)
 *Orion approaching the ISS — docking MFD with live cam view, alignment cues, and relative velocity readout*
 
-![Earthrise](screenshots/Earthrise_20260407.png)
+![Earthrise](docs/screenshots/Earthrise_20260407.png)
 *Earthrise seen from the moon on 20260407, around the same time Artemis II turned back to earth from behind the moon*
 
 ![Mars from orbit](docs/screenshots/Mars.png)
