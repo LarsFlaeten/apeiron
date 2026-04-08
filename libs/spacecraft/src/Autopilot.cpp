@@ -36,12 +36,28 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
             nullVDone = true;
             return w;
         }
-        // Desired force: oppose the relative velocity, clamped per-axis to authority.
-        // F = -relVelBody / |relVelBody| * nullVAuthN  (direction × magnitude)
-        // This is effectively a bang-bang in direction, which is fine for translation.
+
+        // Saturating translation demand — all positive-contributing thrusters
+        // fire at full throttle (bang-bang).  Must match the kSat used in
+        // simulateRcsForce so that the NavConsole D-NV estimate is consistent
+        // with what is actually achieved.
+        constexpr double kSat = 1.0e6;
         glm::dvec3 fDir = -relVelBody / vMag;
-        glm::dvec3 F    = fDir * nullVAuthN;
-        w[0] = F.x; w[1] = F.y; w[2] = F.z;
+        w[0] = fDir.x * kSat;
+        w[1] = fDir.y * kSat;
+        w[2] = fDir.z * kSat;
+
+        // Damp angular velocity alongside translation.  Without this, the
+        // incidental torques produced by the translation allocation (thrusters
+        // are angled, not purely axial) cause the craft to slowly spin, reducing
+        // effective braking force and requiring constant manual correction.
+        // Use the same bang-bang logic as Killrot Phase 1.
+        const double omegaMag = glm::length(omega_body);
+        if (omegaMag > deadband) {
+            glm::dvec3 tau = -(maxTorqueNm / omegaMag) * omega_body;
+            w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
+        }
+
         return w;
     }
 

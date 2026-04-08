@@ -69,9 +69,12 @@ struct Autopilot {
     // NullV — set by caller before enabling NullV mode.
     // relVelBody: current relative velocity in the *player body frame* (m/s).
     // Caller must update this each frame from fresh state.
-    // compute() writes the desired body-frame translational force into Wrench[0..2].
+    // compute() writes the desired body-frame translational force into Wrench[0..2]
+    // and an angular-velocity damping torque into Wrench[3..5].
     glm::dvec3 relVelBody   {};         // m/s, player body frame
-    double     nullVAuthN   = 4000.0;   // N — per-axis authority cap (≈ 4 kN RCS cluster)
+    double     nullVAuthN   = 0.0;      // N — actual bang-bang force; written by caller
+                                        //     (from simulateRcsForce) for NavConsole use only.
+                                        //     Not used by compute() — compute uses a saturating demand.
     double     nullVDoneThr = 0.02;     // m/s — declared done below this residual speed
 
     // Set by compute() each frame — true when performing a large-angle slew

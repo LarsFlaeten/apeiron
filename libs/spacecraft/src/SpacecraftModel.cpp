@@ -226,22 +226,25 @@ glm::vec3 SpacecraftModel::simulateRcsForce(const Wrench& desired) const
 {
     if (m_N_rcs == 0) return {};
 
-    // Solve throttles: t = B⁺_rcs * desired, clamped to [0,1].
-    std::vector<double> throttles(m_N_rcs);
+    // Scale the desired wrench to a large saturating magnitude so all
+    // positively-contributing thrusters fire at full throttle (bang-bang).
+    // This matches exactly what the NullV autopilot achieves, since it also
+    // issues a saturating demand.  The input `desired` provides only direction;
+    // its magnitude is irrelevant.
+    constexpr double kSat = 1.0e6;
+    double mag2 = 0.0;
+    for (int c = 0; c < 6; ++c) mag2 += desired[c] * desired[c];
+    if (mag2 < 1e-24) return {};
+    const double scale = kSat / std::sqrt(mag2);
+
+    glm::vec3 force{0.0f};
     for (int r = 0; r < m_N_rcs; ++r) {
         double val = 0.0;
         for (int c = 0; c < 6; ++c)
-            val += m_Bpinv_rcs[r + m_N_rcs * c] * desired[c];
-        throttles[r] = std::clamp(val, 0.0, 1.0);
-    }
-
-    // Back-project: achieved_wrench = B_rcs * throttles.
-    // We only need the force part (rows 0-2).
-    glm::vec3 force{0.0f};
-    for (int r = 0; r < m_N_rcs; ++r) {
-        const Thruster& t = thrusters[m_rcsIdx[r]];
-        glm::vec3 f = t.direction * t.thrustN * static_cast<float>(throttles[r]);
-        force += f;
+            val += m_Bpinv_rcs[r + m_N_rcs * c] * desired[c] * scale;
+        const double t = std::clamp(val, 0.0, 1.0);
+        const Thruster& thr = thrusters[m_rcsIdx[r]];
+        force += thr.direction * thr.thrustN * static_cast<float>(t);
     }
     return force;
 }
