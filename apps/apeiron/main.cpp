@@ -43,6 +43,7 @@
 #include "OffscreenCam.h"
 #include "CamMFD.h"
 #include "MFDMenu.h"
+#include "VoiceAnnouncer.h"
 #include "apeiron/spacecraft/Autopilot.h"
 #include "apeiron/spacecraft/ManifestLoader.h"
 #include "apeiron/spacecraft/OrbitLoader.h"
@@ -206,6 +207,8 @@ int main()
         glfwTerminate();
         return 1;
     }
+
+    obc::init();
 
     try {
         // =================================================================
@@ -1239,8 +1242,18 @@ int main()
             // arm() sets phase to Unarmed; the user must press ARM in the MFD to activate
             // capture monitoring.  Hard capture is self-sustaining — never auto-disarm it.
             {
+                using DP = DockingConstraint::Phase;
+                static DP    lastDockPhase = DP::Idle;
+                static int   lastArmedTgt  = -2;
+                static int   lastArmedPort = -2;
+                // Range callout thresholds (metres), descending.
+                static const float kRangeCallouts[] = { 1000.f, 500.f, 300.f, 200.f,
+                                                         100.f,  50.f,  20.f,  10.f,
+                                                           5.f,   2.f,   1.f };
+                static int lastRangeBand = -1;  // index of last announced threshold
+
                 const bool hardCaptured =
-                    dockingConstraint.phase() == DockingConstraint::Phase::HardCapture;
+                    dockingConstraint.phase() == DP::HardCapture;
 
                 const bool shouldConfigure =
                     !hardCaptured &&
@@ -1250,9 +1263,6 @@ int main()
                     !scPorts[playerIdx].empty() &&
                     nav.dockPortIdx < static_cast<int>(
                         scPorts[static_cast<size_t>(nav.dockTgtIdx)].size());
-
-                static int lastArmedTgt  = -2;
-                static int lastArmedPort = -2;
 
                 if (shouldConfigure) {
                     if (nav.dockTgtIdx != lastArmedTgt || nav.dockPortIdx != lastArmedPort) {
@@ -1265,11 +1275,91 @@ int main()
                                 static_cast<size_t>(nav.dockPortIdx)]);
                         lastArmedTgt  = nav.dockTgtIdx;
                         lastArmedPort = nav.dockPortIdx;
+                        lastRangeBand = -1;
+
+                        // Announce target + port selection with current range.
+                        const auto& tgtName  = (nav.dockTgtIdx < static_cast<int>(kSpacecraftNames.size()))
+                                               ? kSpacecraftNames[nav.dockTgtIdx] : "target";
+                        const auto& portLabel = scPorts[static_cast<size_t>(nav.dockTgtIdx)]
+                                                       [static_cast<size_t>(nav.dockPortIdx)].label;
+                        float rangeM = static_cast<float>(
+                            glm::length(spacecraft[static_cast<size_t>(nav.dockTgtIdx)]->position()
+                                        - spacecraft[playerIdx]->position()) * 1000.0);
+                        char buf[128];
+                        if (rangeM < 1000.f)
+                            std::snprintf(buf, sizeof(buf), "Port %s on %s. Range %.0f metres.",
+                                          portLabel.c_str(), tgtName.c_str(), rangeM);
+                        else
+                            std::snprintf(buf, sizeof(buf), "Port %s on %s. Range %.1f kilometres.",
+                                          portLabel.c_str(), tgtName.c_str(), rangeM * 1e-3f);
+                        obc::speak(buf);
                     }
                 } else if (!hardCaptured &&
-                           dockingConstraint.phase() != DockingConstraint::Phase::Idle) {
+                           dockingConstraint.phase() != DP::Idle) {
                     dockingConstraint.disarm();
                     lastArmedTgt = lastArmedPort = -2;
+                    lastRangeBand = -1;
+                }
+
+                // ---- Phase-change announcements ----
+                const DP curPhase = dockingConstraint.phase();
+                if (curPhase != lastDockPhase) {
+                    switch (curPhase) {
+                        case DP::Armed:
+                            obc::speak("Armed. Capture monitoring active.");
+                            break;
+                        case DP::SoftCapture:
+                            obc::speakImmediate("Soft capture.");
+                            break;
+                        case DP::HardCapture:
+                            obc::speakImmediate("Hard capture confirmed.");
+                            break;
+                        case DP::Unarmed:
+                            if (lastDockPhase == DP::HardCapture ||
+                                lastDockPhase == DP::SoftCapture)
+                                obc::speak("Released.");
+                            break;
+                        default: break;
+                    }
+                    lastDockPhase = curPhase;
+                }
+
+                // ---- Range callouts (Armed phase, approaching) ----
+                if (curPhase == DP::Armed || curPhase == DP::Unarmed) {
+                    // Use constraint's port-to-port range when Armed; CoM distance otherwise.
+                    const float rangeM = dockingConstraint.rangeM() > 0.0f
+                        ? dockingConstraint.rangeM()
+                        : (nav.dockTgtIdx >= 0
+                            ? static_cast<float>(
+                                glm::length(spacecraft[static_cast<size_t>(nav.dockTgtIdx)]->position()
+                                            - spacecraft[playerIdx]->position()) * 1000.0)
+                            : 0.0f);
+                    constexpr int kN = static_cast<int>(
+                        sizeof(kRangeCallouts) / sizeof(kRangeCallouts[0]));
+                    // Find the deepest (smallest) threshold we have crossed.
+                    // Iterate all thresholds and keep the last match — this gives the
+                    // most-recently-crossed threshold as range decreases.
+                    int band = -1;  // -1 = above all thresholds, no callout
+                    for (int i = 0; i < kN; ++i) {
+                        if (rangeM < kRangeCallouts[i]) band = i;
+                    }
+                    // Initialise on first run after arm (suppress spurious callout).
+                    if (lastRangeBand == -1) lastRangeBand = band;
+                    // Announce when we cross into a new (deeper) band.
+                    if (band > lastRangeBand) {
+                        char buf[64];
+                        if (kRangeCallouts[band] >= 1000.f)
+                            std::snprintf(buf, sizeof(buf), "%.0f kilometre.",
+                                          kRangeCallouts[band] * 1e-3f);
+                        else
+                            std::snprintf(buf, sizeof(buf), "%.0f %s.",
+                                          kRangeCallouts[band],
+                                          kRangeCallouts[band] < 1.5f ? "metre" : "metres");
+                        obc::speak(buf);
+                        lastRangeBand = band;
+                    }
+                    // Reset if range increases back above the last threshold.
+                    if (band < lastRangeBand) lastRangeBand = band;
                 }
             }
 
@@ -2109,11 +2199,13 @@ int main()
     }
     catch (const std::exception& e) {
         std::cerr << "Fatal: " << e.what() << "\n";
+        obc::shutdown();
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;
     }
 
+    obc::shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;

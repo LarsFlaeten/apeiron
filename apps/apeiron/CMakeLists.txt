@@ -27,6 +27,7 @@ add_custom_target(apeiron_shaders DEPENDS ${SHADER_SPIRV})
 # Executable
 # ---------------------------------------------------------------------------
 find_package(tomlplusplus CONFIG REQUIRED)
+find_package(PkgConfig QUIET)
 
 add_executable(apeiron
     main.cpp
@@ -41,6 +42,7 @@ add_executable(apeiron
     OffscreenCam.cpp
     NavConsole.cpp
     NavHUD.cpp
+    VoiceAnnouncer.cpp
 )
 
 add_dependencies(apeiron apeiron_shaders)
@@ -67,3 +69,18 @@ target_compile_definitions(apeiron
 )
 
 target_compile_features(apeiron PRIVATE cxx_std_23)
+
+# ---------------------------------------------------------------------------
+# Optional: eSpeak NG text-to-speech (OBC voice announcements)
+# ---------------------------------------------------------------------------
+if (PkgConfig_FOUND)
+    pkg_check_modules(ESPEAK_NG QUIET espeak-ng)
+endif()
+if (ESPEAK_NG_FOUND)
+    target_compile_definitions(apeiron PRIVATE APEIRON_VOICE=1)
+    target_include_directories(apeiron PRIVATE ${ESPEAK_NG_INCLUDE_DIRS})
+    target_link_libraries(apeiron PRIVATE ${ESPEAK_NG_LINK_LIBRARIES})
+    message(STATUS "eSpeak NG ${ESPEAK_NG_VERSION} found — OBC voice enabled")
+else()
+    message(STATUS "eSpeak NG not found — OBC voice disabled (install libespeak-ng-dev)")
+endif()
