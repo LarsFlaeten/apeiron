@@ -10,6 +10,9 @@
 
 ## Solar System
 
+![Earthrise](screenshots/Earthrise_20260407.png)
+*Earthrise seen from the moon on 20260407, around the same time Artemis II turned back to earth from behind the moon*
+
 ![Mars from orbit](screenshots/Mars.png)
 *Mars with dust-reddened atmosphere — reddish-orange limb characteristic of iron-oxide aerosols*
 
