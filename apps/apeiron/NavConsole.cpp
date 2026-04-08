@@ -301,6 +301,8 @@ void NavConsole::render(float                                           posX,
     else if (apMode == M::NormalPlus)  apLabel = "NORMAL+";
     else if (apMode == M::NormalMinus) apLabel = "NORMAL-";
     else if (apMode == M::NullV)       apLabel = "NULL V";
+    else if (apMode == M::RelVelPlus)  apLabel = "+V";
+    else if (apMode == M::RelVelMinus) apLabel = "-V";
     ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "AP:");
     ImGui::SameLine();
     ImGui::TextColored(apMode != M::Off
@@ -322,7 +324,29 @@ void NavConsole::render(float                                           posX,
         apButton("Nrm- [⇧M]",     M::NormalMinus);
     }
     if (nav.navMode == NavMode::Docking && nav.dockTgtIdx >= 0) {
-        apButton("NULL V", M::NullV);
+        apButton("NULL V [⇧V]", M::NullV);
+
+        // +V / -V attitude buttons — work standalone or alongside NullV.
+        // When NullV is active they set secondaryMode; otherwise they set mode.
+        auto rvButton = [&](const char* label, M m) {
+            const bool isNullV  = (apMode == M::NullV);
+            const bool active   = isNullV ? (autopilot.secondaryMode == m)
+                                          : (apMode == m);
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
+            if (ImGui::Button(label)) {
+                if (isNullV) {
+                    autopilot.secondaryMode = active ? M::Off : m;
+                } else {
+                    // Clear secondary when switching standalone mode.
+                    autopilot.secondaryMode = M::Off;
+                    autopilot.mode = active ? M::Off : m;
+                }
+            }
+            if (active) ImGui::PopStyleColor();
+            ImGui::SameLine();
+        };
+        rvButton("+V [⇧+]", M::RelVelPlus);
+        rvButton("-V [⇧-]", M::RelVelMinus);
     }
 
     ImGui::PopStyleColor();

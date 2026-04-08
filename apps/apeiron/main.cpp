@@ -840,6 +840,37 @@ int main()
                 if (s->nav && s->nav->navMode == NavMode::Docking && s->nav->dockTgtIdx >= 0) {
                     using M = spacecraft::AutopilotMode;
                     s->autopilot->mode = (s->autopilot->mode == M::NullV) ? M::Off : M::NullV;
+                    if (s->autopilot->mode == M::Off)
+                        s->autopilot->secondaryMode = M::Off;
+                }
+            }
+            // Shift+= (+V) and Shift+- (-V): relative velocity attitude hold (docking)
+            else if ((key == GLFW_KEY_EQUAL || key == GLFW_KEY_KP_ADD) && (mods & GLFW_MOD_SHIFT)) {
+                if (s->nav && s->nav->navMode == NavMode::Docking && s->nav->dockTgtIdx >= 0) {
+                    using M = spacecraft::AutopilotMode;
+                    const bool isNullV = (s->autopilot->mode == M::NullV);
+                    if (isNullV) {
+                        s->autopilot->secondaryMode =
+                            (s->autopilot->secondaryMode == M::RelVelPlus) ? M::Off : M::RelVelPlus;
+                    } else {
+                        s->autopilot->secondaryMode = M::Off;
+                        s->autopilot->mode =
+                            (s->autopilot->mode == M::RelVelPlus) ? M::Off : M::RelVelPlus;
+                    }
+                }
+            }
+            else if ((key == GLFW_KEY_MINUS || key == GLFW_KEY_KP_SUBTRACT) && (mods & GLFW_MOD_SHIFT)) {
+                if (s->nav && s->nav->navMode == NavMode::Docking && s->nav->dockTgtIdx >= 0) {
+                    using M = spacecraft::AutopilotMode;
+                    const bool isNullV = (s->autopilot->mode == M::NullV);
+                    if (isNullV) {
+                        s->autopilot->secondaryMode =
+                            (s->autopilot->secondaryMode == M::RelVelMinus) ? M::Off : M::RelVelMinus;
+                    } else {
+                        s->autopilot->secondaryMode = M::Off;
+                        s->autopilot->mode =
+                            (s->autopilot->mode == M::RelVelMinus) ? M::Off : M::RelVelMinus;
+                    }
                 }
             }
             else if (key == GLFW_KEY_T) {
@@ -1074,8 +1105,10 @@ int main()
                             glm::dvec3 w_body = glm::conjugate(att) * ship.angularVelocity();
 
                             // Auto-cancel NullV once done.
-                            if (autopilot.nullVDone)
-                                autopilot.mode = spacecraft::AutopilotMode::Off;
+                            if (autopilot.nullVDone) {
+                                autopilot.mode        = spacecraft::AutopilotMode::Off;
+                                autopilot.secondaryMode = spacecraft::AutopilotMode::Off;
+                            }
 
                             // For attitude hold modes, update target each frame.
                             using M = spacecraft::AutopilotMode;
@@ -1105,6 +1138,39 @@ int main()
                                 // Feedforward: orbital angular velocity (r × v) / |r|²
                                 glm::dvec3 omegaOrb = glm::cross(r, v) / glm::dot(r, r);
                                 autopilot.omegaFF = glm::dvec3(glm::conjugate(att) * omegaOrb);
+                            }
+
+                            // RelVelPlus/Minus: point nose along/against relative velocity.
+                            // Runs for standalone mode AND as secondaryMode alongside NullV.
+                            const M relVelAttMode = (autopilot.mode == M::RelVelPlus ||
+                                                     autopilot.mode == M::RelVelMinus)
+                                                    ? autopilot.mode
+                                                    : autopilot.secondaryMode;
+                            if (relVelAttMode == M::RelVelPlus || relVelAttMode == M::RelVelMinus) {
+                                // Relative velocity in inertial frame.
+                                glm::dvec3 relVelInertial = att * autopilot.relVelBody;
+                                const double rvMag = glm::length(relVelInertial);
+                                if (rvMag > 1e-3) {
+                                    glm::dvec3 V = relVelInertial / rvMag;
+                                    if (relVelAttMode == M::RelVelMinus) V = -V;
+
+                                    // Up reference: current +Y body projected ⊥ to V.
+                                    // This minimises roll during transition.
+                                    glm::dvec3 upRef = att * glm::dvec3(0, 1, 0);
+                                    upRef -= glm::dot(upRef, V) * V;
+                                    if (glm::length(upRef) < 0.1) {
+                                        // V nearly parallel to current up — use current +Z
+                                        upRef = att * glm::dvec3(0, 0, 1);
+                                        upRef -= glm::dot(upRef, V) * V;
+                                    }
+                                    upRef = glm::normalize(upRef);
+                                    glm::dvec3 right = glm::normalize(glm::cross(V, upRef));
+                                    upRef = glm::normalize(glm::cross(right, V)); // re-ortho
+
+                                    // dmat3 columns = body X, Y, Z expressed in inertial frame.
+                                    autopilot.targetAttitude = glm::quat_cast(glm::dmat3(V, upRef, right));
+                                }
+                                autopilot.omegaFF = glm::dvec3(0.0);  // no feedforward for relative velocity
                             }
 
                             bool settleClamp = false;

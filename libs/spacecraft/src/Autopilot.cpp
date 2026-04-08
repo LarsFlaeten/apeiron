@@ -47,18 +47,17 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
         w[1] = fDir.y * kSat;
         w[2] = fDir.z * kSat;
 
-        // Damp angular velocity alongside translation.  Without this, the
-        // incidental torques produced by the translation allocation (thrusters
-        // are angled, not purely axial) cause the craft to slowly spin, reducing
-        // effective braking force and requiring constant manual correction.
-        // Use the same bang-bang logic as Killrot Phase 1.
-        const double omegaMag = glm::length(omega_body);
-        if (omegaMag > deadband) {
-            glm::dvec3 tau = -(maxTorqueNm / omegaMag) * omega_body;
-            w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
+        if (secondaryMode == AutopilotMode::Off) {
+            // No attitude mode combined — damp angular velocity with simple bang-bang.
+            const double omegaMag = glm::length(omega_body);
+            if (omegaMag > deadband) {
+                glm::dvec3 tau = -(maxTorqueNm / omegaMag) * omega_body;
+                w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
+            }
+            return w;
         }
-
-        return w;
+        // secondaryMode is RelVelPlus or RelVelMinus — fall through to attitude
+        // hold below, which will fill [3..5] from targetAttitude.
     }
 
     // =========================================================

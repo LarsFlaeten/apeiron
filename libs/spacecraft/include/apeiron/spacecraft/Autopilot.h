@@ -15,6 +15,8 @@ enum class AutopilotMode {
     NormalPlus,  // hold body +X along orbit normal (r × v)
     NormalMinus, // hold body +X against orbit normal
     NullV,       // null relative velocity to a target body (docking mode)
+    RelVelPlus,  // hold body +X along relative velocity vector (+V, docking)
+    RelVelMinus, // hold body +X against relative velocity vector (-V, docking)
 };
 
 // ---------------------------------------------------------------------------
@@ -63,6 +65,12 @@ struct Autopilot {
     double KdAtt              = 15.0;    // s — cross-axis rate damping weight
     double attFireThreshold   = 0.010;   // rad  (~0.57°) — coast if att error below this
     double rateFireThreshold  = 0.003;   // rad/s (~0.17°/s) — coast if rate error below this
+
+    // Secondary mode — runs alongside NullV.
+    // When mode == NullV and secondaryMode == RelVelPlus or RelVelMinus,
+    // compute() fills [3..5] from the full attitude hold rather than simple damping.
+    // For all other primary modes secondaryMode should be Off.
+    AutopilotMode secondaryMode = AutopilotMode::Off;
 
     bool active() const { return mode != AutopilotMode::Off; }
 
