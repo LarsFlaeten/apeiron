@@ -1200,7 +1200,17 @@ int main()
                         //  • Everything else (WASD, small AP corrections): RCS-only.
                         //    This ensures lateral/retrograde translations never route through
                         //    the main engine, and aux thrusters stay quiet during fine control.
-                        if (mainEngineKey || (autopilot.active() && autopilot.inLargeSlew))
+                        // Docking attitude modes (RelVelPlus/Minus, NullV) always stay
+                        // on RCS-only — aux thrusters cause too much instability at
+                        // close range.  Aux is only used for large orbital slews.
+                        using M2 = spacecraft::AutopilotMode;
+                        const bool isDockingAttMode =
+                            autopilot.mode == M2::RelVelPlus  ||
+                            autopilot.mode == M2::RelVelMinus ||
+                            autopilot.mode == M2::NullV       ||
+                            autopilot.secondaryMode == M2::RelVelPlus ||
+                            autopilot.secondaryMode == M2::RelVelMinus;
+                        if (mainEngineKey || (!isDockingAttMode && autopilot.active() && autopilot.inLargeSlew))
                             orionModel.solveAllocation(desired);
                         else
                             orionModel.solveAllocationRcsOnly(desired);
