@@ -3,6 +3,7 @@ add_library(spacecraft STATIC
     src/ManifestLoader.cpp
     src/Autopilot.cpp
     src/OrbitLoader.cpp
+    src/Lambert.cpp
 )
 
 target_include_directories(spacecraft
