@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
+#include <iostream>
 
 static constexpr double kDay = 86400.0;
 
@@ -66,7 +67,12 @@ void TransferMFD::compute()
         m_selDep  = -1;
         m_selTof  = -1;
     } catch (const std::exception& e) {
+        const astro::SpiceException se = dynamic_cast<const astro::SpiceException&>(e);
         m_error = e.what();
+        std::cout << "[TransferMFD] Compute error: " << e.what() << "\n";
+        std::cout << "[TransferMFD]    Spice short message exp: " << se.getShortMessageExplanation() << "\n";
+        std::cout << "[TransferMFD]    Spice long message: " << se.getLongMessage() << "\n";
+        
     } catch (...) {
         m_error = "unknown exception";
     }
@@ -182,7 +188,8 @@ void TransferMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
     const float pad    = 4.0f;
     const float labelH = 11.0f;   // line height for axis labels
-    const float infoH  = labelH * 3.0f + pad;   // info panel height at bottom
+    // Info panel: 3 text lines + gap from grid bottom tick labels (labelH).
+    const float infoH  = labelH * 3.0f + labelH + pad;
 
     // Grid area.
     const float gx0 = origin.x + pad;
@@ -300,7 +307,7 @@ void TransferMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     }
 
     // ---- Info panel ----
-    const float infoY = gy1 + labelH * 0.5f + pad;
+    const float infoY = gy1 + labelH + pad;   // below tick labels
     int di = (inGrid ? hDep : m_selDep);
     int ti = (inGrid ? hTof : m_selTof);
 
