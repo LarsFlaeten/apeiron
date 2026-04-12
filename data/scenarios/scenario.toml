@@ -12,10 +12,13 @@ path = "../kernels/lsk/naif0012.tls"
 path = "../kernels/pck/pck00011.tpc"
 
 [[kernels]]
+path = "../kernels/pck/gm_de440.tpc"
+
+[[kernels]]
 path = "../kernels/spk/de440s.bsp"
 
-# [[kernels]]
-# path = "../kernels/spk/mar099s.bsp"
+[[kernels]]
+path = "../kernels/spk/mar099s.bsp"
 
 # ---------------------------------------------------------------------------
 
@@ -69,19 +72,19 @@ displacement = "../textures/moon/lola_8k_height.png"
 # color = [1.0, 1.0, 1.0]
 # diffuse = "../textures/venus/8k_venus_surface.jpg"
 
-# [[bodies]]
-# naif  = "MARS"
-# color = [1.0, 1.0, 1.0]
-# diffuse      = "../textures/mars/8k_mars.jpg"
-# normals      = "../textures/mars/MarsNormal.png"
-# displacement = "../textures/mars/Mars_MGS_MOLA_8k_height.png"
-# atmosphere.radius_km        = 3489.5
-# atmosphere.rayleigh_rgb     = [5.0e-3, 1.5e-3, 0.3e-3]
-# atmosphere.rayleigh_scale_h = 10.0
-# atmosphere.mie_scattering   = 8.0e-3
-# atmosphere.mie_extinction   = 9.0e-3
-# atmosphere.mie_scale_h      = 8.0
-# atmosphere.mie_g            = 0.70
+[[bodies]]
+naif  = "MARS"
+color = [1.0, 1.0, 1.0]
+diffuse      = "../textures/mars/8k_mars.jpg"
+normals      = "../textures/mars/MarsNormal.png"
+displacement = "../textures/mars/Mars_MGS_MOLA_8k_height.png"
+atmosphere.radius_km        = 3489.5
+atmosphere.rayleigh_rgb     = [5.0e-3, 1.5e-3, 0.3e-3]
+atmosphere.rayleigh_scale_h = 10.0
+atmosphere.mie_scattering   = 8.0e-3
+atmosphere.mie_extinction   = 9.0e-3
+atmosphere.mie_scale_h      = 8.0
+atmosphere.mie_g            = 0.70
 
 # [[bodies]]
 # naif       = "JUPITER BARYCENTER"
