@@ -83,6 +83,9 @@ void TransferMFD::compute()
 // ---------------------------------------------------------------------------
 const char* TransferMFD::leftLabel(int slot) const
 {
+    if (m_page == 1) {
+        return (slot == 4) ? "BACK" : "";
+    }
     switch (slot) {
     case 0: return "DEP<";
     case 1: return "DEP>";
@@ -95,29 +98,34 @@ const char* TransferMFD::leftLabel(int slot) const
 
 const char* TransferMFD::rightLabel(int slot) const
 {
+    if (m_page == 1) return "";
     switch (slot) {
     case 0: return "WIN<";
     case 1: return "WIN>";
     case 2: return "RNG<";
     case 3: return "RNG>";
+    case 4: return (m_selDep >= 0 && m_selTof >= 0 && m_hasData) ? "INFO" : "";
     default: return "";
     }
 }
 
 void TransferMFD::onLeft(int slot)
 {
-    const double span = m_params.t1 - m_params.t0;
+    if (m_page == 1) {
+        if (slot == 4) m_page = 0;
+        return;
+    }
     const double shift = 30.0 * kDay;
     switch (slot) {
-    case 0:  // DEP< — shift window back
+    case 0:
         m_params.t0 -= shift;
         m_params.t1 -= shift;
         break;
-    case 1:  // DEP> — shift window forward
+    case 1:
         m_params.t0 += shift;
         m_params.t1 += shift;
         break;
-    case 2:  // TOF< — shift TOF range down
+    case 2:
         m_params.tofMin -= shift;
         m_params.tofMax -= shift;
         if (m_params.tofMin < kDay) {
@@ -125,37 +133,37 @@ void TransferMFD::onLeft(int slot)
             m_params.tofMin  = kDay;
         }
         break;
-    case 3:  // TOF> — shift TOF range up
+    case 3:
         m_params.tofMin += shift;
         m_params.tofMax += shift;
         break;
-    case 4:  // COMP
+    case 4:
         compute();
         break;
     default: break;
     }
-    (void)span;
 }
 
 void TransferMFD::onRight(int slot)
 {
+    if (m_page == 1) return;
     const double depMid = (m_params.t0 + m_params.t1) * 0.5;
     const double tofMid = (m_params.tofMin + m_params.tofMax) * 0.5;
     double depHalf = (m_params.t1 - m_params.t0) * 0.5;
     double tofHalf = (m_params.tofMax - m_params.tofMin) * 0.5;
 
     switch (slot) {
-    case 0:  // WIN< — halve departure span
+    case 0:
         depHalf = std::max(depHalf * 0.5, 30.0 * kDay);
         m_params.t0 = depMid - depHalf;
         m_params.t1 = depMid + depHalf;
         break;
-    case 1:  // WIN> — double departure span
+    case 1:
         depHalf *= 2.0;
         m_params.t0 = depMid - depHalf;
         m_params.t1 = depMid + depHalf;
         break;
-    case 2:  // RNG< — halve TOF span
+    case 2:
         tofHalf = std::max(tofHalf * 0.5, 15.0 * kDay);
         m_params.tofMin = tofMid - tofHalf;
         m_params.tofMax = tofMid + tofHalf;
@@ -164,7 +172,7 @@ void TransferMFD::onRight(int slot)
             m_params.tofMin  = kDay;
         }
         break;
-    case 3:  // RNG> — double TOF span
+    case 3:
         tofHalf *= 2.0;
         m_params.tofMin = tofMid - tofHalf;
         m_params.tofMax = tofMid + tofHalf;
@@ -173,12 +181,69 @@ void TransferMFD::onRight(int slot)
             m_params.tofMin  = kDay;
         }
         break;
+    case 4:  // INFO — open detail page for selected cell
+        if (m_selDep >= 0 && m_selTof >= 0 && m_hasData) {
+            resolveSelected();
+            if (m_detail.valid) m_page = 1;
+        }
+        break;
     default: break;
     }
 }
 
 // ---------------------------------------------------------------------------
+void TransferMFD::resolveSelected()
+{
+    m_detail = {};
+    if (!m_hasData || m_selDep < 0 || m_selTof < 0) return;
+
+    const double depET  = m_data.depET(m_selDep);
+    const double tofSec = m_data.tofS (m_selTof);
+    const double arrET  = depET + tofSec;
+
+    astro::PosState dep, arr;
+    try {
+        astro::Spice().getRelativeGeometricState(
+            m_params.departureBody, m_params.centralBody,
+            astro::EphemerisTime(depET), dep);
+        astro::Spice().getRelativeGeometricState(
+            m_params.arrivalBody, m_params.centralBody,
+            astro::EphemerisTime(arrET), arr);
+    } catch (...) { return; }
+
+    double mu = m_params.muCentral;
+    if (mu <= 0.0)
+        astro::Spice().getPlanetaryConstants(m_params.centralBody, "GM", mu);
+
+    glm::dvec3 vDep, vArr;
+    if (!spacecraft::solveLambert(mu, dep.r, arr.r, tofSec, true, vDep, vArr))
+        return;
+
+    glm::dvec3 vInf = vDep - dep.v;
+    m_detail.valid    = true;
+    m_detail.depET    = depET;
+    m_detail.arrET    = arrET;
+    m_detail.tofSec   = tofSec;
+    m_detail.dv1      = static_cast<float>(glm::length(vInf));
+    m_detail.dv2      = static_cast<float>(glm::length(vArr - arr.v));
+    m_detail.c3       = static_cast<float>(glm::dot(vInf, vInf));
+    m_detail.depPos   = dep.r;
+    m_detail.arrPos   = arr.r;
+    m_detail.vDepBody = dep.v;
+    m_detail.vArrBody = arr.v;
+    m_detail.vDep     = vDep;
+    m_detail.vArr     = vArr;
+}
+
+// ---------------------------------------------------------------------------
 void TransferMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
+{
+    if (m_page == 1) { renderDetail(dl, origin, size); return; }
+    renderPorkchop(dl, origin, size);
+}
+
+// ---------------------------------------------------------------------------
+void TransferMFD::renderPorkchop(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 {
     const ImU32 kGreen    = IM_COL32(  0, 210,  75, 210);
     const ImU32 kDim      = IM_COL32(  0, 140,  50, 140);
@@ -458,5 +523,152 @@ void TransferMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         std::snprintf(buf, sizeof(buf), "dVmin %.2f km/s", m_data.dvMin);
         dl->AddText({ origin.x + pad, infoY }, kGreen, buf);
         dl->AddText({ origin.x + pad, infoY + labelH }, kDim, "hover/click to select");
+    }
+}
+
+// ---------------------------------------------------------------------------
+void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
+{
+    const ImU32 kGreen  = IM_COL32(  0, 210,  75, 210);
+    const ImU32 kDim    = IM_COL32(  0, 140,  50, 140);
+    const ImU32 kYellow = IM_COL32(255, 220,   0, 230);
+    const ImU32 kCyan   = IM_COL32(  0, 200, 220, 220);
+    const ImU32 kOrange = IM_COL32(255, 140,   0, 220);
+
+    const float pad   = 4.0f;
+    const float lineH = 11.0f;
+    const float cx    = origin.x + pad;
+    float y           = origin.y + pad;
+
+    if (!m_detail.valid) {
+        dl->AddText({cx, y}, kDim, "No transfer selected");
+        return;
+    }
+
+    // ---- Text rows ----
+    auto row = [&](ImU32 col, const char* fmt, ...) {
+        char buf[80];
+        va_list ap; va_start(ap, fmt);
+        std::vsnprintf(buf, sizeof(buf), fmt, ap);
+        va_end(ap);
+        dl->AddText({cx, y}, col, buf);
+        y += lineH;
+    };
+
+    std::string depStr = astro::EphemerisTime(m_detail.depET).toISOUTCString(0);
+    std::string arrStr = astro::EphemerisTime(m_detail.arrET).toISOUTCString(0);
+    int tofDays = static_cast<int>(m_detail.tofSec / kDay + 0.5);
+
+    row(kGreen,  "DEP  %.10s", depStr.c_str());
+    row(kGreen,  "ARR  %.10s", arrStr.c_str());
+    row(kGreen,  "TOF  %d days", tofDays);
+    y += pad;
+    row(kYellow, "DV1  %.3f km/s", m_detail.dv1);
+    row(kYellow, "DV2  %.3f km/s", m_detail.dv2);
+    row(kYellow, "TOT  %.3f km/s", m_detail.dv1 + m_detail.dv2);
+    y += pad;
+    row(kCyan,   "C3   %.2f km2/s2", m_detail.c3);
+
+    // Departure v-infinity ecliptic lon/lat.
+    glm::dvec3 vInf   = m_detail.vDep - m_detail.vDepBody;
+    double     vInfMag = glm::length(vInf);
+    if (vInfMag > 1e-6) {
+        glm::dvec3 vn  = vInf / vInfMag;
+        double lon = std::atan2(vn.y, vn.x) * 180.0 / M_PI;
+        double lat = std::asin(std::clamp(vn.z, -1.0, 1.0)) * 180.0 / M_PI;
+        if (lon < 0.0) lon += 360.0;
+        y += pad;
+        row(kDim,  "VINF ecliptic");
+        row(kCyan, "  LON %.1f  LAT %.1f", lon, lat);
+    }
+
+    // ---- Orbit diagram ----
+    const float diagSize = std::min(size.x, size.y - (y - origin.y)) - 2.0f * pad;
+    if (diagSize < 20.0f) return;
+
+    const float dCx = origin.x + size.x * 0.5f;
+    const float dCy = y + pad + diagSize * 0.5f;
+    const float dR  = diagSize * 0.5f - 4.0f;
+
+    double depR   = glm::length(m_detail.depPos);
+    double arrR   = glm::length(m_detail.arrPos);
+    double scale  = dR / (std::max(depR, arrR) * 1.05);  // px/km
+
+    auto toScreen = [&](const glm::dvec3& p) -> ImVec2 {
+        return { dCx + static_cast<float>(p.x * scale),
+                 dCy - static_cast<float>(p.y * scale) };
+    };
+
+    // Reference orbit circles (1 AU and 1.524 AU).
+    const double kAU   = 1.496e8;
+    float earthPx = static_cast<float>(1.0   * kAU * scale);
+    float marsPx  = static_cast<float>(1.524 * kAU * scale);
+    dl->AddCircle({dCx, dCy}, earthPx, IM_COL32( 60,140,255, 60), 64, 1.0f);
+    dl->AddCircle({dCx, dCy}, marsPx,  IM_COL32(200, 80, 50, 60), 64, 1.0f);
+
+    // Sun.
+    dl->AddCircleFilled({dCx, dCy}, 4.0f, IM_COL32(255, 220, 60, 240));
+
+    // Transfer arc via vis-viva / orbit geometry.
+    double mu = m_params.muCentral;
+    if (mu <= 0.0) {
+        try { astro::Spice().getPlanetaryConstants(m_params.centralBody, "GM", mu); }
+        catch (...) {}
+    }
+    if (mu > 0.0) {
+        glm::dvec3 h    = glm::cross(m_detail.depPos, m_detail.vDep);
+        double     hMag = glm::length(h);
+        if (hMag > 1e-6) {
+            glm::dvec3 hn   = h / hMag;
+            double     p_   = hMag * hMag / mu;
+            glm::dvec3 ev   = glm::cross(m_detail.vDep, h) / mu
+                            - glm::normalize(m_detail.depPos);
+            double     ecc  = glm::length(ev);
+
+            glm::dvec3 periDir = (ecc > 1e-9)
+                ? glm::normalize(ev)
+                : glm::normalize(m_detail.depPos);
+            glm::dvec3 qDir = glm::cross(hn, periDir);
+
+            auto trueAnom = [&](const glm::dvec3& r) -> double {
+                double cosnu = glm::dot(periDir, glm::normalize(r));
+                cosnu = std::clamp(cosnu, -1.0, 1.0);
+                double nu = std::acos(cosnu);
+                if (glm::dot(glm::cross(periDir, r), hn) < 0.0) nu = -nu;
+                return nu;
+            };
+
+            double nu1 = trueAnom(m_detail.depPos);
+            double nu2 = trueAnom(m_detail.arrPos);
+            if (nu2 < nu1) nu2 += 2.0 * M_PI;
+
+            ImVec2 prev{}; bool first = true;
+            for (int k = 0; k <= 80; ++k) {
+                double nu = nu1 + (nu2 - nu1) * k / 80.0;
+                double r_ = p_ / (1.0 + ecc * std::cos(nu));
+                glm::dvec3 pos = r_ * (std::cos(nu) * periDir + std::sin(nu) * qDir);
+                ImVec2 sp = toScreen(pos);
+                if (!first) dl->AddLine(prev, sp, kYellow, 1.5f);
+                prev = sp; first = false;
+            }
+        }
+    }
+
+    // Departure / arrival markers.
+    ImVec2 depSc = toScreen(m_detail.depPos);
+    ImVec2 arrSc = toScreen(m_detail.arrPos);
+    dl->AddCircleFilled(depSc, 3.5f, IM_COL32( 60,140,255,255));
+    dl->AddCircleFilled(arrSc, 3.5f, IM_COL32(200, 80, 50,255));
+    dl->AddText({depSc.x + 4, depSc.y - 5}, IM_COL32( 60,140,255,200), "E");
+    dl->AddText({arrSc.x + 4, arrSc.y - 5}, IM_COL32(200, 80, 50,200), "M");
+
+    // Departure v-infinity arrow.
+    if (vInfMag > 1e-6) {
+        glm::dvec3 vDir = vInf / vInfMag;
+        float aLen = 14.0f;
+        ImVec2 tip = { depSc.x + static_cast<float>(vDir.x) * aLen,
+                       depSc.y - static_cast<float>(vDir.y) * aLen };
+        dl->AddLine(depSc, tip, kOrange, 1.5f);
+        dl->AddCircleFilled(tip, 2.5f, kOrange);
     }
 }
