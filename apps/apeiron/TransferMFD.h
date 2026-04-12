@@ -78,8 +78,8 @@ private:
         double     depET    = 0.0;
         double     arrET    = 0.0;
         double     tofSec   = 0.0;
-        float      dv1      = 0.0f;  // km/s departure ΔV
-        float      dv2      = 0.0f;  // km/s arrival  ΔV
+        float      dv1      = 0.0f;  // km/s departure ΔV (heliocentric)
+        float      dv2      = 0.0f;  // km/s arrival  ΔV (heliocentric)
         float      c3       = 0.0f;  // km²/s²  departure C3 = |v∞|²
         glm::dvec3 depPos;            // Earth heliocentric position (km)
         glm::dvec3 arrPos;            // Mars  heliocentric position (km)
@@ -87,7 +87,16 @@ private:
         glm::dvec3 vArrBody;          // Mars  heliocentric velocity (km/s)
         glm::dvec3 vDep;              // Lambert departure velocity (km/s)
         glm::dvec3 vArr;              // Lambert arrival  velocity (km/s)
+        // Orbital state of departure body (for ellipse drawing).
+        glm::dvec3 depBodyVel;        // same as vDepBody — kept for clarity
+        glm::dvec3 arrBodyVel;        // same as vArrBody
     } m_detail;
+
+    // Parking orbit radius for TMI burn computation (km from Earth centre).
+    // Cycled by left button 5 (ALT).
+    static constexpr double kParkAlts[] = { 6778.0, 6978.0, 7378.0, 8378.0 };
+    // 400 km, 600 km, 1000 km, 2000 km altitude (Earth R=6378 km)
+    int m_parkIdx = 0;   // index into kParkAlts
 
     static constexpr double kDay = 86400.0;
 };

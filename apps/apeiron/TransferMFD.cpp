@@ -84,7 +84,9 @@ void TransferMFD::compute()
 const char* TransferMFD::leftLabel(int slot) const
 {
     if (m_page == 1) {
-        return (slot == 4) ? "BACK" : "";
+        if (slot == 4) return "BACK";
+        if (slot == 3) return "ALT";
+        return "";
     }
     switch (slot) {
     case 0: return "DEP<";
@@ -113,6 +115,8 @@ void TransferMFD::onLeft(int slot)
 {
     if (m_page == 1) {
         if (slot == 4) m_page = 0;
+        if (slot == 3) m_parkIdx = (m_parkIdx + 1)
+                                   % static_cast<int>(std::size(kParkAlts));
         return;
     }
     const double shift = 30.0 * kDay;
@@ -527,6 +531,36 @@ void TransferMFD::renderPorkchop(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 }
 
 // ---------------------------------------------------------------------------
+// Draw one complete orbital ellipse from a state vector (r, v) around mu.
+// Projected onto the ecliptic x-y plane (z ignored for display).
+static void drawOrbit(ImDrawList* dl, const glm::dvec3& r, const glm::dvec3& v,
+                      double mu, ImVec2 centre, double scale, ImU32 col)
+{
+    glm::dvec3 h    = glm::cross(r, v);
+    double     hMag = glm::length(h);
+    if (hMag < 1e-6) return;
+    glm::dvec3 hn  = h / hMag;
+    double     p_  = hMag * hMag / mu;
+    glm::dvec3 ev  = glm::cross(v, h) / mu - glm::normalize(r);
+    double     ecc = glm::length(ev);
+    if (ecc >= 1.0) return;   // skip hyperbolic/parabolic
+
+    glm::dvec3 periDir = (ecc > 1e-9) ? glm::normalize(ev) : glm::normalize(r);
+    glm::dvec3 qDir    = glm::cross(hn, periDir);
+
+    ImVec2 prev{}; bool first = true;
+    for (int k = 0; k <= 120; ++k) {
+        double nu  = 2.0 * M_PI * k / 120.0;
+        double r_  = p_ / (1.0 + ecc * std::cos(nu));
+        glm::dvec3 pos = r_ * (std::cos(nu) * periDir + std::sin(nu) * qDir);
+        ImVec2 sp = { centre.x + static_cast<float>(pos.x * scale),
+                      centre.y - static_cast<float>(pos.y * scale) };
+        if (!first) dl->AddLine(prev, sp, col, 1.0f);
+        prev = sp; first = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 {
     const ImU32 kGreen  = IM_COL32(  0, 210,  75, 210);
@@ -544,6 +578,34 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         dl->AddText({cx, y}, kDim, "No transfer selected");
         return;
     }
+
+    // Mu — needed throughout.
+    double mu = m_params.muCentral;
+    if (mu <= 0.0) {
+        try { astro::Spice().getPlanetaryConstants(m_params.centralBody, "GM", mu); }
+        catch (...) {}
+    }
+
+    // ---- v∞ and burn geometry ----
+    glm::dvec3 vInf    = m_detail.vDep - m_detail.vDepBody;
+    double     vInfMag = glm::length(vInf);
+
+    // Earth GM for TMI burn.
+    double muEarth = 0.0;
+    try { astro::Spice().getPlanetaryConstants(399, "GM", muEarth); }
+    catch (...) { muEarth = 398600.4418; }
+
+    const double rPark   = kParkAlts[m_parkIdx];
+    const double altKm   = rPark - 6378.0;
+    const double vCirc   = std::sqrt(muEarth / rPark);         // circular speed
+    const double vPeri   = std::sqrt(m_detail.c3 + 2.0 * muEarth / rPark);  // hyperbolic periapsis speed
+    const double dvTMI   = vPeri - vCirc;                      // TMI burn ΔV
+
+    // Inclination of v∞ above ecliptic = angle between v∞ and ecliptic plane.
+    // sin(inc) = vInf.z / |vInf|  (ecliptic frame: z is out-of-plane)
+    double vInfInc = 0.0;
+    if (vInfMag > 1e-6)
+        vInfInc = std::asin(std::clamp(vInf.z / vInfMag, -1.0, 1.0)) * 180.0 / M_PI;
 
     // ---- Text rows ----
     auto row = [&](ImU32 col, const char* fmt, ...) {
@@ -569,66 +631,61 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     y += pad;
     row(kCyan,   "C3   %.2f km2/s2", m_detail.c3);
 
-    // Departure v-infinity ecliptic lon/lat.
-    glm::dvec3 vInf   = m_detail.vDep - m_detail.vDepBody;
-    double     vInfMag = glm::length(vInf);
     if (vInfMag > 1e-6) {
         glm::dvec3 vn  = vInf / vInfMag;
         double lon = std::atan2(vn.y, vn.x) * 180.0 / M_PI;
-        double lat = std::asin(std::clamp(vn.z, -1.0, 1.0)) * 180.0 / M_PI;
         if (lon < 0.0) lon += 360.0;
-        y += pad;
-        row(kDim,  "VINF ecliptic");
-        row(kCyan, "  LON %.1f  LAT %.1f", lon, lat);
+        double lat = std::asin(std::clamp(vn.z, -1.0, 1.0)) * 180.0 / M_PI;
+        row(kCyan, "VINF LON %.0f  LAT %.1f", lon, lat);
     }
+    y += pad;
+    row(kDim,    "TMI  alt %.0f km", altKm);
+    row(kGreen,  "  Vcirc  %.3f km/s", vCirc);
+    row(kGreen,  "  Vperi  %.3f km/s", vPeri);
+    row(kYellow, "  dV-TMI %.3f km/s", dvTMI);
+    if (std::abs(vInfInc) > 0.5)
+        row(kOrange, "  inc    %.1f deg above ecl", vInfInc);
 
     // ---- Orbit diagram ----
     const float diagSize = std::min(size.x, size.y - (y - origin.y)) - 2.0f * pad;
-    if (diagSize < 20.0f) return;
+    if (diagSize < 20.0f || mu <= 0.0) return;
 
     const float dCx = origin.x + size.x * 0.5f;
     const float dCy = y + pad + diagSize * 0.5f;
     const float dR  = diagSize * 0.5f - 4.0f;
 
-    double depR   = glm::length(m_detail.depPos);
-    double arrR   = glm::length(m_detail.arrPos);
-    double scale  = dR / (std::max(depR, arrR) * 1.05);  // px/km
+    double depR  = glm::length(m_detail.depPos);
+    double arrR  = glm::length(m_detail.arrPos);
+    double scale = dR / (std::max(depR, arrR) * 1.05);
 
     auto toScreen = [&](const glm::dvec3& p) -> ImVec2 {
         return { dCx + static_cast<float>(p.x * scale),
                  dCy - static_cast<float>(p.y * scale) };
     };
 
-    // Reference orbit circles (1 AU and 1.524 AU).
-    const double kAU   = 1.496e8;
-    float earthPx = static_cast<float>(1.0   * kAU * scale);
-    float marsPx  = static_cast<float>(1.524 * kAU * scale);
-    dl->AddCircle({dCx, dCy}, earthPx, IM_COL32( 60,140,255, 60), 64, 1.0f);
-    dl->AddCircle({dCx, dCy}, marsPx,  IM_COL32(200, 80, 50, 60), 64, 1.0f);
+    // Real orbital ellipses from SPICE state vectors.
+    drawOrbit(dl, m_detail.depPos, m_detail.vDepBody, mu,
+              {dCx, dCy}, scale, IM_COL32(60, 140, 255, 80));   // Earth — blue
+    drawOrbit(dl, m_detail.arrPos, m_detail.vArrBody, mu,
+              {dCx, dCy}, scale, IM_COL32(200, 80, 50, 80));    // Mars  — red
 
     // Sun.
     dl->AddCircleFilled({dCx, dCy}, 4.0f, IM_COL32(255, 220, 60, 240));
 
-    // Transfer arc via vis-viva / orbit geometry.
-    double mu = m_params.muCentral;
-    if (mu <= 0.0) {
-        try { astro::Spice().getPlanetaryConstants(m_params.centralBody, "GM", mu); }
-        catch (...) {}
-    }
-    if (mu > 0.0) {
+    // Transfer arc.
+    {
         glm::dvec3 h    = glm::cross(m_detail.depPos, m_detail.vDep);
         double     hMag = glm::length(h);
         if (hMag > 1e-6) {
-            glm::dvec3 hn   = h / hMag;
-            double     p_   = hMag * hMag / mu;
-            glm::dvec3 ev   = glm::cross(m_detail.vDep, h) / mu
-                            - glm::normalize(m_detail.depPos);
-            double     ecc  = glm::length(ev);
-
+            glm::dvec3 hn      = h / hMag;
+            double     p_      = hMag * hMag / mu;
+            glm::dvec3 ev      = glm::cross(m_detail.vDep, h) / mu
+                               - glm::normalize(m_detail.depPos);
+            double     ecc     = glm::length(ev);
             glm::dvec3 periDir = (ecc > 1e-9)
-                ? glm::normalize(ev)
-                : glm::normalize(m_detail.depPos);
-            glm::dvec3 qDir = glm::cross(hn, periDir);
+                               ? glm::normalize(ev)
+                               : glm::normalize(m_detail.depPos);
+            glm::dvec3 qDir    = glm::cross(hn, periDir);
 
             auto trueAnom = [&](const glm::dvec3& r) -> double {
                 double cosnu = glm::dot(periDir, glm::normalize(r));
@@ -637,24 +694,23 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                 if (glm::dot(glm::cross(periDir, r), hn) < 0.0) nu = -nu;
                 return nu;
             };
-
             double nu1 = trueAnom(m_detail.depPos);
             double nu2 = trueAnom(m_detail.arrPos);
             if (nu2 < nu1) nu2 += 2.0 * M_PI;
 
             ImVec2 prev{}; bool first = true;
             for (int k = 0; k <= 80; ++k) {
-                double nu = nu1 + (nu2 - nu1) * k / 80.0;
-                double r_ = p_ / (1.0 + ecc * std::cos(nu));
+                double nu  = nu1 + (nu2 - nu1) * k / 80.0;
+                double r_  = p_ / (1.0 + ecc * std::cos(nu));
                 glm::dvec3 pos = r_ * (std::cos(nu) * periDir + std::sin(nu) * qDir);
-                ImVec2 sp = toScreen(pos);
+                ImVec2 sp  = toScreen(pos);
                 if (!first) dl->AddLine(prev, sp, kYellow, 1.5f);
                 prev = sp; first = false;
             }
         }
     }
 
-    // Departure / arrival markers.
+    // Body markers — dots on the real ellipses.
     ImVec2 depSc = toScreen(m_detail.depPos);
     ImVec2 arrSc = toScreen(m_detail.arrPos);
     dl->AddCircleFilled(depSc, 3.5f, IM_COL32( 60,140,255,255));
@@ -662,7 +718,7 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     dl->AddText({depSc.x + 4, depSc.y - 5}, IM_COL32( 60,140,255,200), "E");
     dl->AddText({arrSc.x + 4, arrSc.y - 5}, IM_COL32(200, 80, 50,200), "M");
 
-    // Departure v-infinity arrow.
+    // v∞ arrow from departure position.
     if (vInfMag > 1e-6) {
         glm::dvec3 vDir = vInf / vInfMag;
         float aLen = 14.0f;
