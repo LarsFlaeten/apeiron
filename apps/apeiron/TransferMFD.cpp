@@ -58,13 +58,18 @@ void TransferMFD::compute()
     if (m_computing) return;
     m_computing = true;
     m_hasData   = false;
+    m_error.clear();
 
     try {
         m_data    = spacecraft::computePorkchop(m_params);
         m_hasData = true;
         m_selDep  = -1;
         m_selTof  = -1;
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        m_error = e.what();
+    } catch (...) {
+        m_error = "unknown exception";
+    }
 
     m_computing = false;
 }
@@ -199,12 +204,13 @@ void TransferMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // ---- No data yet ----
     if (!m_hasData) {
         const char* msg1 = "XFER: Earth -> Mars";
-        const char* msg2 = "Press COMP to compute";
+        const char* msg2 = m_error.empty() ? "Press COMP to compute" : m_error.c_str();
+        ImU32       col2 = m_error.empty() ? kDim : IM_COL32(255, 80, 80, 220);
         ImVec2 s1 = ImGui::CalcTextSize(msg1);
         ImVec2 s2 = ImGui::CalcTextSize(msg2);
         float cy = gy0 + (gh - labelH * 2.0f - pad) * 0.5f;
-        dl->AddText({ gx0 + (gw - s1.x) * 0.5f, cy           }, kGreen,  msg1);
-        dl->AddText({ gx0 + (gw - s2.x) * 0.5f, cy + labelH + pad }, kDim, msg2);
+        dl->AddText({ gx0 + (gw - s1.x) * 0.5f,       cy             }, kGreen, msg1);
+        dl->AddText({ gx0 + (gw - s2.x) * 0.5f, cy + labelH + pad }, col2,   msg2);
         return;
     }
 

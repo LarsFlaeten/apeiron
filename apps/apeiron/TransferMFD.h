@@ -49,8 +49,9 @@ private:
 
     spacecraft::PorkchopParams m_params;
     spacecraft::PorkchopData   m_data;
-    bool                       m_hasData = false;
+    bool                       m_hasData   = false;
     bool                       m_computing = false;
+    std::string                m_error;      // non-empty if last compute() threw
 
     // Hover / selection state.
     int   m_selDep = -1;
