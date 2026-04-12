@@ -39,6 +39,7 @@ add_executable(apeiron
     OrbitalMFD.cpp
     DockingMFD.cpp
     CamMFD.cpp
+    TransferMFD.cpp
     OffscreenCam.cpp
     NavConsole.cpp
     NavHUD.cpp

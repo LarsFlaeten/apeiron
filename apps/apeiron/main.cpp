@@ -42,6 +42,7 @@
 #include "DockingConstraint.h"
 #include "OffscreenCam.h"
 #include "CamMFD.h"
+#include "TransferMFD.h"
 #include "MFDMenu.h"
 #include "VoiceAnnouncer.h"
 #include "apeiron/spacecraft/Autopilot.h"
@@ -950,10 +951,14 @@ int main()
         CamMFD camMFD;
         camMFD.setCamNodes(navCamNodes);
 
+        TransferMFD transferMFD;
+        transferMFD.setEpoch(et);
+
         MFDMenu    mfdMenu;
-        mfdMenu.addApp(&orbitalMFD, "ORB");
-        mfdMenu.addApp(&dockingMFD, "DOCK");
-        mfdMenu.addApp(&camMFD,     "CAM");
+        mfdMenu.addApp(&orbitalMFD,  "ORB");
+        mfdMenu.addApp(&dockingMFD,  "DOCK");
+        mfdMenu.addApp(&camMFD,      "CAM");
+        mfdMenu.addApp(&transferMFD, "XFER");
 
         MFDPanel mfdFullPanel;
         mfdFullPanel.app     = &orbitalMFD;
