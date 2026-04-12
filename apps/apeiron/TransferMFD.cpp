@@ -249,6 +249,124 @@ void TransferMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         }
     }
 
+    // ---- Contour lines (marching squares) ----
+    {
+        // ΔV iso-levels to draw (km/s).
+        static const float kLevels[] = { 6.f, 7.f, 8.f, 9.f, 10.f, 12.f, 15.f };
+        static const int   kNLev     = static_cast<int>(std::size(kLevels));
+
+        // Marching squares lookup: {eA,eB,eC,eD} — draw segment(eA→eB) and optional (eC→eD).
+        // Cases 5 & 10 are saddles, handled separately.
+        static const int8_t kMS[16][4] = {
+            {-1,-1,-1,-1}, // 0  0000
+            { 3, 0,-1,-1}, // 1  0001  v0 above
+            { 0, 1,-1,-1}, // 2  0010  v1 above
+            { 3, 1,-1,-1}, // 3  0011  v0+v1
+            { 1, 2,-1,-1}, // 4  0100  v2
+            { 0, 0, 0, 0}, // 5  0101  saddle
+            { 0, 2,-1,-1}, // 6  0110  v1+v2
+            { 3, 2,-1,-1}, // 7  0111  v0+v1+v2
+            { 2, 3,-1,-1}, // 8  1000  v3
+            { 2, 0,-1,-1}, // 9  1001  v0+v3
+            { 0, 0, 0, 0}, //10  1010  saddle
+            { 2, 1,-1,-1}, //11  1011  v0+v1+v3
+            { 1, 3,-1,-1}, //12  1100  v2+v3
+            { 1, 0,-1,-1}, //13  1101  v0+v2+v3
+            { 0, 3,-1,-1}, //14  1110  v1+v2+v3
+            {-1,-1,-1,-1}, //15  1111
+        };
+
+        // Interpolated screen position of threshold crossing on one edge of a square.
+        // Square: data-space corners (i,j),(i+1,j),(i+1,j+1),(i,j+1) = v0,v1,v2,v3.
+        // Edge: 0=bottom(v0-v1), 1=right(v1-v2), 2=top(v2-v3), 3=left(v3-v0).
+        auto edgePt = [&](int i, int j, int edge, float lev,
+                          float v0, float v1, float v2, float v3) -> ImVec2 {
+            float bx = gx0 + (i + 0.5f) * cellW;
+            float by = gy0 + (nTof - 0.5f - j) * cellH;
+            float tx = bx + cellW;
+            float ty = by - cellH;   // ty < by: higher j → higher on screen → smaller y
+            switch (edge) {
+            case 0: { float t=(lev-v0)/(v1-v0); return {bx+t*cellW, by         }; }
+            case 1: { float t=(lev-v1)/(v2-v1); return {tx,          by-t*cellH }; }
+            case 2: { float t=(lev-v2)/(v3-v2); return {tx-t*cellW,  ty         }; }
+            case 3: { float t=(lev-v3)/(v0-v3); return {bx,          ty+t*cellH }; }
+            default: return {bx, by};
+            }
+        };
+
+        const float kNS = spacecraft::PorkchopData::kNoSolution * 0.5f;
+
+        // Track one label point per level (where contour last crosses a right-side edge).
+        struct LabelPt { float x, y; bool valid = false; };
+        std::vector<LabelPt> lblPts(kNLev);
+
+        for (int li = 0; li < kNLev; ++li) {
+            const float lev = kLevels[li];
+            if (lev < dvLo - 0.5f || lev > dvHi * 1.5f) continue;
+
+            const ImU32 col = IM_COL32(255, 255, 255, 110);
+
+            for (int i = 0; i < nDep - 1; ++i) {
+                for (int j = 0; j < nTof - 1; ++j) {
+                    float v0 = m_data.get(m_data.dvTotal, i,   j  );
+                    float v1 = m_data.get(m_data.dvTotal, i+1, j  );
+                    float v2 = m_data.get(m_data.dvTotal, i+1, j+1);
+                    float v3 = m_data.get(m_data.dvTotal, i,   j+1);
+                    if (v0>kNS || v1>kNS || v2>kNS || v3>kNS) continue;
+
+                    int ci = ((v0>lev)?1:0)|((v1>lev)?2:0)|((v2>lev)?4:0)|((v3>lev)?8:0);
+                    if (ci == 0 || ci == 15) continue;
+
+                    int8_t e[4];
+                    if (ci == 5 || ci == 10) {
+                        // Disambiguate saddle by centre value.
+                        bool ca = ((v0+v1+v2+v3)*0.25f > lev);
+                        if (ci == 5) {
+                            // v0,v2 above; v1,v3 below
+                            if (!ca) { e[0]=3;e[1]=0;e[2]=1;e[3]=2; }
+                            else     { e[0]=0;e[1]=1;e[2]=2;e[3]=3; }
+                        } else {
+                            // v1,v3 above; v0,v2 below
+                            if (!ca) { e[0]=0;e[1]=1;e[2]=2;e[3]=3; }
+                            else     { e[0]=3;e[1]=0;e[2]=1;e[3]=2; }
+                        }
+                    } else {
+                        e[0]=kMS[ci][0]; e[1]=kMS[ci][1];
+                        e[2]=kMS[ci][2]; e[3]=kMS[ci][3];
+                    }
+
+                    if (e[0]>=0 && e[1]>=0) {
+                        ImVec2 pa = edgePt(i,j,e[0],lev,v0,v1,v2,v3);
+                        ImVec2 pb = edgePt(i,j,e[1],lev,v0,v1,v2,v3);
+                        dl->AddLine(pa, pb, col, 1.0f);
+                        // Track label position: prefer middle column, accept any
+                        if (!lblPts[li].valid || i > lblPts[li].x) {
+                            lblPts[li] = {float(i), (pa.y+pb.y)*0.5f, true};
+                        }
+                    }
+                    if (e[2]>=0 && e[3]>=0) {
+                        ImVec2 pc = edgePt(i,j,e[2],lev,v0,v1,v2,v3);
+                        ImVec2 pd = edgePt(i,j,e[3],lev,v0,v1,v2,v3);
+                        dl->AddLine(pc, pd, col, 1.0f);
+                    }
+                }
+            }
+        }
+
+        // Draw inline labels at the rightmost crossing of each level.
+        for (int li = 0; li < kNLev; ++li) {
+            if (!lblPts[li].valid) continue;
+            char buf[6]; std::snprintf(buf, sizeof(buf), "%.0f", kLevels[li]);
+            ImVec2 tsz = ImGui::CalcTextSize(buf);
+            float lx = gx0 + (lblPts[li].x + 1.5f) * cellW - tsz.x * 0.5f;
+            float ly = lblPts[li].y - tsz.y * 0.5f;
+            // Small dark backing so text is readable over the colour map.
+            dl->AddRectFilled({lx-1,ly-1}, {lx+tsz.x+1,ly+tsz.y+1},
+                              IM_COL32(0,0,0,160));
+            dl->AddText({lx, ly}, IM_COL32(255,255,200,220), buf);
+        }
+    }
+
     // ---- Mouse hover ----
     const ImVec2 mp = ImGui::GetMousePos();
     const bool inGrid = mp.x >= gx0 && mp.x < gx1 && mp.y >= gy0 && mp.y < gy1;
