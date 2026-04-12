@@ -4,6 +4,7 @@ add_library(spacecraft STATIC
     src/Autopilot.cpp
     src/OrbitLoader.cpp
     src/Lambert.cpp
+    src/Porkchop.cpp
 )
 
 target_include_directories(spacecraft
