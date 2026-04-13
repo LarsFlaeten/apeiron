@@ -1869,6 +1869,8 @@ int main(int argc, char* argv[])
                         ship.velocity() - glm::dvec3(refState[3], refState[4], refState[5]));
                 }
                 orbitalMFD.update(shipRelRef, currentEt, refBody.mu, refBody.radiusKm);
+                // Feed geocentric state to TransferMFD departure page.
+                transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth);
                 // Target: TGT index 0 = ISS (spacecraft[issIdx]).
                 if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
@@ -1972,6 +1974,7 @@ int main(int argc, char* argv[])
 
                 orbitalMFD.update(shipRelRef, currentEt,
                                   refBody.mu, refBody.radiusKm);
+                transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth);
                 if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
                     orbitalMFD.updateTarget(

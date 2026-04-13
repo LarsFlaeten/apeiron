@@ -43,6 +43,14 @@ public:
     // Trigger a (synchronous) grid recompute.
     void compute();
 
+    // Feed current ship state (geocentric ECLIPJ2000, km / km/s) each frame.
+    void updateShipState(const glm::dvec3& r, const glm::dvec3& v, double muEarth)
+    {
+        m_shipR    = r;
+        m_shipV    = v;
+        m_muEarth  = muEarth;
+    }
+
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
     const char* leftLabel (int slot) const override;
@@ -51,8 +59,9 @@ public:
     void        onRight   (int slot) override;
 
 private:
-    void renderPorkchop(ImDrawList* dl, ImVec2 origin, ImVec2 size);
-    void renderDetail  (ImDrawList* dl, ImVec2 origin, ImVec2 size);
+    void renderPorkchop (ImDrawList* dl, ImVec2 origin, ImVec2 size);
+    void renderDetail   (ImDrawList* dl, ImVec2 origin, ImVec2 size);
+    void renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size);
 
     // Re-solve Lambert for the selected cell and cache the result.
     void resolveSelected();
@@ -100,7 +109,12 @@ private:
 
     static constexpr double kDay = 86400.0;
 
-    // Persistent view rotation for the detail-page orbit diagram.
-    // Right-drag to tumble, double-right-click to reset — same as OrbitalMFD.
-    glm::dmat3 m_detailViewRot { 1.0 };
+    // Persistent view rotations (right-drag to tumble, double-right-click resets).
+    glm::dmat3 m_detailViewRot  { 1.0 };   // page 1: heliocentric
+    glm::dmat3 m_depViewRot     { 1.0 };   // page 2: geocentric departure
+
+    // Current ship geocentric state (fed by main.cpp each frame).
+    glm::dvec3 m_shipR   { 0.0 };
+    glm::dvec3 m_shipV   { 0.0 };
+    double     m_muEarth = 398600.4418;
 };

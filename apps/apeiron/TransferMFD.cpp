@@ -84,6 +84,11 @@ void TransferMFD::compute()
 // ---------------------------------------------------------------------------
 const char* TransferMFD::leftLabel(int slot) const
 {
+    if (m_page == 2) {
+        if (slot == 4) return "BACK";
+        if (slot == 3) return "ALT";
+        return "";
+    }
     if (m_page == 1) {
         if (slot == 4) return "BACK";
         if (slot == 3) return "ALT";
@@ -101,7 +106,11 @@ const char* TransferMFD::leftLabel(int slot) const
 
 const char* TransferMFD::rightLabel(int slot) const
 {
-    if (m_page == 1) return "";
+    if (m_page == 2) return "";
+    if (m_page == 1) {
+        if (slot == 4) return "BURN";
+        return "";
+    }
     switch (slot) {
     case 0: return "WIN<";
     case 1: return "WIN>";
@@ -114,6 +123,12 @@ const char* TransferMFD::rightLabel(int slot) const
 
 void TransferMFD::onLeft(int slot)
 {
+    if (m_page == 2) {
+        if (slot == 4) m_page = 1;
+        if (slot == 3) m_parkIdx = (m_parkIdx + 1)
+                                   % static_cast<int>(std::size(kParkAlts));
+        return;
+    }
     if (m_page == 1) {
         if (slot == 4) m_page = 0;
         if (slot == 3) m_parkIdx = (m_parkIdx + 1)
@@ -151,7 +166,11 @@ void TransferMFD::onLeft(int slot)
 
 void TransferMFD::onRight(int slot)
 {
-    if (m_page == 1) return;
+    if (m_page == 2) return;
+    if (m_page == 1) {
+        if (slot == 4) m_page = 2;
+        return;
+    }
     const double depMid = (m_params.t0 + m_params.t1) * 0.5;
     const double tofMid = (m_params.tofMin + m_params.tofMax) * 0.5;
     double depHalf = (m_params.t1 - m_params.t0) * 0.5;
@@ -243,7 +262,8 @@ void TransferMFD::resolveSelected()
 // ---------------------------------------------------------------------------
 void TransferMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 {
-    if (m_page == 1) { renderDetail(dl, origin, size); return; }
+    if (m_page == 2) { renderDeparture(dl, origin, size); return; }
+    if (m_page == 1) { renderDetail   (dl, origin, size); return; }
     renderPorkchop(dl, origin, size);
 }
 
@@ -671,4 +691,173 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         diag.addArrow(m_detail.depPos, vInf / vInfMag, 14.0f, kOrange);
 
     diag.render(dl, { origin.x, y + pad }, { size.x, diagH }, &m_detailViewRot);
+}
+
+// ---------------------------------------------------------------------------
+// Page 2: geocentric departure burn planning.
+//
+// Geometry:
+//   - V∞ (km/s) = vDep_heliocentric − vEarth_heliocentric  (ecliptic direction)
+//   - Project V∞ into parking-orbit plane → vInf_proj
+//   - Optimal burn TA ν*: velocity v(ν) most aligned with vInf_proj
+//     v(ν) = √(μ/p)·(−sinν·periDir + (e+cosν)·qDir)
+//     d/dν[v·vInf_proj]=0  →  ν* = atan2(−vp, vq)
+//     where vp = vInf_proj·periDir,  vq = vInf_proj·qDir
+//   - Plane error: angle between V∞ and orbit plane = asin(|V∞̂ · ĥ|)
+// ---------------------------------------------------------------------------
+void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
+{
+    const ImU32 kGreen  = IM_COL32(  0, 210,  75, 210);
+    const ImU32 kDim    = IM_COL32(  0, 140,  50, 140);
+    const ImU32 kYellow = IM_COL32(255, 220,   0, 230);
+    const ImU32 kCyan   = IM_COL32(  0, 200, 220, 220);
+    const ImU32 kOrange = IM_COL32(255, 140,   0, 220);
+    const ImU32 kRed    = IM_COL32(255,  60,  60, 220);
+
+    const float pad   = 4.0f;
+    const float lineH = 11.0f;
+    const float cx    = origin.x + pad;
+    float y           = origin.y + pad;
+
+    auto row = [&](ImU32 col, const char* fmt, ...) {
+        char buf[80];
+        va_list ap; va_start(ap, fmt);
+        std::vsnprintf(buf, sizeof(buf), fmt, ap);
+        va_end(ap);
+        dl->AddText({cx, y}, col, buf);
+        y += lineH;
+    };
+
+    if (!m_detail.valid) {
+        row(kDim, "No transfer selected");
+        return;
+    }
+
+    // ---- Orbital geometry of parking orbit ----
+    const double rShip = glm::length(m_shipR);
+    const double vShip = glm::length(m_shipV);
+    if (rShip < 100.0 || vShip < 0.01) {
+        row(kDim, "No ship state available");
+        return;
+    }
+
+    const double mu = m_muEarth;
+
+    glm::dvec3 h    = glm::cross(m_shipR, m_shipV);
+    double     hMag = glm::length(h);
+    if (hMag < 1e-6) { row(kDim, "Degenerate orbit"); return; }
+    glm::dvec3 hHat    = h / hMag;
+    double     p_orb   = hMag * hMag / mu;
+    glm::dvec3 ev      = glm::cross(m_shipV, h) / mu - glm::normalize(m_shipR);
+    double     ecc     = glm::length(ev);
+    glm::dvec3 periDir = (ecc > 1e-6) ? glm::normalize(ev) : glm::normalize(m_shipR);
+    glm::dvec3 qDir    = glm::cross(hHat, periDir);
+    double     sma     = (ecc < 1.0) ? p_orb / (1.0 - ecc * ecc) : p_orb;
+    double     altKm   = rShip - 6378.0;
+
+    // ---- V∞ in geocentric ecliptic (direction identical to heliocentric) ----
+    glm::dvec3 vInf    = m_detail.vDep - m_detail.vDepBody;
+    double     vInfMag = glm::length(vInf);
+    if (vInfMag < 1e-6) { row(kDim, "Zero V∞"); return; }
+
+    // ---- Plane error ----
+    double sinPE    = glm::dot(glm::normalize(vInf), hHat);
+    double planeErr = std::asin(std::clamp(std::abs(sinPE), 0.0, 1.0)) * 180.0 / M_PI;
+
+    // ---- Optimal burn TA ----
+    // Project V∞ into orbit plane.
+    glm::dvec3 vInfProj    = vInf - glm::dot(vInf, hHat) * hHat;
+    double     vInfProjMag = glm::length(vInfProj);
+
+    double burnTA    = 0.0;
+    double burnTADeg = 0.0;
+    if (vInfProjMag > 1e-9) {
+        double vp = glm::dot(vInfProj, periDir);
+        double vq = glm::dot(vInfProj, qDir);
+        burnTA = std::atan2(-vp, vq);
+        // Verify sign — flip 180° if dot product is negative
+        double chk = -std::sin(burnTA)*vp + (ecc + std::cos(burnTA))*vq;
+        if (chk < 0.0) burnTA += M_PI;
+        if (burnTA >  M_PI) burnTA -= 2.0 * M_PI;
+        if (burnTA < -M_PI) burnTA += 2.0 * M_PI;
+        burnTADeg = burnTA * 180.0 / M_PI;
+        if (burnTADeg < 0.0) burnTADeg += 360.0;
+    }
+
+    // Radius at burn point
+    double rBurn   = p_orb / (1.0 + ecc * std::cos(burnTA));
+    double altBurn = rBurn - 6378.0;
+
+    // TMI ΔV (user-selected parking altitude for reference, as on detail page)
+    const double rPark = kParkAlts[m_parkIdx];
+    double vCirc = std::sqrt(mu / rPark);
+    double vPeri = std::sqrt(m_detail.c3 + 2.0 * mu / rPark);
+    double dvTMI = vPeri - vCirc;
+
+    // ---- Header ----
+    row(kGreen,  "DEPARTURE BURN");
+    row(kDim,    "V-inf  %.3f km/s   C3  %.1f km2/s2",
+                 vInfMag, m_detail.c3);
+    y += pad * 0.5f;
+
+    // ---- Parking orbit info ----
+    row(kCyan,   "Orbit  alt %.0f km   ecc %.4f", altKm, ecc);
+    if (planeErr > 0.3) {
+        row(kOrange, "Plane err  %.1f deg%s", planeErr,
+                     planeErr > 5.0 ? "  (need plane change)" : "");
+    } else {
+        row(kGreen,  "Plane err  <0.3 deg  (negligible)");
+    }
+    y += pad * 0.5f;
+
+    // ---- Burn node ----
+    row(kCyan,   "Burn TA    %.1f deg  (from periapsis)", burnTADeg);
+    row(kCyan,   "Burn alt   %.0f km", altBurn);
+    y += pad * 0.5f;
+
+    // ---- TMI ΔV ----
+    row(kDim,    "Ref alt  %.0f km  (press ALT to change)", rPark - 6378.0);
+    row(kGreen,  "  Vcirc  %.3f km/s", vCirc);
+    row(kGreen,  "  Vperi  %.3f km/s", vPeri);
+    row(kYellow, "  dV-TMI %.3f km/s", dvTMI);
+
+    // ---- Geocentric orbit diagram ----
+    const float diagH = size.y - (y - origin.y) - pad;
+    if (diagH < 30.0f) return;
+
+    // Burn point position vector (in km, geocentric ecliptic)
+    glm::dvec3 burnPos = (rBurn) * (std::cos(burnTA) * periDir
+                                  + std::sin(burnTA) * qDir);
+
+    OrbitDiagram diag;
+
+    // Parking orbit — show current ship position
+    {
+        OrbitDiagram::Orbit o;
+        o.r           = m_shipR;
+        o.v           = m_shipV;
+        o.mu          = mu;
+        o.colour      = kGreen;
+        o.showApses   = (ecc > 0.005);
+        o.showCurrent = true;
+        o.segments    = 120;
+        diag.addOrbit(o);
+    }
+
+    // Burn point marker
+    diag.addMarker(burnPos, kYellow, "B");
+
+    // V∞ direction arrow — scaled to about half the orbit size in screen pixels
+    if (vInfProjMag > 1e-9)
+        diag.addArrow({0.0, 0.0, 0.0}, glm::normalize(vInf), 20.0f, kOrange);
+
+    // Earth
+    OrbitDiagram::CentralBody earth;
+    earth.radiusKm   = 6378.0;
+    earth.rimColour  = IM_COL32( 60, 140, 255, 200);
+    earth.axisColour = IM_COL32( 60, 140, 255, 100);
+    earth.drawAxes   = false;
+    diag.setCentralBody(earth);
+
+    diag.render(dl, { origin.x, y + pad }, { size.x, diagH }, &m_depViewRot);
 }
