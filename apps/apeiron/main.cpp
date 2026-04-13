@@ -471,7 +471,10 @@ int main(int argc, char* argv[])
                          static_cast<double>(earthRadius), 399 };
 
         // Thruster parameters — adjustable from the Dev view.
-        double mainEngineThrust  = 22'000.0;  // N  (SPACE)
+        // Initialise from manifest if loaded, so the slider shows the real value.
+        double mainEngineThrust  = (!orionModel.thrusters.empty()
+                                    ? static_cast<double>(orionModel.thrusters[0].thrustN)
+                                    : 25'700.0);  // N  (SPACE)
         double rcsThrust         =    400.0;  // N  (WASD/QE)
         double rcsTorque         =  1'000.0;  // N·m (IJKL/UO)
         // In Docking mode WASD desired force is multiplied by this factor so the
@@ -1113,7 +1116,7 @@ int main(int argc, char* argv[])
                         const bool mainEngineKey =
                             glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
                         if (mainEngineKey) {
-                            desired[0] += static_cast<double>(orionModel.thrusters[0].thrustN);
+                            desired[0] += mainEngineThrust;
                             mainEngineOn = true;
                         }
                         // RCS translation (WASD/QE) — always solved RCS-only so the

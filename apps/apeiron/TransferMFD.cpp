@@ -697,13 +697,15 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 // Page 2: geocentric departure burn planning.
 //
 // Geometry:
-//   - V∞ (km/s) = vDep_heliocentric − vEarth_heliocentric  (ecliptic direction)
-//   - Project V∞ into parking-orbit plane → vInf_proj
-//   - Optimal burn TA ν*: velocity v(ν) most aligned with vInf_proj
-//     v(ν) = √(μ/p)·(−sinν·periDir + (e+cosν)·qDir)
-//     d/dν[v·vInf_proj]=0  →  ν* = atan2(−vp, vq)
-//     where vp = vInf_proj·periDir,  vq = vInf_proj·qDir
-//   - Plane error: angle between V∞ and orbit plane = asin(|V∞̂ · ĥ|)
+//   - V∞  = vDep_helio − vEarth_helio  (direction same in any inertial frame)
+//   - Target orbit plane: closest plane containing V∞
+//     hTarget = normalize( hCurrent − (hCurrent·V∞̂)·V∞̂ )
+//   - AN of current orbit w.r.t. target plane:  cross(hTarget, hCurrent)
+//   - Optimal burn TA ν*: maximise v(ν)·V∞_proj
+//     ν* = atan2(−(V∞_proj·periDir), V∞_proj·qDir)
+//   - Plane error = asin(|V∞̂·hCurrent|)
+//
+// Layout: diagram fills full area; all text overlaid with dark backing boxes.
 // ---------------------------------------------------------------------------
 void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 {
@@ -713,39 +715,32 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     const ImU32 kCyan   = IM_COL32(  0, 200, 220, 220);
     const ImU32 kOrange = IM_COL32(255, 140,   0, 220);
     const ImU32 kRed    = IM_COL32(255,  60,  60, 220);
+    const ImU32 kBacking = IM_COL32(0, 0, 0, 175);
 
-    const float pad   = 4.0f;
-    const float lineH = 11.0f;
-    const float cx    = origin.x + pad;
-    float y           = origin.y + pad;
-
-    auto row = [&](ImU32 col, const char* fmt, ...) {
-        char buf[80];
-        va_list ap; va_start(ap, fmt);
-        std::vsnprintf(buf, sizeof(buf), fmt, ap);
-        va_end(ap);
-        dl->AddText({cx, y}, col, buf);
-        y += lineH;
-    };
-
+    // -----------------------------------------------------------------------
+    // Guard conditions — need valid transfer and ship state
+    // -----------------------------------------------------------------------
     if (!m_detail.valid) {
-        row(kDim, "No transfer selected");
+        dl->AddText({ origin.x + 4.0f, origin.y + 4.0f }, kDim, "No transfer selected");
+        return;
+    }
+    const double rShip   = glm::length(m_shipR);
+    const double vShipMag = glm::length(m_shipV);
+    if (rShip < 100.0 || vShipMag < 0.01) {
+        dl->AddText({ origin.x + 4.0f, origin.y + 4.0f }, kDim, "No ship state");
         return;
     }
 
-    // ---- Orbital geometry of parking orbit ----
-    const double rShip = glm::length(m_shipR);
-    const double vShip = glm::length(m_shipV);
-    if (rShip < 100.0 || vShip < 0.01) {
-        row(kDim, "No ship state available");
-        return;
-    }
-
-    const double mu = m_muEarth;
+    // -----------------------------------------------------------------------
+    // Orbital geometry — current parking orbit
+    // -----------------------------------------------------------------------
+    const double mu   = m_muEarth;
+    const double kRE  = 6378.0;
 
     glm::dvec3 h    = glm::cross(m_shipR, m_shipV);
     double     hMag = glm::length(h);
-    if (hMag < 1e-6) { row(kDim, "Degenerate orbit"); return; }
+    if (hMag < 1e-6) { dl->AddText({origin.x+4,origin.y+4}, kDim, "Degenerate orbit"); return; }
+
     glm::dvec3 hHat    = h / hMag;
     double     p_orb   = hMag * hMag / mu;
     glm::dvec3 ev      = glm::cross(m_shipV, h) / mu - glm::normalize(m_shipR);
@@ -753,29 +748,115 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     glm::dvec3 periDir = (ecc > 1e-6) ? glm::normalize(ev) : glm::normalize(m_shipR);
     glm::dvec3 qDir    = glm::cross(hHat, periDir);
     double     sma     = (ecc < 1.0) ? p_orb / (1.0 - ecc * ecc) : p_orb;
-    double     altKm   = rShip - 6378.0;
+    double     altKm   = rShip - kRE;
 
-    // ---- V∞ in geocentric ecliptic (direction identical to heliocentric) ----
+    // Ecliptic orbital elements (ECLIPJ2000: z = ecliptic north, x = vernal equinox)
+    double inc_cur  = std::acos(std::clamp(hHat.z, -1.0, 1.0)) * 180.0 / M_PI;
+    double raan_cur = std::atan2(hHat.x, -hHat.y) * 180.0 / M_PI;
+    if (raan_cur < 0.0) raan_cur += 360.0;
+
+    // Argument of periapsis: angle from node line to periDir in orbit plane
+    double nodeLen   = std::sqrt(hHat.x*hHat.x + hHat.y*hHat.y);
+    double argpe_cur = 0.0;
+    if (nodeLen > 1e-9 && ecc > 1e-6) {
+        glm::dvec3 nodeDir(-hHat.y / nodeLen, hHat.x / nodeLen, 0.0);
+        argpe_cur = std::atan2(
+            glm::dot(periDir, glm::cross(hHat, nodeDir)),
+            glm::dot(periDir, nodeDir)) * 180.0 / M_PI;
+        if (argpe_cur < 0.0) argpe_cur += 360.0;
+    }
+
+    // Current true anomaly
+    glm::dvec3 rHat   = glm::normalize(m_shipR);
+    double     ta_now = std::atan2(glm::dot(rHat, qDir), glm::dot(rHat, periDir));
+    double     taDeg_now = ta_now * 180.0 / M_PI;
+    if (taDeg_now < 0.0) taDeg_now += 360.0;
+
+    // -----------------------------------------------------------------------
+    // V∞
+    // -----------------------------------------------------------------------
     glm::dvec3 vInf    = m_detail.vDep - m_detail.vDepBody;
     double     vInfMag = glm::length(vInf);
-    if (vInfMag < 1e-6) { row(kDim, "Zero V∞"); return; }
+    if (vInfMag < 1e-6) { dl->AddText({origin.x+4,origin.y+4}, kDim, "Zero V-inf"); return; }
+    glm::dvec3 vInfHat = vInf / vInfMag;
 
-    // ---- Plane error ----
-    double sinPE    = glm::dot(glm::normalize(vInf), hHat);
-    double planeErr = std::asin(std::clamp(std::abs(sinPE), 0.0, 1.0)) * 180.0 / M_PI;
+    // -----------------------------------------------------------------------
+    // Target orbit plane: closest to current, constrained to contain V∞
+    // hTarget = normalize( hHat − (hHat·V∞̂)·V∞̂ )
+    // -----------------------------------------------------------------------
+    glm::dvec3 hProj   = hHat - glm::dot(hHat, vInfHat) * vInfHat;
+    double     hProjL  = glm::length(hProj);
+    glm::dvec3 hTarget = (hProjL > 1e-9) ? (hProj / hProjL)
+                       : glm::normalize(glm::cross(vInfHat, glm::dvec3(0,0,1)));
 
-    // ---- Optimal burn TA ----
-    // Project V∞ into orbit plane.
+    double inc_tgt  = std::acos(std::clamp(hTarget.z, -1.0, 1.0)) * 180.0 / M_PI;
+    double raan_tgt = std::atan2(hTarget.x, -hTarget.y) * 180.0 / M_PI;
+    if (raan_tgt < 0.0) raan_tgt += 360.0;
+    double dInc = inc_tgt - inc_cur;
+
+    // -----------------------------------------------------------------------
+    // Plane error
+    // -----------------------------------------------------------------------
+    double planeErr = std::asin(std::clamp(std::abs(glm::dot(vInfHat, hHat)), 0.0, 1.0))
+                      * 180.0 / M_PI;
+
+    // -----------------------------------------------------------------------
+    // AN / DN of current orbit w.r.t. target plane
+    // AN direction = cross(hTarget, hCurrent)
+    // -----------------------------------------------------------------------
+    glm::dvec3 anVec = glm::cross(hTarget, hHat);
+    double     anLen = glm::length(anVec);
+    bool       hasNodes = (anLen > 1e-9);
+
+    double ta_AN = 0.0, ta_DN = 0.0;
+    double taDeg_AN = 0.0, taDeg_DN = 0.0;
+    double tToAN = 0.0, tToDN = 0.0;
+    glm::dvec3 anPos(0.0), dnPos(0.0);
+
+    if (hasNodes) {
+        glm::dvec3 anDir = anVec / anLen;
+        glm::dvec3 dnDir = -anDir;
+
+        ta_AN = std::atan2(glm::dot(anDir, qDir), glm::dot(anDir, periDir));
+        ta_DN = ta_AN + M_PI;
+        // Normalise DN to (-π, π)
+        if (ta_DN >  M_PI) ta_DN -= 2.0 * M_PI;
+
+        taDeg_AN = ta_AN * 180.0 / M_PI; if (taDeg_AN < 0.0) taDeg_AN += 360.0;
+        taDeg_DN = ta_DN * 180.0 / M_PI; if (taDeg_DN < 0.0) taDeg_DN += 360.0;
+
+        double rAN = p_orb / (1.0 + ecc * std::cos(ta_AN));
+        double rDN = p_orb / (1.0 + ecc * std::cos(ta_DN));
+        anPos = rAN * (std::cos(ta_AN) * periDir + std::sin(ta_AN) * qDir);
+        dnPos = rDN * (std::cos(ta_DN) * periDir + std::sin(ta_DN) * qDir);
+
+        // Time to AN/DN via Kepler (elliptic only)
+        if (ecc < 1.0 && sma > 0.0) {
+            auto ta2M = [&](double ta) {
+                double E = 2.0 * std::atan2(
+                    std::sqrt(1.0 - ecc) * std::sin(ta * 0.5),
+                    std::sqrt(1.0 + ecc) * std::cos(ta * 0.5));
+                return E - ecc * std::sin(E);
+            };
+            double n_mot = std::sqrt(mu / (sma * sma * sma));
+            double M_now = ta2M(ta_now);
+            double dM_AN = ta2M(ta_AN) - M_now; if (dM_AN <= 0.0) dM_AN += 2.0 * M_PI;
+            double dM_DN = ta2M(ta_DN) - M_now; if (dM_DN <= 0.0) dM_DN += 2.0 * M_PI;
+            tToAN = dM_AN / n_mot;
+            tToDN = dM_DN / n_mot;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Optimal burn TA
+    // -----------------------------------------------------------------------
     glm::dvec3 vInfProj    = vInf - glm::dot(vInf, hHat) * hHat;
     double     vInfProjMag = glm::length(vInfProj);
-
-    double burnTA    = 0.0;
-    double burnTADeg = 0.0;
+    double burnTA = 0.0, burnTADeg = 0.0;
     if (vInfProjMag > 1e-9) {
         double vp = glm::dot(vInfProj, periDir);
         double vq = glm::dot(vInfProj, qDir);
         burnTA = std::atan2(-vp, vq);
-        // Verify sign — flip 180° if dot product is negative
         double chk = -std::sin(burnTA)*vp + (ecc + std::cos(burnTA))*vq;
         if (chk < 0.0) burnTA += M_PI;
         if (burnTA >  M_PI) burnTA -= 2.0 * M_PI;
@@ -783,81 +864,210 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         burnTADeg = burnTA * 180.0 / M_PI;
         if (burnTADeg < 0.0) burnTADeg += 360.0;
     }
-
-    // Radius at burn point
     double rBurn   = p_orb / (1.0 + ecc * std::cos(burnTA));
-    double altBurn = rBurn - 6378.0;
+    double altBurn = rBurn - kRE;
+    glm::dvec3 burnPos = rBurn * (std::cos(burnTA) * periDir + std::sin(burnTA) * qDir);
 
-    // TMI ΔV (user-selected parking altitude for reference, as on detail page)
+    // TMI ΔV
     const double rPark = kParkAlts[m_parkIdx];
     double vCirc = std::sqrt(mu / rPark);
     double vPeri = std::sqrt(m_detail.c3 + 2.0 * mu / rPark);
     double dvTMI = vPeri - vCirc;
 
-    // ---- Header ----
-    row(kGreen,  "DEPARTURE BURN");
-    row(kDim,    "V-inf  %.3f km/s   C3  %.1f km2/s2",
-                 vInfMag, m_detail.c3);
-    y += pad * 0.5f;
+    // -----------------------------------------------------------------------
+    // HH:MM:SS formatter
+    // -----------------------------------------------------------------------
+    auto fmtHMS = [](double sec, char* buf, int sz) {
+        if (sec < 0.0 || !std::isfinite(sec)) { std::snprintf(buf, sz, "--:--:--"); return; }
+        int s = static_cast<int>(sec + 0.5);
+        int hh = s / 3600; s %= 3600;
+        int mm = s / 60;   s %= 60;
+        std::snprintf(buf, sz, "%d:%02d:%02d", hh, mm, s);
+    };
 
-    // ---- Parking orbit info ----
-    row(kCyan,   "Orbit  alt %.0f km   ecc %.4f", altKm, ecc);
-    if (planeErr > 0.3) {
-        row(kOrange, "Plane err  %.1f deg%s", planeErr,
-                     planeErr > 5.0 ? "  (need plane change)" : "");
-    } else {
-        row(kGreen,  "Plane err  <0.3 deg  (negligible)");
-    }
-    y += pad * 0.5f;
-
-    // ---- Burn node ----
-    row(kCyan,   "Burn TA    %.1f deg  (from periapsis)", burnTADeg);
-    row(kCyan,   "Burn alt   %.0f km", altBurn);
-    y += pad * 0.5f;
-
-    // ---- TMI ΔV ----
-    row(kDim,    "Ref alt  %.0f km  (press ALT to change)", rPark - 6378.0);
-    row(kGreen,  "  Vcirc  %.3f km/s", vCirc);
-    row(kGreen,  "  Vperi  %.3f km/s", vPeri);
-    row(kYellow, "  dV-TMI %.3f km/s", dvTMI);
-
-    // ---- Geocentric orbit diagram ----
-    const float diagH = size.y - (y - origin.y) - pad;
-    if (diagH < 30.0f) return;
-
-    // Burn point position vector (in km, geocentric ecliptic)
-    glm::dvec3 burnPos = (rBurn) * (std::cos(burnTA) * periDir
-                                  + std::sin(burnTA) * qDir);
-
-    OrbitDiagram diag;
-
-    // Parking orbit — show current ship position
+    // -----------------------------------------------------------------------
+    // Orbit diagram — full area
+    // -----------------------------------------------------------------------
     {
+        OrbitDiagram diag;
+
+        // Parking orbit with ship dot
         OrbitDiagram::Orbit o;
-        o.r           = m_shipR;
-        o.v           = m_shipV;
-        o.mu          = mu;
-        o.colour      = kGreen;
-        o.showApses   = (ecc > 0.005);
-        o.showCurrent = true;
-        o.segments    = 120;
+        o.r = m_shipR; o.v = m_shipV; o.mu = mu;
+        o.colour = kGreen; o.showApses = (ecc > 0.005); o.showCurrent = true;
         diag.addOrbit(o);
+
+        // Target orbit plane visualised as a ghosted ring at same SMA
+        // (no real velocity, just a fake circular orbit in the target plane to show the plane)
+        {
+            // pick a periDir perpendicular to hTarget in the target plane
+            glm::dvec3 tPeri = glm::normalize(glm::cross(hTarget, hHat));
+            if (glm::length(tPeri) < 0.5)
+                tPeri = glm::normalize(glm::cross(hTarget, glm::dvec3(1,0,0)));
+            OrbitDiagram::Orbit ot;
+            double rcirc   = std::sqrt(mu * sma); // circular speed at current SMA
+            ot.r     = sma * tPeri;
+            ot.v     = std::sqrt(mu / sma) * glm::cross(hTarget, tPeri);
+            ot.mu    = mu;
+            ot.colour = IM_COL32(60, 180, 255, 60);  // dim blue ghost
+            ot.showApses = false; ot.showCurrent = false;
+            diag.addOrbit(ot);
+        }
+
+        // AN / DN markers
+        if (hasNodes) {
+            diag.addMarker(anPos, IM_COL32(100, 255, 100, 230), "AN");
+            diag.addMarker(dnPos, IM_COL32(255, 100, 100, 230), "DN");
+        }
+
+        // Burn point
+        diag.addMarker(burnPos, kYellow, "B");
+
+        // V∞ direction arrow from Earth centre
+        if (vInfProjMag > 1e-9)
+            diag.addArrow({0.0, 0.0, 0.0}, vInfHat, 22.0f, kOrange);
+
+        // Earth
+        OrbitDiagram::CentralBody earth;
+        earth.radiusKm   = kRE;
+        earth.rimColour  = IM_COL32(60, 140, 255, 200);
+        earth.axisColour = IM_COL32(60, 140, 255, 100);
+        earth.drawAxes   = false;
+        diag.setCentralBody(earth);
+
+        diag.render(dl, origin, size, &m_depViewRot);
     }
 
-    // Burn point marker
-    diag.addMarker(burnPos, kYellow, "B");
+    // -----------------------------------------------------------------------
+    // Text overlay — build lines, then draw with one backing rect
+    // -----------------------------------------------------------------------
+    const float pad   = 3.0f;
+    const float lineH = 11.0f;
 
-    // V∞ direction arrow — scaled to about half the orbit size in screen pixels
-    if (vInfProjMag > 1e-9)
-        diag.addArrow({0.0, 0.0, 0.0}, glm::normalize(vInf), 20.0f, kOrange);
+    struct Line { ImU32 col; char txt[72]; };
+    std::vector<Line> lines;
+    auto add = [&](ImU32 col, const char* fmt, ...) {
+        Line l; l.col = col;
+        va_list ap; va_start(ap, fmt);
+        std::vsnprintf(l.txt, sizeof(l.txt), fmt, ap);
+        va_end(ap);
+        lines.push_back(l);
+    };
+    auto sep = [&]() { add(0, ""); };  // blank spacer
 
-    // Earth
-    OrbitDiagram::CentralBody earth;
-    earth.radiusKm   = 6378.0;
-    earth.rimColour  = IM_COL32( 60, 140, 255, 200);
-    earth.axisColour = IM_COL32( 60, 140, 255, 100);
-    earth.drawAxes   = false;
-    diag.setCentralBody(earth);
+    // Header
+    add(kGreen,  "DEPARTURE  V-inf %.3f km/s  C3 %.1f", vInfMag, m_detail.c3);
+    sep();
 
-    diag.render(dl, { origin.x, y + pad }, { size.x, diagH }, &m_depViewRot);
+    // Current orbit
+    add(kCyan,   "CURRENT ORBIT");
+    add(kGreen,  " i %.1f  Ω %.1f  ω %.1f  e %.4f",
+                 inc_cur, raan_cur, argpe_cur, ecc);
+    add(kGreen,  " TA %.1f  Alt %.0f km  SMA %.0f km",
+                 taDeg_now, altKm, sma);
+    sep();
+
+    // -----------------------------------------------------------------------
+    // Plane-change costs
+    //
+    // Direct (at current LEO):  dV_pc = 2·v_c·sin(Δi/2)
+    //
+    // Bi-elliptic (raise to r_a, plane change at apoapsis, TMI at periapsis):
+    //   v_apo(r_a)  = sqrt(2·μ·r_c / (r_a·(r_c+r_a)))
+    //   dV_pc(r_a)  = 2·v_apo·sin(Δi/2)
+    //   dV_total    = (v_hyp − v_c) + dV_pc(r_a)   ← same base TMI cost
+    //   t_to_apo    = π·sqrt((r_c+r_a)³ / (8·μ))   (half-period of transfer ellipse)
+    //
+    // Orion main engine accel ≈ 0.97 m/s² (25700 N / 26500 kg)
+    // -----------------------------------------------------------------------
+    const double sinHalfDi = std::sin(planeErr * M_PI / 180.0 * 0.5);
+    const double vCircPark = std::sqrt(mu / rPark);   // circular at reference alt
+    const double vHyp      = std::sqrt(m_detail.c3 + 2.0 * mu / rPark);
+    const double dvTMIbase = vHyp - vCircPark;        // base TMI ΔV (independent of plane strat)
+
+    // Direct plane change at current LEO speed
+    double vLEO   = std::sqrt(mu / rShip);
+    double dvPCdirect = 2.0 * vLEO * sinHalfDi;
+
+    // Orion thrust/mass
+    const double thrustN  = 25700.0;
+    const double massKg   = 26500.0;
+    const double accel    = thrustN / massKg;   // m/s²
+
+    // Bi-elliptic candidates: GEO, HEO, Lunar distance
+    struct BiElliptic { const char* label; double r_a; };
+    static const BiElliptic kCands[] = {
+        { "GEO  42k km", 42164.0  },
+        { "HEO 100k km", 100000.0 },
+        { "Lun 384k km", 384400.0 },
+    };
+
+    // Target plane
+    ImU32 tgtCol = (planeErr < 0.5) ? kGreen : (planeErr < 5.0) ? kOrange : kRed;
+    add(kCyan,   "TARGET PLANE  (contains V-inf)");
+    add(kGreen,  " i %.1f  Ω %.1f", inc_tgt, raan_tgt);
+    add(tgtCol,  " Di %.1f deg  Perr %.1f deg%s",
+                 dInc, planeErr, planeErr > 5.0 ? " NEED CHG" : "");
+    if (planeErr > 0.05) {
+        double burnTimeDirect = dvPCdirect * 1000.0 / accel;
+        char bufD[12]; fmtHMS(burnTimeDirect, bufD, sizeof(bufD));
+        add(tgtCol, " direct dV %.2f km/s  burn %s", dvPCdirect, bufD);
+    }
+    sep();
+
+    // Bi-elliptic section (only show if plane change is non-trivial)
+    if (planeErr > 0.5) {
+        add(kCyan, "BI-ELLIPTIC  (raise apo, chg plane there, TMI at peri)");
+        add(kDim,  " base TMI dV unchanged: %.3f km/s", dvTMIbase);
+        for (const auto& c : kCands) {
+            double r_a   = c.r_a;
+            double v_apo = std::sqrt(2.0 * mu * rShip / (r_a * (rShip + r_a)));
+            double dvPCbi = 2.0 * v_apo * sinHalfDi;
+            double saving = dvPCdirect - dvPCbi;
+            // Time to reach apoapsis = half transfer orbit period
+            double a_tr  = (rShip + r_a) * 0.5;
+            double tApo  = M_PI * std::sqrt(a_tr * a_tr * a_tr / mu);  // seconds
+            char bufT[12]; fmtHMS(tApo, bufT, sizeof(bufT));
+            ImU32 col = (saving > 0.5) ? kGreen : (saving > 0.1) ? kYellow : kDim;
+            add(col, " %-12s  dV-pc %.2f  save %.2f  T+ %s",
+                c.label, dvPCbi, saving, bufT);
+        }
+    }
+    sep();
+
+    // Nodes
+    add(kCyan,   "NODES  (cur -> tgt)");
+    if (hasNodes) {
+        char bufAN[12], bufDN[12];
+        fmtHMS(tToAN, bufAN, sizeof(bufAN));
+        fmtHMS(tToDN, bufDN, sizeof(bufDN));
+        add(IM_COL32(100,255,100,230), " AN  TA %.1f  T+ %s", taDeg_AN, bufAN);
+        add(IM_COL32(255,100,100,230), " DN  TA %.1f  T+ %s", taDeg_DN, bufDN);
+    } else {
+        add(kDim, " (coplanar)");
+    }
+    sep();
+
+    // Burn + TMI
+    add(kCyan,   "BURN  TA %.1f  Alt %.0f km", burnTADeg, altBurn);
+    add(kDim,    "TMI  alt %.0f km  [ALT]", rPark - kRE);
+    add(kYellow, " dV %.3f km/s  Vp %.3f  Vc %.3f", dvTMI, vPeri, vCirc);
+
+    // Measure max text width
+    float maxW = 0.0f;
+    for (auto& l : lines)
+        if (l.col) maxW = std::max(maxW, ImGui::CalcTextSize(l.txt).x);
+
+    float bx0 = origin.x + pad;
+    float by0 = origin.y + pad;
+    float bx1 = bx0 + maxW + pad * 2.0f;
+    float by1 = by0 + static_cast<float>(lines.size()) * lineH + pad;
+
+    dl->AddRectFilled({bx0, by0}, {bx1, by1}, kBacking, 3.0f);
+
+    float tx = bx0 + pad, ty = by0 + pad * 0.5f;
+    for (auto& l : lines) {
+        if (l.col) dl->AddText({tx, ty}, l.col, l.txt);
+        ty += lineH;
+    }
 }
