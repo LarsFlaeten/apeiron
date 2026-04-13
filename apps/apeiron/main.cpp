@@ -339,8 +339,9 @@ int main(int argc, char* argv[])
 
         // ---- Non-player craft: propagate orbits to sim epoch ----
         const size_t issIdx = 1;   // by convention first AI craft is index 1 in physics vector
+        bool hasAiCraft = (vehicleConfigs.size() > 1) && aiVehicle.hasOrbit;
         glm::dvec3 issR_init(0.0), issV_init(0.0);
-        if (aiVehicle.hasOrbit) {
+        if (hasAiCraft) {
             astro::PosState st = spacecraft::vehicleStateAtEt(aiVehicle, et);
             issR_init = glm::dvec3(st.r);
             issV_init = glm::dvec3(st.v);
@@ -348,8 +349,11 @@ int main(int argc, char* argv[])
                       << issR_init.x << ", " << issR_init.y << ", " << issR_init.z << " km\n";
         }
 
-        // ---- Player craft: place 250 m behind the first AI craft ----
-        // Same velocity → co-elliptic, no drift.  Attitude matches AI craft.
+        // ---- Player craft initial state ----
+        // Priority:
+        //   1. Player has [orbit] in its own config → propagate to sim epoch.
+        //   2. AI craft present → place 250 m behind it (co-elliptic).
+        //   3. Neither → fallback circular 400 km LEO.
         const double shipMass = playerVehicle.massKg > 1.0f
                                 ? static_cast<double>(playerVehicle.massKg)
                                 : 26500.0;
@@ -360,19 +364,37 @@ int main(int argc, char* argv[])
                 glm::dvec3(0, 0, playerVehicle.inertiaDiag.z))
             : glm::dmat3(34000.0);
         astro::State shipState;
-        {
-            constexpr double kSepKm = 0.25;  // 250 m behind
-            glm::dvec3 prograde = (glm::length(issV_init) > 0.0)
-                ? glm::normalize(issV_init)
-                : glm::dvec3(0.0, 1.0, 0.0);
+        if (playerVehicle.hasOrbit) {
+            // Use the player's own orbit config.
+            astro::PosState ps = spacecraft::vehicleStateAtEt(playerVehicle, et);
+            glm::dvec3 pr = glm::dvec3(ps.r), pv = glm::dvec3(ps.v);
+            std::cout << "[Apeiron] " << playerVehicle.name << " initial position (own orbit): "
+                      << pr.x << ", " << pr.y << ", " << pr.z << " km\n";
+            glm::dvec3 T = glm::normalize(pv);
+            glm::dvec3 N = glm::normalize(glm::cross(pr, pv));
+            glm::dvec3 R = glm::cross(T, N);
+            shipState.P.r = pr;
+            shipState.P.v = pv;
+            shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
+            shipState.R.w = glm::dvec3(0.0);
+        } else if (hasAiCraft) {
+            // Co-elliptic, 250 m behind the first AI craft.
+            constexpr double kSepKm = 0.25;
+            glm::dvec3 prograde = glm::normalize(issV_init);
+            glm::dvec3 T = prograde;
+            glm::dvec3 N = glm::normalize(glm::cross(issR_init, issV_init));
+            glm::dvec3 R = glm::cross(T, N);
             shipState.P.r = issR_init - kSepKm * prograde;
             shipState.P.v = issV_init;
-            glm::dvec3 T = prograde;
-            glm::dvec3 N = (glm::length(issR_init) > 0.0)
-                ? glm::normalize(glm::cross(issR_init, issV_init))
-                : glm::dvec3(0.0, 0.0, 1.0);
-            glm::dvec3 R = glm::cross(T, N);
             shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
+            shipState.R.w = glm::dvec3(0.0);
+        } else {
+            // Fallback: circular 400 km equatorial LEO.
+            const double r0 = static_cast<double>(earthRadius) + 400.0;
+            const double v0 = std::sqrt(kGM_Earth / r0);
+            shipState.P.r = glm::dvec3(r0, 0.0, 0.0);
+            shipState.P.v = glm::dvec3(0.0, v0, 0.0);
+            shipState.R.q = glm::dquat(1.0, 0.0, 0.0, 0.0);
             shipState.R.w = glm::dvec3(0.0);
         }
 
@@ -768,7 +790,8 @@ int main(int argc, char* argv[])
                 p.axisZ = glm::normalize(rf * p.axisZ);
             }
         }
-        scPorts[issIdx] = issGltf.dockingPorts();
+        if (spacecraft.size() > issIdx)
+            scPorts[issIdx] = issGltf.dockingPorts();
         for (size_t i = 0; i < scPorts.size(); ++i) {
             std::cout << "[Apeiron] Spacecraft[" << i << "] docking ports: "
                       << scPorts[i].size() << "\n";
@@ -1847,7 +1870,7 @@ int main(int argc, char* argv[])
                 }
                 orbitalMFD.update(shipRelRef, currentEt, refBody.mu, refBody.radiusKm);
                 // Target: TGT index 0 = ISS (spacecraft[issIdx]).
-                if (orbitalMFD.targetIndex() == 0) {
+                if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
                     orbitalMFD.updateTarget(
                         astro::PosState(tgt.position(), tgt.velocity()),
@@ -1949,7 +1972,7 @@ int main(int argc, char* argv[])
 
                 orbitalMFD.update(shipRelRef, currentEt,
                                   refBody.mu, refBody.radiusKm);
-                if (orbitalMFD.targetIndex() == 0) {
+                if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
                     orbitalMFD.updateTarget(
                         astro::PosState(tgt.position(), tgt.velocity()),
@@ -2071,7 +2094,7 @@ int main(int argc, char* argv[])
                          * glm::mat4(ar) * rf
                          * glm::scale(glm::mat4(1.0f), glm::vec3(1e-3f));
             }
-            if (issGltf.isLoaded()) {
+            if (issGltf.isLoaded() && spacecraft.size() > issIdx) {
                 auto& sc  = *spacecraft[issIdx];
                 glm::vec3 rp = scene.origin().toRenderSpace(earthWorld + sc.position());
                 glm::mat3 ar = glm::mat3_cast(glm::fquat(sc.attitude()));
@@ -2282,7 +2305,7 @@ int main(int argc, char* argv[])
                 }
 
                 // ---- ISS ----
-                {
+                if (spacecraft.size() > issIdx) {
                     auto& sc = *spacecraft[issIdx];
                     glm::dvec3 worldPos = earthWorld + sc.position();
                     glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
