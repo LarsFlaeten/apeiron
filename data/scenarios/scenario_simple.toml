@@ -31,6 +31,12 @@ epoch  = "2026-04-07T00:00:00"
 
 # ---------------------------------------------------------------------------
 
+[[spacecraft]]
+config = "../spacecraft/orion/orion.toml"
+player = true
+
+# ---------------------------------------------------------------------------
+
 [[bodies]]
 naif  = "SUN"
 color = [1.0, 0.92, 0.23]
@@ -121,3 +127,5 @@ atmosphere.mie_g            = 0.76
 # naif  = "DEIMOS"
 # color = [1.0, 1.0, 1.0]
 # mesh  = "../meshes/deimos/deimos_g_167m_spc_obj_0000n00000_v002.obj"
+
+

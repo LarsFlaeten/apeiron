@@ -82,5 +82,23 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
         }
     }
 
+    // [[spacecraft]]
+    if (auto* arr = tbl["spacecraft"].as_array()) {
+        for (auto& elem : *arr) {
+            auto* t = elem.as_table();
+            if (!t) continue;
+            auto p = (*t)["config"].value<std::string>();
+            if (!p) throw std::runtime_error("spacecraft entry missing 'config'");
+            std::filesystem::path cp(*p);
+            auto resolved = cp.is_absolute()
+                ? cp
+                : std::filesystem::weakly_canonical(baseDir / cp);
+            SpacecraftRef ref;
+            ref.configPath = resolved;
+            ref.player     = (*t)["player"].value_or(false);
+            cfg.spacecraft.push_back(ref);
+        }
+    }
+
     return cfg;
 }

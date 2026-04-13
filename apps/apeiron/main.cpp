@@ -49,6 +49,7 @@
 #include "apeiron/spacecraft/ManifestLoader.h"
 #include "apeiron/spacecraft/OrbitLoader.h"
 #include "apeiron/spacecraft/SpacecraftModel.h"
+#include "apeiron/spacecraft/VehicleConfig.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -194,8 +195,19 @@ std::vector<apeiron::render::StarVertex> loadStars(const std::string& csvPath,
 
 } // namespace
 
-int main()
+int main(int argc, char* argv[])
 {
+    // Parse --scenario <path> (or -s <path>) before anything else.
+    std::filesystem::path scenarioPath = APEIRON_SCENARIO_FILE;
+    for (int i = 1; i + 1 < argc; ++i) {
+        std::string_view a(argv[i]);
+        if (a == "--scenario" || a == "-s") {
+            scenarioPath = argv[i + 1];
+            std::cout << "[Apeiron] Scenario override: " << scenarioPath << "\n";
+            break;
+        }
+    }
+
     if (!glfwInit()) { std::cerr << "GLFW init failed\n"; return 1; }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE,  GLFW_FALSE);
@@ -215,7 +227,7 @@ int main()
         // =================================================================
         // Universe — no GPU resources involved
         // =================================================================
-        auto cfg = ScenarioConfig::load(APEIRON_SCENARIO_FILE);
+        auto cfg = ScenarioConfig::load(scenarioPath);
 
         glfwSetWindowTitle(window, "Apeiron — Loading SPICE kernels…");
         glfwPollEvents();
@@ -297,71 +309,76 @@ int main()
         const double orbitRadius = static_cast<double>(earthRadius) + 400.0;
         const double circularV   = std::sqrt(kGM_Earth / orbitRadius);
 
-        // Load Orion thruster manifest first so we can use its mass/inertia
-        // for the physics Spacecraft object.  Falls back gracefully if missing.
-        spacecraft::SpacecraftModel orionModel;
-        {
-            std::filesystem::path toml =
-                std::filesystem::path(APEIRON_DATA_DIR)
-                / "spacecraft/orion/CM_SM06_thrusters.toml";
-            if (std::filesystem::exists(toml)) {
-                orionModel = spacecraft::loadManifest(toml);
-                std::cout << "[Apeiron] Loaded Orion manifest: "
-                          << orionModel.thrusters.size() << " thrusters\n";
-            } else {
-                std::cerr << "[Apeiron] WARNING: Orion manifest not found at "
-                          << toml << " — using scalar fallback\n";
+        // ---- Load spacecraft configs from scenario ----
+        // Convention: player craft is index 0; AI/passive craft follow in order.
+        // Non-player craft must have [orbit] so their initial state can be computed.
+        std::vector<spacecraft::VehicleConfig> vehicleConfigs;
+        size_t playerVehicleIdx = 0;
+        for (size_t vi = 0; vi < cfg.spacecraft.size(); ++vi) {
+            const auto& ref = cfg.spacecraft[vi];
+            if (!std::filesystem::exists(ref.configPath)) {
+                std::cerr << "[Apeiron] WARNING: spacecraft config not found: "
+                          << ref.configPath << "\n";
+                vehicleConfigs.emplace_back();   // empty fallback
+                continue;
             }
+            auto vc = spacecraft::loadVehicleConfig(ref.configPath);
+            std::cout << "[Apeiron] Loaded spacecraft '" << vc.name << "'"
+                      << (ref.player ? " [player]" : "")
+                      << ": " << vc.model.thrusters.size() << " thrusters"
+                      << (vc.hasOrbit ? ", has orbit" : "") << "\n";
+            if (ref.player) playerVehicleIdx = vi;
+            vehicleConfigs.push_back(std::move(vc));
         }
 
-        // ---- ISS — load orbit config and propagate to sim-start epoch ----
-        // Must happen before Orion is placed so we can position Orion relative to ISS.
-        const size_t issIdx = 1;
-        spacecraft::OrbitConfig issCfg;
+        // Convenience aliases for the two primary vehicles.
+        auto& playerVehicle = vehicleConfigs[playerVehicleIdx];
+        // First non-player vehicle (ISS or equivalent) — used for relative placement.
+        size_t aiVehicleIdx = (playerVehicleIdx == 0 && vehicleConfigs.size() > 1) ? 1 : 0;
+        auto& aiVehicle     = vehicleConfigs[aiVehicleIdx];
+
+        // ---- Non-player craft: propagate orbits to sim epoch ----
+        const size_t issIdx = 1;   // by convention first AI craft is index 1 in physics vector
         glm::dvec3 issR_init(0.0), issV_init(0.0);
-        {
-            std::filesystem::path toml =
-                std::filesystem::path(APEIRON_DATA_DIR)
-                / "spacecraft/iss/iss_orbit.toml";
-            if (std::filesystem::exists(toml)) {
-                issCfg = spacecraft::loadOrbitConfig(toml);
-                std::cout << "[Apeiron] Loaded ISS orbit config: "
-                          << issCfg.name << "\n";
-            } else {
-                std::cerr << "[Apeiron] WARNING: ISS orbit TOML not found at "
-                          << toml << "\n";
-            }
-            astro::PosState issState = spacecraft::orbitStateAtEt(issCfg.elements, et);
-            issR_init = glm::dvec3(issState.r);
-            issV_init = glm::dvec3(issState.v);
-            std::cout << "[Apeiron] ISS initial position: "
+        if (aiVehicle.hasOrbit) {
+            astro::PosState st = spacecraft::vehicleStateAtEt(aiVehicle, et);
+            issR_init = glm::dvec3(st.r);
+            issV_init = glm::dvec3(st.v);
+            std::cout << "[Apeiron] " << aiVehicle.name << " initial position: "
                       << issR_init.x << ", " << issR_init.y << ", " << issR_init.z << " km\n";
         }
 
-        // ---- Orion — place 1 km behind ISS in the retrograde direction ----
-        // Same velocity → same orbit. Orion faces prograde (same attitude as ISS),
-        // so its docking port (+X) faces toward the ISS for a natural approach.
-        const double shipMass = orionModel.massKg > 1.0f
-                                ? static_cast<double>(orionModel.massKg)
+        // ---- Player craft: place 250 m behind the first AI craft ----
+        // Same velocity → co-elliptic, no drift.  Attitude matches AI craft.
+        const double shipMass = playerVehicle.massKg > 1.0f
+                                ? static_cast<double>(playerVehicle.massKg)
                                 : 26500.0;
-        const glm::dmat3 shipInertia = glm::length(orionModel.inertiaDiag) > 0.0f
+        const glm::dmat3 shipInertia = glm::length(playerVehicle.inertiaDiag) > 0.0
             ? glm::dmat3(
-                glm::dvec3(orionModel.inertiaDiag.x, 0, 0),
-                glm::dvec3(0, orionModel.inertiaDiag.y, 0),
-                glm::dvec3(0, 0, orionModel.inertiaDiag.z))
+                glm::dvec3(playerVehicle.inertiaDiag.x, 0, 0),
+                glm::dvec3(0, playerVehicle.inertiaDiag.y, 0),
+                glm::dvec3(0, 0, playerVehicle.inertiaDiag.z))
             : glm::dmat3(34000.0);
         astro::State shipState;
         {
             constexpr double kSepKm = 0.25;  // 250 m behind
-            glm::dvec3 prograde = glm::normalize(issV_init);
-            shipState.P.r = issR_init - kSepKm * prograde;  // retrograde = behind ISS
-            shipState.P.v = issV_init;  // identical velocity = co-elliptic, no drift
+            glm::dvec3 prograde = (glm::length(issV_init) > 0.0)
+                ? glm::normalize(issV_init)
+                : glm::dvec3(0.0, 1.0, 0.0);
+            shipState.P.r = issR_init - kSepKm * prograde;
+            shipState.P.v = issV_init;
             glm::dvec3 T = prograde;
-            glm::dvec3 N = glm::normalize(glm::cross(issR_init, issV_init));
+            glm::dvec3 N = (glm::length(issR_init) > 0.0)
+                ? glm::normalize(glm::cross(issR_init, issV_init))
+                : glm::dvec3(0.0, 0.0, 1.0);
             glm::dvec3 R = glm::cross(T, N);
-            shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));  // same orientation as ISS
+            shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
             shipState.R.w = glm::dvec3(0.0);
         }
+
+        // Expose the player's SpacecraftModel (thrusters) under the old name
+        // so existing thruster-control and plume code below compiles unchanged.
+        auto& orionModel = playerVehicle.model;
 
         std::vector<std::unique_ptr<Spacecraft>> spacecraft;
         spacecraft.push_back(std::make_unique<Spacecraft>(shipMass, shipInertia, shipState));
@@ -370,8 +387,8 @@ int main()
         // Index of the spacecraft the player controls / camera follows.
         const size_t playerIdx = 0;
 
-        // ---- ISS — create physics object using pre-computed state ----
-        {
+        // ---- AI craft: create physics object ----
+        if (vehicleConfigs.size() > 1 && aiVehicle.hasOrbit) {
             glm::dvec3 T = glm::normalize(issV_init);
             glm::dvec3 N = glm::normalize(glm::cross(issR_init, issV_init));
             glm::dvec3 R = glm::cross(T, N);
@@ -382,12 +399,13 @@ int main()
             issSt.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
             issSt.R.w = glm::dvec3(0.0);
 
-            const double issM = issCfg.massKg > 1.0 ? issCfg.massKg : 420000.0;
-            const glm::dmat3 issInertia = glm::length(issCfg.inertiaDiag) > 0.0
+            const double issM = aiVehicle.massKg > 1.0f
+                ? static_cast<double>(aiVehicle.massKg) : 420000.0;
+            const glm::dmat3 issInertia = glm::length(aiVehicle.inertiaDiag) > 0.0
                 ? glm::dmat3(
-                    glm::dvec3(issCfg.inertiaDiag.x, 0, 0),
-                    glm::dvec3(0, issCfg.inertiaDiag.y, 0),
-                    glm::dvec3(0, 0, issCfg.inertiaDiag.z))
+                    glm::dvec3(aiVehicle.inertiaDiag.x, 0, 0),
+                    glm::dvec3(0, aiVehicle.inertiaDiag.y, 0),
+                    glm::dvec3(0, 0, aiVehicle.inertiaDiag.z))
                 : glm::dmat3(1.0e10);
             spacecraft.push_back(std::make_unique<Spacecraft>(issM, issInertia, issSt));
             spacecraft[issIdx]->addAttractor(earthAttractor);
@@ -396,9 +414,16 @@ int main()
         // MFD apps — updated and rendered every frame in Nav view.
         OrbitalMFD orbitalMFD;
         orbitalMFD.setContext("EARTH", "ECLIPJ2000");
-        // TGT list: all spacecraft except the player (index maps to spacecraft[]).
-        // We skip playerIdx; remaining names match spacecraft indices directly.
-        orbitalMFD.setTargets({ issCfg.name.empty() ? "ISS" : issCfg.name });
+        // TGT list: all non-player spacecraft names (indices match spacecraft[]).
+        {
+            std::vector<std::string> tgtNames;
+            for (size_t vi = 0; vi < vehicleConfigs.size(); ++vi)
+                if (vi != playerVehicleIdx)
+                    tgtNames.push_back(vehicleConfigs[vi].name.empty()
+                                       ? "SC" + std::to_string(vi)
+                                       : vehicleConfigs[vi].name);
+            orbitalMFD.setTargets(tgtNames);
+        }
 
         // Frame options: ECLIPJ2000 (identity) and J2000 (equatorial).
         // pxform_c is constant for inertial frames; et=0 is fine.
@@ -605,17 +630,17 @@ int main()
         // Mesh pipeline for rigid glTF models (spacecraft, etc.).
         apeiron::render::MeshPipeline meshPipeline(ctx, pipeline, APEIRON_SHADER_DIR);
 
-        // Load Orion glTF model.
+        // Load player (Orion) glTF model — path from vehicle config.
         apeiron::render::GltfModel orionGltf;
         {
-            std::filesystem::path glb =
-                std::filesystem::path(APEIRON_DATA_DIR)
-                / "spacecraft/orion/CM_SM06.glb";
-            if (std::filesystem::exists(glb)) {
-                glfwSetWindowTitle(window, "Apeiron — Loading Orion model…");
+            std::filesystem::path glb = playerVehicle.glbPath.empty()
+                ? std::filesystem::path{}
+                : std::filesystem::path(APEIRON_DATA_DIR) / playerVehicle.glbPath;
+            if (!glb.empty() && std::filesystem::exists(glb)) {
+                glfwSetWindowTitle(window, ("Apeiron — Loading " + playerVehicle.name + " model…").c_str());
                 glfwPollEvents();
                 orionGltf.load(ctx, allocator, meshPipeline, glb);
-                std::cout << "[Apeiron] Loaded Orion glTF: "
+                std::cout << "[Apeiron] Loaded " << playerVehicle.name << " glTF: "
                           << orionGltf.nodes().size() << " nodes\n";
                 // Hide all exhaust plume nodes at startup (throttle = 0).
                 for (const auto& t : orionModel.thrusters)
@@ -635,24 +660,27 @@ int main()
                 for (auto& c : navCamNodes) std::cout << " " << c;
                 std::cout << "\n";
             } else {
-                std::cerr << "[Apeiron] WARNING: Orion GLB not found at " << glb << "\n";
+                std::cerr << "[Apeiron] WARNING: " << playerVehicle.name
+                          << " GLB not found at " << glb << "\n";
             }
         }
 
-        // Load ISS glTF model — path comes from the TOML [vehicle] glb field.
+        // Load AI craft (ISS) glTF model — path from vehicle config.
         apeiron::render::GltfModel issGltf;
-        {
-            std::filesystem::path glb = issCfg.glbPath.empty()
+        if (vehicleConfigs.size() > 1) {
+            const std::string& glbRel = aiVehicle.glbPath;
+            std::filesystem::path glb = glbRel.empty()
                 ? std::filesystem::path{}
-                : std::filesystem::path(APEIRON_DATA_DIR) / issCfg.glbPath;
+                : std::filesystem::path(APEIRON_DATA_DIR) / glbRel;
             if (!glb.empty() && std::filesystem::exists(glb)) {
-                glfwSetWindowTitle(window, "Apeiron — Loading ISS model…");
+                glfwSetWindowTitle(window, ("Apeiron — Loading " + aiVehicle.name + " model…").c_str());
                 glfwPollEvents();
                 issGltf.load(ctx, allocator, meshPipeline, glb);
-                std::cout << "[Apeiron] Loaded ISS glTF: "
+                std::cout << "[Apeiron] Loaded " << aiVehicle.name << " glTF: "
                           << issGltf.nodes().size() << " nodes\n";
             } else {
-                std::cerr << "[Apeiron] WARNING: ISS GLB not found at " << glb << "\n";
+                std::cerr << "[Apeiron] WARNING: " << aiVehicle.name
+                          << " GLB not found at " << glb << "\n";
             }
         }
 
@@ -751,10 +779,9 @@ int main()
         }
 
         // Spacecraft display names (index parallel to spacecraft[]).
-        const std::vector<std::string> kSpacecraftNames = {
-            "Orion",
-            issCfg.name.empty() ? std::string("ISS") : issCfg.name,
-        };
+        std::vector<std::string> kSpacecraftNames;
+        for (const auto& vc : vehicleConfigs)
+            kSpacecraftNames.push_back(vc.name.empty() ? "Spacecraft" : vc.name);
         double simSpeedTarget          = 1.0; // set instantly by t/T keys
         double simSecondsPerRealSecond = 1.0; // smoothly tracks target (log-space)
 

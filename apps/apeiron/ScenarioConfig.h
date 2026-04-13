@@ -5,6 +5,12 @@
 #include <string>
 #include <vector>
 
+// Reference to one spacecraft listed in the scenario.
+struct SpacecraftRef {
+    std::filesystem::path configPath;   // absolute path to spacecraft TOML
+    bool                  player = false;
+};
+
 // Physical parameters for one planetary atmosphere.
 // All lengths in km; scattering coefficients in km^-1.
 struct AtmosphereConfig {
@@ -36,12 +42,13 @@ struct BodyConfig {
 };
 
 struct ScenarioConfig {
-    std::vector<std::string> kernels;       // absolute or relative kernel paths
-    std::string              observerBody;  // floating origin tracks this body
-    std::string              observerTarget;
-    std::string              frame;
-    std::string              epoch;         // UTC string for EphemerisTime::fromString
-    std::vector<BodyConfig>  bodies;
+    std::vector<std::string>   kernels;        // absolute kernel paths
+    std::string                observerBody;   // floating origin tracks this body
+    std::string                observerTarget;
+    std::string                frame;
+    std::string                epoch;          // UTC string for EphemerisTime::fromString
+    std::vector<BodyConfig>    bodies;
+    std::vector<SpacecraftRef> spacecraft;     // in load order; player marked with .player
 
     // Parse a TOML scenario file.  Kernel paths that are relative are resolved
     // relative to the directory containing the TOML file.

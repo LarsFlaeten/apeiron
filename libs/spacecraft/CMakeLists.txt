@@ -1,6 +1,7 @@
 add_library(spacecraft STATIC
     src/SpacecraftModel.cpp
     src/ManifestLoader.cpp
+    src/VehicleConfig.cpp
     src/Autopilot.cpp
     src/OrbitLoader.cpp
     src/Lambert.cpp

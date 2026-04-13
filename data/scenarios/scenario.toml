@@ -122,3 +122,16 @@ atmosphere.mie_g            = 0.70
 # naif  = "DEIMOS"
 # color = [1.0, 1.0, 1.0]
 # mesh  = "../meshes/deimos/deimos_g_167m_spc_obj_0000n00000_v002.obj"
+
+# ---------------------------------------------------------------------------
+# Spacecraft — listed in load order.
+# config: path relative to this file's directory.
+# player: true for the user-controlled craft (exactly one per scenario).
+# ---------------------------------------------------------------------------
+
+[[spacecraft]]
+config = "../spacecraft/orion/orion.toml"
+player = true
+
+[[spacecraft]]
+config = "../spacecraft/iss/iss.toml"
