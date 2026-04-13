@@ -1744,6 +1744,8 @@ int main(int argc, char* argv[])
                     &mainEngineThrust,
                     (const double[]){1'000.0}, (const double[]){2'000'000.0},
                     "%.0f", ImGuiSliderFlags_Logarithmic);
+                if (!orionModel.thrusters.empty())
+                    orionModel.thrusters[0].thrustN = static_cast<float>(mainEngineThrust);
                 // Show resulting acceleration for quick sanity check.
                 ImGui::TextDisabled("  → %.2f m/s²  (%.3f g)",
                     mainEngineThrust / shipMass,
@@ -1873,7 +1875,7 @@ int main(int argc, char* argv[])
                 }
                 orbitalMFD.update(shipRelRef, currentEt, refBody.mu, refBody.radiusKm);
                 // Feed geocentric state to TransferMFD departure page.
-                transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth);
+                transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
                 // Target: TGT index 0 = ISS (spacecraft[issIdx]).
                 if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
@@ -1977,7 +1979,7 @@ int main(int argc, char* argv[])
 
                 orbitalMFD.update(shipRelRef, currentEt,
                                   refBody.mu, refBody.radiusKm);
-                transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth);
+                transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
                 if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
                     orbitalMFD.updateTarget(
