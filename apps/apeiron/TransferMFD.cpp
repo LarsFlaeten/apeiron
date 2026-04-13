@@ -670,5 +670,5 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     if (vInfMag > 1e-6)
         diag.addArrow(m_detail.depPos, vInf / vInfMag, 14.0f, kOrange);
 
-    diag.render(dl, { origin.x, y + pad }, { size.x, diagH });
+    diag.render(dl, { origin.x, y + pad }, { size.x, diagH }, &m_detailViewRot);
 }

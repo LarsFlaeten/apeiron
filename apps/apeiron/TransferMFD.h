@@ -99,4 +99,8 @@ private:
     int m_parkIdx = 0;   // index into kParkAlts
 
     static constexpr double kDay = 86400.0;
+
+    // Persistent view rotation for the detail-page orbit diagram.
+    // Right-drag to tumble, double-right-click to reset — same as OrbitalMFD.
+    glm::dmat3 m_detailViewRot { 1.0 };
 };
