@@ -1,4 +1,5 @@
 #include "TransferMFD.h"
+#include "OrbitDiagram.h"
 
 #include <astro/SpiceCore.h>
 
@@ -530,35 +531,6 @@ void TransferMFD::renderPorkchop(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Draw one complete orbital ellipse from a state vector (r, v) around mu.
-// Projected onto the ecliptic x-y plane (z ignored for display).
-static void drawOrbit(ImDrawList* dl, const glm::dvec3& r, const glm::dvec3& v,
-                      double mu, ImVec2 centre, double scale, ImU32 col)
-{
-    glm::dvec3 h    = glm::cross(r, v);
-    double     hMag = glm::length(h);
-    if (hMag < 1e-6) return;
-    glm::dvec3 hn  = h / hMag;
-    double     p_  = hMag * hMag / mu;
-    glm::dvec3 ev  = glm::cross(v, h) / mu - glm::normalize(r);
-    double     ecc = glm::length(ev);
-    if (ecc >= 1.0) return;   // skip hyperbolic/parabolic
-
-    glm::dvec3 periDir = (ecc > 1e-9) ? glm::normalize(ev) : glm::normalize(r);
-    glm::dvec3 qDir    = glm::cross(hn, periDir);
-
-    ImVec2 prev{}; bool first = true;
-    for (int k = 0; k <= 120; ++k) {
-        double nu  = 2.0 * M_PI * k / 120.0;
-        double r_  = p_ / (1.0 + ecc * std::cos(nu));
-        glm::dvec3 pos = r_ * (std::cos(nu) * periDir + std::sin(nu) * qDir);
-        ImVec2 sp = { centre.x + static_cast<float>(pos.x * scale),
-                      centre.y - static_cast<float>(pos.y * scale) };
-        if (!first) dl->AddLine(prev, sp, col, 1.0f);
-        prev = sp; first = false;
-    }
-}
 
 // ---------------------------------------------------------------------------
 void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
@@ -646,33 +618,14 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     if (std::abs(vInfInc) > 0.5)
         row(kOrange, "  inc    %.1f deg above ecl", vInfInc);
 
-    // ---- Orbit diagram ----
-    const float diagSize = std::min(size.x, size.y - (y - origin.y)) - 2.0f * pad;
-    if (diagSize < 20.0f || mu <= 0.0) return;
+    // ---- Orbit diagram via OrbitDiagram ----
+    const float diagH = size.y - (y - origin.y) - pad;
+    if (diagH < 20.0f || mu <= 0.0) return;
 
-    const float dCx = origin.x + size.x * 0.5f;
-    const float dCy = y + pad + diagSize * 0.5f;
-    const float dR  = diagSize * 0.5f - 4.0f;
-
-    double depR  = glm::length(m_detail.depPos);
-    double arrR  = glm::length(m_detail.arrPos);
-    double scale = dR / (std::max(depR, arrR) * 1.05);
-
-    auto toScreen = [&](const glm::dvec3& p) -> ImVec2 {
-        return { dCx + static_cast<float>(p.x * scale),
-                 dCy - static_cast<float>(p.y * scale) };
-    };
-
-    // Real orbital ellipses from SPICE state vectors.
-    drawOrbit(dl, m_detail.depPos, m_detail.vDepBody, mu,
-              {dCx, dCy}, scale, IM_COL32(60, 140, 255, 80));   // Earth — blue
-    drawOrbit(dl, m_detail.arrPos, m_detail.vArrBody, mu,
-              {dCx, dCy}, scale, IM_COL32(200, 80, 50, 80));    // Mars  — red
-
-    // Sun.
-    dl->AddCircleFilled({dCx, dCy}, 4.0f, IM_COL32(255, 220, 60, 240));
-
-    // Transfer arc.
+    // Build transfer arc as a 3D polyline.
+    OrbitDiagram::Arc transferArc;
+    transferArc.colour    = kYellow;
+    transferArc.thickness = 1.5f;
     {
         glm::dvec3 h    = glm::cross(m_detail.depPos, m_detail.vDep);
         double     hMag = glm::length(h);
@@ -683,48 +636,39 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                                - glm::normalize(m_detail.depPos);
             double     ecc     = glm::length(ev);
             glm::dvec3 periDir = (ecc > 1e-9)
-                               ? glm::normalize(ev)
-                               : glm::normalize(m_detail.depPos);
+                               ? glm::normalize(ev) : glm::normalize(m_detail.depPos);
             glm::dvec3 qDir    = glm::cross(hn, periDir);
 
-            auto trueAnom = [&](const glm::dvec3& r) -> double {
+            auto nu_of = [&](const glm::dvec3& r) -> double {
                 double cosnu = glm::dot(periDir, glm::normalize(r));
                 cosnu = std::clamp(cosnu, -1.0, 1.0);
                 double nu = std::acos(cosnu);
                 if (glm::dot(glm::cross(periDir, r), hn) < 0.0) nu = -nu;
                 return nu;
             };
-            double nu1 = trueAnom(m_detail.depPos);
-            double nu2 = trueAnom(m_detail.arrPos);
+            double nu1 = nu_of(m_detail.depPos);
+            double nu2 = nu_of(m_detail.arrPos);
             if (nu2 < nu1) nu2 += 2.0 * M_PI;
 
-            ImVec2 prev{}; bool first = true;
             for (int k = 0; k <= 80; ++k) {
-                double nu  = nu1 + (nu2 - nu1) * k / 80.0;
-                double r_  = p_ / (1.0 + ecc * std::cos(nu));
-                glm::dvec3 pos = r_ * (std::cos(nu) * periDir + std::sin(nu) * qDir);
-                ImVec2 sp  = toScreen(pos);
-                if (!first) dl->AddLine(prev, sp, kYellow, 1.5f);
-                prev = sp; first = false;
+                double nu = nu1 + (nu2 - nu1) * k / 80.0;
+                double r_ = p_ / (1.0 + ecc * std::cos(nu));
+                transferArc.pts.push_back(
+                    r_ * (std::cos(nu) * periDir + std::sin(nu) * qDir));
             }
         }
     }
 
-    // Body markers — dots on the real ellipses.
-    ImVec2 depSc = toScreen(m_detail.depPos);
-    ImVec2 arrSc = toScreen(m_detail.arrPos);
-    dl->AddCircleFilled(depSc, 3.5f, IM_COL32( 60,140,255,255));
-    dl->AddCircleFilled(arrSc, 3.5f, IM_COL32(200, 80, 50,255));
-    dl->AddText({depSc.x + 4, depSc.y - 5}, IM_COL32( 60,140,255,200), "E");
-    dl->AddText({arrSc.x + 4, arrSc.y - 5}, IM_COL32(200, 80, 50,200), "M");
+    OrbitDiagram diag;
+    diag.addOrbit(m_detail.depPos, m_detail.vDepBody, mu,
+                  IM_COL32(60, 140, 255, 90), "", true, false);   // Earth orbit
+    diag.addOrbit(m_detail.arrPos, m_detail.vArrBody, mu,
+                  IM_COL32(200, 80, 50, 90),  "", true, false);   // Mars orbit
+    diag.addArc(transferArc);
+    diag.addMarker(m_detail.depPos, IM_COL32( 60,140,255,255), "E");
+    diag.addMarker(m_detail.arrPos, IM_COL32(200, 80, 50,255), "M");
+    if (vInfMag > 1e-6)
+        diag.addArrow(m_detail.depPos, vInf / vInfMag, 14.0f, kOrange);
 
-    // v∞ arrow from departure position.
-    if (vInfMag > 1e-6) {
-        glm::dvec3 vDir = vInf / vInfMag;
-        float aLen = 14.0f;
-        ImVec2 tip = { depSc.x + static_cast<float>(vDir.x) * aLen,
-                       depSc.y - static_cast<float>(vDir.y) * aLen };
-        dl->AddLine(depSc, tip, kOrange, 1.5f);
-        dl->AddCircleFilled(tip, 2.5f, kOrange);
-    }
+    diag.render(dl, { origin.x, y + pad }, { size.x, diagH });
 }

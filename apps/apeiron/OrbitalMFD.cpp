@@ -1,4 +1,5 @@
 #include "OrbitalMFD.h"
+#include "OrbitDiagram.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -337,242 +338,85 @@ void OrbitalMFD::update(const astro::PosState&     state,
 // 3D orbit diagram.
 //
 // The central body sits at screen centre.  m_diagViewRot maps frame-space
-// vectors to "view space": view.x → screen right, view.y → screen up,
-// view.z → toward viewer.  Default (identity) = looking down the frame +Z
-// axis, so the reference plane (ecliptic / equatorial) fills the screen.
-//
-// Right-drag to rotate; double-right-click to reset.
+// vectors to "view space".  Right-drag rotates; double-right-click resets.
 // ---------------------------------------------------------------------------
 void OrbitalMFD::renderDiagram(ImDrawList* dl, ImVec2 diagOrigin, float diagSize)
 {
-    const double e     = m_eccen;
+    if (m_smaKm == 0.0) return;
+
+    // Reconstruct position from true anomaly or shipDir.
+    const double e    = m_eccen;
     const bool   isHyp = m_isHyperbolic;
-    const float  pad   = 8.0f;
-    const float  usable = diagSize - 2.0f * pad;
-    if (usable <= 0.0f) return;
-
-    const float cx = diagOrigin.x + diagSize * 0.5f;
-    const float cy = diagOrigin.y + diagSize * 0.5f;
-
-    // ---- Scale ----------------------------------------------------------------
-    // Use frozen SMA at high eccentricity to prevent runaway zoom.
-    const double refA = (e >= kFreezeEcc && m_frozenSmaKm > 0.0)
-                        ? m_frozenSmaKm : std::abs(m_smaKm);
-    if (refA <= 0.0) return;
-
-    // Maximum extent from the focus (central body) that must fit in 45% of usable.
-    const double apoKm = isHyp
-        ? (m_frozenSmaKm > 0.0 ? m_frozenSmaKm * 2.0 : std::abs(m_smaKm) * 2.0)
-        : refA * (1.0 + std::min(e, kFreezeEcc));
-    const float sc = static_cast<float>((usable * 0.45) / apoKm);
-
-    // ---- Mouse rotation -------------------------------------------------------
-    {
-        const ImVec2 diagBR = { diagOrigin.x + diagSize, diagOrigin.y + diagSize };
-        if (ImGui::IsMouseHoveringRect(diagOrigin, diagBR)) {
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
-                const ImVec2 d = ImGui::GetIO().MouseDelta;
-                const double dx = d.x * 0.006;
-                const double dy = d.y * 0.006;
-                if (dx != 0.0 || dy != 0.0) {
-                    const glm::dmat3 Rx(glm::rotate(glm::dmat4(1.0), dy, {1.0, 0.0, 0.0}));
-                    const glm::dmat3 Ry(glm::rotate(glm::dmat4(1.0), dx, {0.0, 1.0, 0.0}));
-                    m_diagViewRot = Rx * Ry * m_diagViewRot;
-                }
-            }
-            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right))
-                m_diagViewRot = glm::dmat3(1.0);
-        }
-    }
-
-    // ---- Helpers --------------------------------------------------------------
-    // Project a 3D frame-space position to screen coords.
-    auto proj = [&](const glm::dvec3& p) -> ImVec2 {
-        const glm::dvec3 v = m_diagViewRot * p;
-        return { cx + static_cast<float>(v.x * sc),
-                 cy - static_cast<float>(v.y * sc) };
-    };
-    // View-space Z of a frame-space point (positive = facing viewer).
-    auto viewZ = [&](const glm::dvec3& p) -> double {
-        return (m_diagViewRot * p).z;
-    };
-    // Semi-latus rectum.
-    const double slr = isHyp
+    const double slr  = isHyp
         ? std::abs(m_smaKm) * (e * e - 1.0)
         : m_smaKm           * (1.0 - e * e);
 
-    // ---- Reference-plane ring (frame XY plane, very dim) ----------------------
+    const double rCur = m_trueValid
+        ? slr / (1.0 + e * std::cos(m_trueDeg * kDeg2Rad))
+        : (m_altKm + m_bodyRadiusKm);
+    const glm::dvec3 shipPos = m_trueValid
+        ? rCur * (std::cos(m_trueDeg * kDeg2Rad) * m_periDir3D
+                + std::sin(m_trueDeg * kDeg2Rad) * m_qDir3D)
+        : rCur * m_shipDir3D;
+
+    OrbitDiagram diag;
+
+    // Main orbit.  State at periapsis with mu=1:
+    //   v_perp = sqrt((1+e)/rp)  → makes makeGeom reconstruct ecc = e exactly.
     {
-        constexpr int kRSeg = 64;
-        const double  rr    = apoKm * 0.80;
-        ImVec2 pts[kRSeg + 1];
-        for (int i = 0; i <= kRSeg; ++i) {
-            const double t = kTwoPi * i / kRSeg;
-            pts[i] = proj({ rr * std::cos(t), rr * std::sin(t), 0.0 });
-        }
-        dl->AddPolyline(pts, kRSeg + 1, IM_COL32(0, 70, 25, 45), ImDrawFlags_None, 0.5f);
+        double rp = slr / (1.0 + e);
+        OrbitDiagram::Orbit o;
+        o.r           = rp * m_periDir3D;
+        o.v           = std::sqrt((1.0 + e) / rp) * m_qDir3D;
+        o.mu          = 1.0;
+        o.colour      = kColOrbit;
+        o.showApses   = (e > 0.005);
+        o.showCurrent = false;   // ship dot added as separate marker
+        o.segments    = 120;
+        diag.addOrbit(o);
     }
 
-    // ---- Orbit curve ----------------------------------------------------------
-    {
-        constexpr int kSeg = 120;
-        double nu0, nu1;
-        if (isHyp) {
-            const double nuInf = std::acos(-1.0 / e);
-            nu0 = -(nuInf - 0.04);
-            nu1 =  (nuInf - 0.04);
-        } else {
-            nu0 = 0.0;
-            nu1 = kTwoPi;
-        }
-        ImVec2 pts[kSeg + 1];
-        for (int i = 0; i <= kSeg; ++i) {
-            const double nu = nu0 + (nu1 - nu0) * i / kSeg;
-            const double r  = slr / (1.0 + e * std::cos(nu));
-            pts[i] = proj(r * (std::cos(nu) * m_periDir3D + std::sin(nu) * m_qDir3D));
-        }
-        dl->AddPolyline(pts, kSeg + 1, kColOrbit, ImDrawFlags_None, 1.2f);
-    }
-
-    // ---- Asymptote lines (hyperbolic only) ------------------------------------
-    if (isHyp) {
-        const double nuInf = std::acos(-1.0 / e);
-        const float  ext   = diagSize * 0.65f;
-        for (int sign : {+1, -1}) {
-            const glm::dvec3 dir3D = std::cos(nuInf) * m_periDir3D
-                                   + sign * std::sin(nuInf) * m_qDir3D;
-            const ImVec2 p0 = { cx, cy };
-            const ImVec2 p1 = proj(dir3D * apoKm * 1.5);
-            const float  dx = p1.x - p0.x;
-            const float  dy = p1.y - p0.y;
-            const float  len = std::sqrt(dx * dx + dy * dy);
-            if (len > 0.5f)
-                dl->AddLine(p0, { cx + dx / len * ext, cy + dy / len * ext },
-                            kColAsymptote, 0.8f);
-        }
-    }
-
-    // ---- Apse line + markers --------------------------------------------------
-    if (e > 0.005) {
-        const double rp3d = slr / (1.0 + e);
-        const ImVec2 periPt = proj( rp3d * m_periDir3D);
-        const ImVec2 focus  = { cx, cy };
-        if (!isHyp) {
-            const double ra3d  = slr / (1.0 - e);
-            const ImVec2 apoPt = proj(-ra3d * m_periDir3D);
-            dl->AddLine(periPt, apoPt, kColApseLine, 0.5f);
-            dl->AddCircle(apoPt, 2.5f, kColMark, 0, 1.0f);
-        } else {
-            dl->AddLine(focus, periPt, kColApseLine, 0.5f);
-        }
-        dl->AddCircle(periPt, 3.0f, kColMark, 0, 1.5f);
-    }
-
-    // ---- Target orbit (drawn behind ship so ship dot is always on top) --------
-    if (m_hasTgt) {
-        const double te  = m_tgtEccen;
-        const double ta  = m_tgtSmaKm;
-        const bool   thy = m_tgtHyp;
+    // Target orbit.
+    if (m_hasTgt && m_tgtSmaKm != 0.0) {
+        const double te   = m_tgtEccen;
+        const bool   thy  = m_tgtHyp;
         const double tslr = thy
-            ? std::abs(ta) * (te * te - 1.0)
-            : ta           * (1.0 - te * te);
-        if (tslr > 0.0) {
-            constexpr int kSeg = 120;
-            double tnu0, tnu1;
-            if (thy) {
-                const double tnuInf = std::acos(-1.0 / te);
-                tnu0 = -(tnuInf - 0.04); tnu1 = tnuInf - 0.04;
-            } else { tnu0 = 0.0; tnu1 = kTwoPi; }
-            ImVec2 tpts[kSeg + 1];
-            for (int i = 0; i <= kSeg; ++i) {
-                const double tnu = tnu0 + (tnu1 - tnu0) * i / kSeg;
-                const double tr  = tslr / (1.0 + te * std::cos(tnu));
-                tpts[i] = proj(tr * (std::cos(tnu) * m_tgtPeriDir
-                                   + std::sin(tnu) * m_tgtQDir));
-            }
-            dl->AddPolyline(tpts, kSeg + 1, kColTgtOrbit, ImDrawFlags_None, 1.2f);
-            // Apse line + markers
-            if (te > 0.005) {
-                const double trp = tslr / (1.0 + te);
-                const ImVec2 tPeri = proj( trp * m_tgtPeriDir);
-                if (!thy) {
-                    const double tra  = tslr / (1.0 - te);
-                    dl->AddLine(tPeri, proj(-tra * m_tgtPeriDir),
-                                IM_COL32(40,120,200,60), 0.5f);
-                    dl->AddCircle(proj(-tra * m_tgtPeriDir), 2.5f, kColTgtMark, 0, 1.0f);
-                }
-                dl->AddCircle(tPeri, 3.0f, kColTgtMark, 0, 1.5f);
-            }
-            // Target ship dot
-            const double tRCur = m_tgtAltKm + m_tgtBodyRadKm;
-            const ImVec2 focus = { cx, cy };
-            if (m_tgtTrueValid) {
-                const double tnu = m_tgtTrueDeg * kDeg2Rad;
-                const double tr  = tslr / (1.0 + te * std::cos(tnu));
-                const ImVec2 tShip = proj(tr * (std::cos(tnu) * m_tgtPeriDir
-                                              + std::sin(tnu) * m_tgtQDir));
-                dl->AddLine(focus, tShip, kColTgtLine, 1.0f);
-                dl->AddCircleFilled(tShip, 4.0f, kColTgtShip);
-            } else {
-                const ImVec2 tShip = proj(tRCur * m_tgtShipDir);
-                dl->AddLine(focus, tShip, kColTgtLine, 1.0f);
-                dl->AddCircleFilled(tShip, 4.0f, kColTgtShip);
-            }
-        }
-    }
+            ? std::abs(m_tgtSmaKm) * (te * te - 1.0)
+            : m_tgtSmaKm           * (1.0 - te * te);
+        double trp = tslr / (1.0 + te);
+        OrbitDiagram::Orbit ot;
+        ot.r         = trp * m_tgtPeriDir;
+        ot.v         = std::sqrt((1.0 + te) / trp) * m_tgtQDir;
+        ot.mu        = 1.0;
+        ot.colour    = kColTgtOrbit;
+        ot.showApses = (te > 0.005);
+        diag.addOrbit(ot);
 
-    // ---- Central body: outline + axes in red, no fill -------------------------
-    {
-        const double bR = std::max(m_bodyRadiusKm, apoKm * 0.035);
-        const ImU32 cFront = kColBodyRim;
-        const ImU32 cBack  = IM_COL32(150, 30, 30, 50);
-
-        // Outline circle (equatorial ring only — cleaner than 3 great circles)
-        constexpr int kBSeg = 48;
-        for (int i = 0; i < kBSeg; ++i) {
-            const double t0 = kTwoPi * i       / kBSeg;
-            const double t1 = kTwoPi * (i + 1) / kBSeg;
-            const glm::dvec3 p0 = bR * glm::dvec3(std::cos(t0), std::sin(t0), 0.0);
-            const glm::dvec3 p1 = bR * glm::dvec3(std::cos(t1), std::sin(t1), 0.0);
-            const bool front = (viewZ(p0) + viewZ(p1)) >= 0.0;
-            dl->AddLine(proj(p0), proj(p1), front ? cFront : cBack, 1.0f);
-        }
-        // Three axis stubs
-        const float bPx = std::max(static_cast<float>(bR * sc), 4.0f);
-        const float axLen = bPx * 1.6f;
-        const ImVec2 centre = { cx, cy };
-        // +X
-        auto axEnd = [&](const glm::dvec3& dir) {
-            const glm::dvec3 v = m_diagViewRot * dir;
-            return ImVec2{ cx + static_cast<float>(v.x * sc) * 1.6f * static_cast<float>(bR),
-                           cy - static_cast<float>(v.y * sc) * 1.6f * static_cast<float>(bR) };
-        };
-        (void)axLen;
-        dl->AddLine(centre, axEnd({1,0,0}), kColBodyAxis, 1.0f);
-        dl->AddLine(centre, axEnd({0,1,0}), kColBodyAxis, 1.0f);
-        dl->AddLine(centre, axEnd({0,0,1}), kColBodyAxis, 1.0f);
-    }
-
-    // ---- Spacecraft position --------------------------------------------------
-    {
-        const ImVec2 focus = { cx, cy };
-        if (m_trueValid) {
-            const double nu    = m_trueDeg * kDeg2Rad;
-            if (!isHyp || std::abs(nu) < std::acos(-1.0 / e) - 0.02) {
-                const double r_s  = slr / (1.0 + e * std::cos(nu));
-                const ImVec2 shipPt = proj(r_s * (std::cos(nu) * m_periDir3D
-                                                 + std::sin(nu) * m_qDir3D));
-                dl->AddLine(focus, shipPt, kColShip, 1.0f);
-                dl->AddCircleFilled(shipPt, 4.0f, kColShip);
-            }
+        // Target ship dot.
+        glm::dvec3 tShipPos;
+        if (m_tgtTrueValid) {
+            double tnu = m_tgtTrueDeg * kDeg2Rad;
+            double tr_ = tslr / (1.0 + te * std::cos(tnu));
+            tShipPos = tr_ * (std::cos(tnu) * m_tgtPeriDir
+                            + std::sin(tnu) * m_tgtQDir);
         } else {
-            // Circular orbit: use current spacecraft direction.
-            const double rCur = m_altKm + m_bodyRadiusKm;
-            const ImVec2 shipPt = proj(rCur * m_shipDir3D);
-            dl->AddLine(focus, shipPt, kColShip, 1.0f);
-            dl->AddCircleFilled(shipPt, 4.0f, kColShip);
+            tShipPos = (m_tgtAltKm + m_tgtBodyRadKm) * m_tgtShipDir;
         }
+        diag.addMarker(tShipPos, kColTgtShip, "");
     }
+
+    // Central body.
+    OrbitDiagram::CentralBody cb;
+    cb.radiusKm   = m_bodyRadiusKm;
+    cb.rimColour  = kColBodyRim;
+    cb.axisColour = kColBodyAxis;
+    cb.drawAxes   = true;
+    diag.setCentralBody(cb);
+
+    // Spacecraft marker.
+    diag.addMarker(shipPos, kColShip, "");
+
+    diag.render(dl, diagOrigin, {diagSize, diagSize}, &m_diagViewRot);
 }
 
 // ---------------------------------------------------------------------------
