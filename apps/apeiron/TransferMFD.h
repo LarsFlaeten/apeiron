@@ -43,12 +43,14 @@ public:
     // Trigger a (synchronous) grid recompute.
     void compute();
 
-    // Feed current ship state (geocentric ECLIPJ2000, km / km/s) each frame.
-    void updateShipState(const glm::dvec3& r, const glm::dvec3& v, double muEarth)
+    // Feed current ship state (geocentric ECLIPJ2000, km / km/s) and sim time each frame.
+    void updateShipState(const glm::dvec3& r, const glm::dvec3& v, double muEarth,
+                         double currentET)
     {
-        m_shipR    = r;
-        m_shipV    = v;
-        m_muEarth  = muEarth;
+        m_shipR     = r;
+        m_shipV     = v;
+        m_muEarth   = muEarth;
+        m_currentET = currentET;
     }
 
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
@@ -113,8 +115,9 @@ private:
     glm::dmat3 m_detailViewRot  { 1.0 };   // page 1: heliocentric
     glm::dmat3 m_depViewRot     { 1.0 };   // page 2: geocentric departure
 
-    // Current ship geocentric state (fed by main.cpp each frame).
-    glm::dvec3 m_shipR   { 0.0 };
-    glm::dvec3 m_shipV   { 0.0 };
-    double     m_muEarth = 398600.4418;
+    // Current ship geocentric state and sim time (fed by main.cpp each frame).
+    glm::dvec3 m_shipR     { 0.0 };
+    glm::dvec3 m_shipV     { 0.0 };
+    double     m_muEarth   = 398600.4418;
+    double     m_currentET = 0.0;
 };

@@ -609,11 +609,14 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         y += lineH;
     };
 
+    std::string nowStr = astro::EphemerisTime(m_currentET).toISOUTCString(0);
     std::string depStr = astro::EphemerisTime(m_detail.depET).toISOUTCString(0);
     std::string arrStr = astro::EphemerisTime(m_detail.arrET).toISOUTCString(0);
-    int tofDays = static_cast<int>(m_detail.tofSec / kDay + 0.5);
+    int tofDays    = static_cast<int>(m_detail.tofSec / kDay + 0.5);
+    int daysToLaunch = static_cast<int>((m_detail.depET - m_currentET) / kDay + 0.5);
 
-    row(kGreen,  "DEP  %.10s", depStr.c_str());
+    row(kDim,    "NOW  %.10s", nowStr.c_str());
+    row(kGreen,  "DEP  %.10s  (T%+d d)", depStr.c_str(), daysToLaunch);
     row(kGreen,  "ARR  %.10s", arrStr.c_str());
     row(kGreen,  "TOF  %d days", tofDays);
     y += pad;
@@ -955,8 +958,15 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     };
     auto sep = [&]() { add(0, ""); };  // blank spacer
 
-    // Header
-    add(kGreen,  "DEPARTURE  V-inf %.3f km/s  C3 %.1f", vInfMag, m_detail.c3);
+    // Header — dates and V∞
+    {
+        std::string nowStr = astro::EphemerisTime(m_currentET).toISOUTCString(0);
+        std::string depStr = astro::EphemerisTime(m_detail.depET).toISOUTCString(0);
+        int daysToLaunch   = static_cast<int>((m_detail.depET - m_currentET) / kDay + 0.5);
+        add(kDim,   "NOW  %.10s", nowStr.c_str());
+        add(kGreen, "DEP  %.10s  (T%+d d)", depStr.c_str(), daysToLaunch);
+    }
+    add(kCyan,  "V-inf %.3f km/s  C3 %.1f km2/s2", vInfMag, m_detail.c3);
     sep();
 
     // Current orbit
