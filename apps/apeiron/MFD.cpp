@@ -72,6 +72,20 @@ void MFDPanel::render(const char* id)
             dl->AddLine({ rightBtnX, y0 }, { br.x,         y0 }, kDimLine, 0.5f);
         }
 
+        // Hover / press highlight drawn before text so text sits on top.
+        const ImU32 kHover  = IM_COL32(0, 160, 60, 40);
+        const ImU32 kPress  = IM_COL32(0, 200, 70, 80);
+        ImVec2 lR0 = {tl.x,      y0}, lR1 = {tl.x + kBtnW, y1};
+        ImVec2 rR0 = {rightBtnX, y0}, rR1 = {br.x,          y1};
+        bool lHov = ImGui::IsMouseHoveringRect(lR0, lR1);
+        bool rHov = ImGui::IsMouseHoveringRect(rR0, rR1);
+        bool lPrs = lHov && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        bool rPrs = rHov && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        if (lPrs)      dl->AddRectFilled(lR0, lR1, kPress);
+        else if (lHov) dl->AddRectFilled(lR0, lR1, kHover);
+        if (rPrs)      dl->AddRectFilled(rR0, rR1, kPress);
+        else if (rHov) dl->AddRectFilled(rR0, rR1, kHover);
+
         // Left label — always delegate to active app.
         if (activeApp) {
             const char* ll = activeApp->leftLabel(s);
