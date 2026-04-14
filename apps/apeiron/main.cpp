@@ -1164,87 +1164,18 @@ int main(int argc, char* argv[])
 
                             // Auto-cancel NullV once done.
                             if (autopilot.nullVDone) {
-                                autopilot.mode        = spacecraft::AutopilotMode::Off;
+                                autopilot.mode          = spacecraft::AutopilotMode::Off;
                                 autopilot.secondaryMode = spacecraft::AutopilotMode::Off;
                             }
 
-                            // For attitude hold modes, update target each frame.
-                            using M = spacecraft::AutopilotMode;
-                            if (autopilot.mode == M::Prograde   || autopilot.mode == M::Retrograde ||
-                                autopilot.mode == M::NormalPlus || autopilot.mode == M::NormalMinus) {
-                                glm::dvec3 r = ship.position();  // km, inertial
-                                glm::dvec3 v = ship.velocity();  // km/s, inertial
-                                glm::dvec3 T = glm::normalize(v);               // prograde
-                                glm::dvec3 N = glm::normalize(glm::cross(r, v)); // orbit normal
-                                glm::dvec3 R = glm::cross(T, N);                // radial outward
-                                // Frame columns: [nose(+X body), up(+Y body), right(+Z body)]
-                                // Prograde:      nose=T,  up=nadir(-R), right=N
-                                // Retrograde:    nose=-T, up=zenith(R), right=N
-                                // Normal+:       nose=N,  up=T,         right=-R
-                                // Normal-:       nose=-N, up=-T,        right=-R
-                                switch (autopilot.mode) {
-                                    case M::Prograde:
-                                        autopilot.targetAttitude = glm::quat_cast(glm::dmat3(T,  -R,  N)); break;
-                                    case M::Retrograde:
-                                        autopilot.targetAttitude = glm::quat_cast(glm::dmat3(-T,  R,  N)); break;
-                                    case M::NormalPlus:
-                                        autopilot.targetAttitude = glm::quat_cast(glm::dmat3(N,   T, -R)); break;
-                                    case M::NormalMinus:
-                                        autopilot.targetAttitude = glm::quat_cast(glm::dmat3(-N, -T, -R)); break;
-                                    default: break;
-                                }
-                                // Feedforward: orbital angular velocity (r × v) / |r|²
-                                // Only applies to Prograde/Retrograde — the prograde direction
-                                // rotates once per orbit and needs active feedforward to track.
-                                // The orbit normal N is inertially fixed (for non-precessing
-                                // orbits) so NormalPlus/NormalMinus require zero feedforward;
-                                // applying it causes constant rate error and oscillation.
-                                if (autopilot.mode == M::Prograde || autopilot.mode == M::Retrograde) {
-                                    glm::dvec3 omegaOrb = glm::cross(r, v) / glm::dot(r, r);
-                                    autopilot.omegaFF = glm::dvec3(glm::conjugate(att) * omegaOrb);
-                                } else {
-                                    autopilot.omegaFF = glm::dvec3(0.0);
-                                }
-                            }
-
-                            // RelVelPlus/Minus: point nose along/against relative velocity.
-                            // Runs for standalone mode AND as secondaryMode alongside NullV.
-                            const M relVelAttMode = (autopilot.mode == M::RelVelPlus ||
-                                                     autopilot.mode == M::RelVelMinus)
-                                                    ? autopilot.mode
-                                                    : autopilot.secondaryMode;
-                            if (relVelAttMode == M::RelVelPlus || relVelAttMode == M::RelVelMinus) {
-                                // Relative velocity in inertial frame.
-                                glm::dvec3 relVelInertial = att * autopilot.relVelBody;
-                                const double rvMag = glm::length(relVelInertial);
-                                if (rvMag > 1e-3) {
-                                    glm::dvec3 V = relVelInertial / rvMag;
-                                    if (relVelAttMode == M::RelVelMinus) V = -V;
-
-                                    // Up reference: current +Y body projected ⊥ to V.
-                                    // This minimises roll during transition.
-                                    glm::dvec3 upRef = att * glm::dvec3(0, 1, 0);
-                                    upRef -= glm::dot(upRef, V) * V;
-                                    if (glm::length(upRef) < 0.1) {
-                                        // V nearly parallel to current up — use current +Z
-                                        upRef = att * glm::dvec3(0, 0, 1);
-                                        upRef -= glm::dot(upRef, V) * V;
-                                    }
-                                    upRef = glm::normalize(upRef);
-                                    glm::dvec3 right = glm::normalize(glm::cross(V, upRef));
-                                    upRef = glm::normalize(glm::cross(right, V)); // re-ortho
-
-                                    // dmat3 columns = body X, Y, Z expressed in inertial frame.
-                                    autopilot.targetAttitude = glm::quat_cast(glm::dmat3(V, upRef, right));
-                                }
-                                autopilot.omegaFF = glm::dvec3(0.0);  // no feedforward for relative velocity
-                            }
+                            // Update autopilot targets for this frame.
+                            autopilot.updateOrbitalTarget(ship.position(), ship.velocity(), att);
+                            autopilot.updateRelVelTarget(att);
 
                             bool settleClamp = false;
                             spacecraft::Wrench apWrench = autopilot.compute(
                                 att, w_body, glm::dvec3(orionModel.inertiaDiag), frameDt, settleClamp);
                             if (settleClamp) {
-                                // Clamp to feedforward rate (zero for killrot, orbital rate for attitude hold).
                                 glm::dvec3 w_ff_inertial = att * autopilot.omegaFF;
                                 ship.setAngularVelocity(w_ff_inertial);
                             }

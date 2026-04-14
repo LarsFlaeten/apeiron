@@ -94,6 +94,26 @@ struct Autopilot {
     // Caller should reset mode to Off when this is true.
     bool nullVDone = false;
 
+    // ---------------------------------------------------------------------------
+    // Target update helpers — call once per frame before compute().
+    // ---------------------------------------------------------------------------
+
+    // For Prograde / Retrograde / NormalPlus / NormalMinus:
+    // Computes targetAttitude (body→inertial) and omegaFF from the ship's
+    // current orbital state.  No-op if mode is not one of those four.
+    //   r   — geocentric position, km
+    //   v   — inertial velocity,   km/s
+    //   att — current body→inertial quaternion
+    void updateOrbitalTarget(const glm::dvec3& r, const glm::dvec3& v,
+                             const glm::dquat& att);
+
+    // For RelVelPlus / RelVelMinus (primary or secondary alongside NullV):
+    // Builds targetAttitude from relVelBody (must be set by caller first).
+    // Zeros omegaFF.  No-op if neither mode applies.
+    //   att — current body→inertial quaternion
+    void updateRelVelTarget(const glm::dquat& att);
+
+    // ---------------------------------------------------------------------------
     // Compute the desired wrench.
     // currentAttitude: current body→inertial quaternion (used by attitude hold).
     // omega_body:      body-frame angular velocity, rad/s.

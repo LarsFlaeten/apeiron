@@ -2,8 +2,84 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace spacecraft {
+
+void Autopilot::updateOrbitalTarget(const glm::dvec3& r, const glm::dvec3& v,
+                                    const glm::dquat& att)
+{
+    using M = AutopilotMode;
+    if (mode != M::Prograde   && mode != M::Retrograde &&
+        mode != M::NormalPlus && mode != M::NormalMinus)
+        return;
+
+    const double vMag = glm::length(v);
+    const double hMag = glm::length(glm::cross(r, v));
+    if (vMag < 1e-9 || hMag < 1e-6) return;
+
+    const glm::dvec3 T =  glm::normalize(v);                  // prograde
+    const glm::dvec3 N =  glm::normalize(glm::cross(r, v));   // orbit normal
+    const glm::dvec3 R =  glm::cross(T, N);                   // radial outward
+
+    // dmat3 columns = body +X, +Y, +Z expressed in inertial frame.
+    // Prograde:   nose=T,  up=-R (nadir),  right= N
+    // Retrograde: nose=-T, up= R (zenith), right= N
+    // Normal+:    nose=N,  up= T,          right=-R
+    // Normal-:    nose=-N, up=-T,          right=-R
+    switch (mode) {
+        case M::Prograde:
+            targetAttitude = glm::quat_cast(glm::dmat3( T, -R,  N)); break;
+        case M::Retrograde:
+            targetAttitude = glm::quat_cast(glm::dmat3(-T,  R,  N)); break;
+        case M::NormalPlus:
+            targetAttitude = glm::quat_cast(glm::dmat3( N,  T, -R)); break;
+        case M::NormalMinus:
+            targetAttitude = glm::quat_cast(glm::dmat3(-N, -T, -R)); break;
+        default: break;
+    }
+
+    // Feedforward: orbital angular velocity ω = (r × v) / |r|²
+    // Prograde/Retrograde: prograde direction rotates once per orbit → needs ff.
+    // NormalPlus/NormalMinus: orbit normal is inertially fixed (no precession) →
+    //   zero feedforward; applying it introduces a spurious rate error and oscillation.
+    if (mode == M::Prograde || mode == M::Retrograde) {
+        glm::dvec3 omegaOrb = glm::cross(r, v) / glm::dot(r, r);
+        omegaFF = glm::dvec3(glm::conjugate(att) * omegaOrb);
+    } else {
+        omegaFF = glm::dvec3(0.0);
+    }
+}
+
+void Autopilot::updateRelVelTarget(const glm::dquat& att)
+{
+    using M = AutopilotMode;
+    const M relVelMode = (mode == M::RelVelPlus || mode == M::RelVelMinus)
+                         ? mode : secondaryMode;
+    if (relVelMode != M::RelVelPlus && relVelMode != M::RelVelMinus)
+        return;
+
+    const glm::dvec3 relVelInertial = att * relVelBody;
+    const double rvMag = glm::length(relVelInertial);
+    if (rvMag < 1e-3) return;
+
+    glm::dvec3 V = relVelInertial / rvMag;
+    if (relVelMode == M::RelVelMinus) V = -V;
+
+    // Up reference: current +Y body projected ⊥ to V (minimises roll during transition).
+    glm::dvec3 upRef = att * glm::dvec3(0, 1, 0);
+    upRef -= glm::dot(upRef, V) * V;
+    if (glm::length(upRef) < 0.1) {
+        upRef = att * glm::dvec3(0, 0, 1);
+        upRef -= glm::dot(upRef, V) * V;
+    }
+    upRef = glm::normalize(upRef);
+    glm::dvec3 right = glm::normalize(glm::cross(V, upRef));
+    upRef = glm::normalize(glm::cross(right, V));  // re-orthogonalise
+
+    targetAttitude = glm::quat_cast(glm::dmat3(V, upRef, right));
+    omegaFF        = glm::dvec3(0.0);
+}
 
 Wrench Autopilot::compute(const glm::dquat& currentAttitude,
                           const glm::dvec3& omega_body,
