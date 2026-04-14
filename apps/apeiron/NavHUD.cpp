@@ -105,6 +105,7 @@ void NavHUD::render(const Spacecraft&                              ship,
     const ImU32 kHudGreen  = IM_COL32(  0, 210,  75, 180);
     const ImU32 kHudYellow = IM_COL32(220, 200,   0, 210);
     const ImU32 kCyan      = IM_COL32(  0, 200, 255, 200);
+    const ImU32 kViolet    = IM_COL32(180, 100, 255, 200);
 
     constexpr float kEdgeMargin = 28.0f;  // px inset from window edge for clamping
 
@@ -139,16 +140,41 @@ void NavHUD::render(const Spacecraft&                              ship,
         dl->AddLine({p.x - d, p.y - d}, {p.x + d, p.y + d}, col, 1.5f);
         dl->AddLine({p.x + d, p.y - d}, {p.x - d, p.y + d}, col, 1.5f);
     };
+    // Orbit normal markers: circle + center dot (N+), circle + inner ring (N-).
+    auto drawNormalPlus = [&](ImVec2 p, ImU32 col) {
+        constexpr float r = 14.0f;
+        dl->AddCircle(p, r, col, 0, 1.5f);
+        dl->AddCircleFilled(p, 3.5f, col);
+        dl->AddText({p.x + r + 4.0f, p.y - 6.0f}, col, "N+");
+    };
+    auto drawNormalMinus = [&](ImVec2 p, ImU32 col) {
+        constexpr float r = 14.0f;
+        dl->AddCircle(p, r, col, 0, 1.5f);
+        dl->AddCircle(p, 5.0f, col, 0, 1.5f);
+        dl->AddText({p.x + r + 4.0f, p.y - 6.0f}, col, "N-");
+    };
 
     // ==================================================================
     if (nav.navMode == NavMode::Orbit) {
-        // ---- Orbit: prograde / retrograde ----
-        if (glm::length(ship.velocity()) > 1e-9) {
-            glm::vec3 pgDir = glm::normalize(glm::vec3(ship.velocity()));
+        // ---- Orbit: prograde / retrograde / normal+/normal- ----
+        const glm::dvec3 vel  = ship.velocity();
+        const glm::dvec3 pos  = ship.position();
+        if (glm::length(vel) > 1e-9) {
+            glm::vec3 pgDir = glm::normalize(glm::vec3(vel));
             auto pg  = projectDir( pgDir);
             auto ret = projectDir(-pgDir);
             if (pg.onScreen(W, H))  drawPrograde ({pg.sx,  pg.sy},  kHudYellow);
             if (ret.onScreen(W, H)) drawRetrograde({ret.sx, ret.sy}, kHudYellow);
+
+            // Orbit normal markers (always shown in orbit mode when normal is defined).
+            glm::dvec3 h = glm::cross(pos, vel);
+            if (glm::length(h) > 1e-12) {
+                glm::vec3 normDir = glm::normalize(glm::vec3(h));
+                auto np  = projectDir( normDir);
+                auto nm  = projectDir(-normDir);
+                if (np.onScreen(W, H))  drawNormalPlus ({np.sx,  np.sy},  kViolet);
+                if (nm.onScreen(W, H))  drawNormalMinus({nm.sx,  nm.sy},  kViolet);
+            }
         }
     } else {
         // ==============================================================
