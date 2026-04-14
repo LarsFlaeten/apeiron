@@ -32,10 +32,15 @@ void Autopilot::updateOrbitalTarget(const glm::dvec3& r, const glm::dvec3& v,
             targetAttitude = glm::quat_cast(glm::dmat3( T, -R,  N)); break;
         case M::Retrograde:
             targetAttitude = glm::quat_cast(glm::dmat3(-T,  R,  N)); break;
+        // Normal+/Normal-: pure pitch from Prograde/Retrograde — no roll.
+        // Keep up(+Y) = nadir(-R) identical to Prograde so the only rotation
+        // is pitch (nose sweeps T → N while +Y stays nadir).
+        //   Normal+: nose=N, up=-R, right=-T   (cross(N,-R) = -(N×R) = -T ✓)
+        //   Normal-: nose=-N, up=-R, right=+T   (cross(-N,-R) = N×R = T ✓)
         case M::NormalPlus:
-            targetAttitude = glm::quat_cast(glm::dmat3( N,  T, -R)); break;
+            targetAttitude = glm::quat_cast(glm::dmat3( N, -R, -T)); break;
         case M::NormalMinus:
-            targetAttitude = glm::quat_cast(glm::dmat3(-N, -T, -R)); break;
+            targetAttitude = glm::quat_cast(glm::dmat3(-N, -R,  T)); break;
         default: break;
     }
 
@@ -241,14 +246,16 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
         return w;
     }
 
-    // Torque direction: parabolic switch along error axis + cross-axis damping.
+    // Torque direction: bang-bang along error axis, blended with cross-axis damping.
+    // The combined direction is normalised so the allocator is always saturated,
+    // delivering exactly rcsAuthorityNm along whatever direction it can best achieve.
+    // alpha = rcsAuthorityNm / I_eff is therefore the correct braking-distance estimate
+    // for a pure single-axis slew (omega_perp = 0, |tau_dir| = 1).
     glm::dvec3 tau_dir = std::copysign(1.0, s) * error_axis
                        - KdAtt * omega_perp;
     const double tMag = glm::length(tau_dir);
     if (tMag < 1e-9) return w;
 
-    // Bang-bang: saturate allocator.
-    // Flag as large slew only when well outside the fine-correction band.
     inLargeSlew = (error_angle > 10.0 * attFireThreshold);
     glm::dvec3 tau = (maxTorqueNm / tMag) * tau_dir;
     w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
