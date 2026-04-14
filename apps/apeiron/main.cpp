@@ -1198,14 +1198,18 @@ int main(int argc, char* argv[])
                         }
 
                         // Allocation strategy:
-                        //  • Main engine (SPACE): full matrix — needs all thrusters.
-                        //  • Large autopilot slew: full matrix — needs aux thrusters for authority.
+                        //  • Main engine (SPACE) firing: two-pass solve —
+                        //      pass 1: full matrix for thrust only (desired[0..2], zero torque)
+                        //              → main engine fires, no aux used for torque
+                        //      pass 2: RCS-only for attitude torque (desired[3..5], zero force)
+                        //              → RCS corrects attitude without involving aux thrusters
+                        //    Splitting avoids aux thrusters being pulled in to assist torque
+                        //    during a main-engine burn (which destabilises prograde hold).
+                        //  • Large autopilot slew (no main engine): full matrix — needs aux
+                        //    thrusters for large-angle authority.
                         //  • Everything else (WASD, small AP corrections): RCS-only.
-                        //    This ensures lateral/retrograde translations never route through
-                        //    the main engine, and aux thrusters stay quiet during fine control.
-                        // Docking attitude modes (RelVelPlus/Minus, NullV) always stay
-                        // on RCS-only — aux thrusters cause too much instability at
-                        // close range.  Aux is only used for large orbital slews.
+                        // Docking attitude modes always RCS-only — aux thrusters cause
+                        // instability at close range.
                         using M2 = spacecraft::AutopilotMode;
                         const bool isDockingAttMode =
                             autopilot.mode == M2::RelVelPlus  ||
@@ -1213,10 +1217,30 @@ int main(int argc, char* argv[])
                             autopilot.mode == M2::NullV       ||
                             autopilot.secondaryMode == M2::RelVelPlus ||
                             autopilot.secondaryMode == M2::RelVelMinus;
-                        if (mainEngineKey || (!isDockingAttMode && autopilot.active() && autopilot.inLargeSlew))
+                        if (mainEngineKey) {
+                            // Pass 1: thrust only through full matrix → sets main engine throttle.
+                            spacecraft::Wrench thrustOnly{};
+                            thrustOnly[0] = desired[0];
+                            thrustOnly[1] = desired[1];
+                            thrustOnly[2] = desired[2];
+                            orionModel.solveAllocation(thrustOnly);
+                            // Save main engine throttle — pass 2 zeros all throttles first.
+                            const float mainThrottle = orionModel.thrusters.empty()
+                                                       ? 0.0f : orionModel.thrusters[0].throttle;
+                            // Pass 2: attitude torque through RCS only.
+                            spacecraft::Wrench torqueOnly{};
+                            torqueOnly[3] = desired[3];
+                            torqueOnly[4] = desired[4];
+                            torqueOnly[5] = desired[5];
+                            orionModel.solveAllocationRcsOnly(torqueOnly);
+                            // Restore main engine throttle (aux thrusters stay zero).
+                            if (!orionModel.thrusters.empty())
+                                orionModel.thrusters[0].throttle = mainThrottle;
+                        } else if (!isDockingAttMode && autopilot.active() && autopilot.inLargeSlew) {
                             orionModel.solveAllocation(desired);
-                        else
+                        } else {
                             orionModel.solveAllocationRcsOnly(desired);
+                        }
                         orionModel.stepPWM(frameDt);
                         glm::vec3 F{}, T{};
                         orionModel.accumulateWrench(F, T);
@@ -1821,6 +1845,7 @@ int main(int argc, char* argv[])
                 orbitalMFD.update(shipRelRef, currentEt, refBody.mu, refBody.radiusKm);
                 // Feed geocentric state to TransferMFD departure page.
                 transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
+                transferMFD.updateBurnParams(mainEngineThrust, shipMass);
                 // Target: TGT index 0 = ISS (spacecraft[issIdx]).
                 if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
@@ -1925,6 +1950,7 @@ int main(int argc, char* argv[])
                 orbitalMFD.update(shipRelRef, currentEt,
                                   refBody.mu, refBody.radiusKm);
                 transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
+                transferMFD.updateBurnParams(mainEngineThrust, shipMass);
                 if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
                     orbitalMFD.updateTarget(
