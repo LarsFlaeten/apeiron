@@ -76,7 +76,7 @@ void OrbitDiagram::render(ImDrawList* dl, ImVec2 origin, ImVec2 size,
     if (viewRot) {
         const ImVec2 br = { origin.x + size.x, origin.y + size.y };
         if (ImGui::IsMouseHoveringRect(origin, br)) {
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 const ImVec2 d  = ImGui::GetIO().MouseDelta;
                 const double dx = d.x * 0.006;
                 const double dy = d.y * 0.006;
@@ -86,7 +86,7 @@ void OrbitDiagram::render(ImDrawList* dl, ImVec2 origin, ImVec2 size,
                     *viewRot = Rx * Ry * *viewRot;
                 }
             }
-            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right))
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                 *viewRot = glm::dmat3(1.0);
         }
     }
