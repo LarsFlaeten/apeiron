@@ -1194,8 +1194,17 @@ int main(int argc, char* argv[])
                                     default: break;
                                 }
                                 // Feedforward: orbital angular velocity (r × v) / |r|²
-                                glm::dvec3 omegaOrb = glm::cross(r, v) / glm::dot(r, r);
-                                autopilot.omegaFF = glm::dvec3(glm::conjugate(att) * omegaOrb);
+                                // Only applies to Prograde/Retrograde — the prograde direction
+                                // rotates once per orbit and needs active feedforward to track.
+                                // The orbit normal N is inertially fixed (for non-precessing
+                                // orbits) so NormalPlus/NormalMinus require zero feedforward;
+                                // applying it causes constant rate error and oscillation.
+                                if (autopilot.mode == M::Prograde || autopilot.mode == M::Retrograde) {
+                                    glm::dvec3 omegaOrb = glm::cross(r, v) / glm::dot(r, r);
+                                    autopilot.omegaFF = glm::dvec3(glm::conjugate(att) * omegaOrb);
+                                } else {
+                                    autopilot.omegaFF = glm::dvec3(0.0);
+                                }
                             }
 
                             // RelVelPlus/Minus: point nose along/against relative velocity.
