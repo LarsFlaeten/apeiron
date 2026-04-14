@@ -984,6 +984,42 @@ int main(int argc, char* argv[])
 
         // Autopilot.
         spacecraft::Autopilot autopilot;
+
+        // Calibrate rcsAuthorityNm from actual thruster geometry so the
+        // parabolic braking-distance estimate in the bang-bang controller
+        // matches what the RCS system actually delivers.
+        //
+        // Saturate a torque demand on each axis, solve RCS-only, then compute
+        // the resulting torque analytically from throttle × thrustN × moment arm.
+        // This mirrors simulateRcsForce() in SpacecraftModel.cpp — critically,
+        // it does NOT use t.firing (set by stepPWM), which would give zero here.
+        if (!orionModel.thrusters.empty()) {
+            double minAuth = std::numeric_limits<double>::max();
+            for (int axis = 0; axis < 3; ++axis) {
+                spacecraft::Wrench tw{};
+                tw[3 + axis] = 1.0e9;
+                orionModel.solveAllocationRcsOnly(tw);
+
+                double auth = 0.0;
+                for (const auto& t : orionModel.thrusters) {
+                    if (t.throttle < 1e-6f) continue;
+                    glm::vec3 arm    = t.position - orionModel.centerOfMass;
+                    glm::vec3 torque = glm::cross(arm, t.direction * t.thrustN);
+                    auth += static_cast<double>(torque[axis]) * t.throttle;
+                }
+                auth = std::abs(auth);
+                if (auth > 1.0) minAuth = std::min(minAuth, auth);
+            }
+            for (auto& t : orionModel.thrusters) t.throttle = 0.0f;
+            if (minAuth < std::numeric_limits<double>::max()) {
+                autopilot.rcsAuthorityNm = minAuth;
+                // maxTorqueNm is only used for the direction of tau, not the switch
+                // calculation.  Keep it larger than rcsAuthorityNm so the allocator
+                // is always saturated and delivers exactly rcsAuthorityNm.
+                autopilot.maxTorqueNm = minAuth * 10.0;
+            }
+        }
+
         windowState.autopilot     = &autopilot;
         windowState.inspectIdx    = &inspectIdx;
         windowState.numSpacecraft = static_cast<int>(spacecraft.size());
@@ -1198,46 +1234,36 @@ int main(int argc, char* argv[])
                         }
 
                         // Allocation strategy:
-                        //  • Main engine (SPACE) firing: two-pass solve —
-                        //      pass 1: full matrix for thrust only (desired[0..2], zero torque)
-                        //              → main engine fires, no aux used for torque
-                        //      pass 2: RCS-only for attitude torque (desired[3..5], zero force)
-                        //              → RCS corrects attitude without involving aux thrusters
-                        //    Splitting avoids aux thrusters being pulled in to assist torque
-                        //    during a main-engine burn (which destabilises prograde hold).
-                        //  • Large autopilot slew (no main engine): full matrix — needs aux
-                        //    thrusters for large-angle authority.
-                        //  • Everything else (WASD, small AP corrections): RCS-only.
-                        // Docking attitude modes always RCS-only — aux thrusters cause
-                        // instability at close range.
-                        using M2 = spacecraft::AutopilotMode;
-                        const bool isDockingAttMode =
-                            autopilot.mode == M2::RelVelPlus  ||
-                            autopilot.mode == M2::RelVelMinus ||
-                            autopilot.mode == M2::NullV       ||
-                            autopilot.secondaryMode == M2::RelVelPlus ||
-                            autopilot.secondaryMode == M2::RelVelMinus;
+                        //
+                        // Attitude control (autopilot or manual rotation keys) is ALWAYS
+                        // RCS-only.  Aux thrusters must never fire for attitude because
+                        // they produce significant net linear acceleration (they are not
+                        // arranged symmetrically for pure torque), which destabilises
+                        // prograde hold and contaminates the trajectory during burns.
+                        //
+                        // Main engine (SPACE): two-pass split —
+                        //   pass 1: full matrix for forward thrust → main engine throttle set
+                        //   pass 2: RCS-only for attitude correction → aux stay zero
+                        //   then restore main engine throttle (pass 2 zeroed it)
+                        //
+                        // Manual WASD translation: RCS-only (same reason).
                         if (mainEngineKey) {
-                            // Pass 1: thrust only through full matrix → sets main engine throttle.
+                            // Pass 1: forward thrust via full matrix.
                             spacecraft::Wrench thrustOnly{};
                             thrustOnly[0] = desired[0];
                             thrustOnly[1] = desired[1];
                             thrustOnly[2] = desired[2];
                             orionModel.solveAllocation(thrustOnly);
-                            // Save main engine throttle — pass 2 zeros all throttles first.
                             const float mainThrottle = orionModel.thrusters.empty()
                                                        ? 0.0f : orionModel.thrusters[0].throttle;
-                            // Pass 2: attitude torque through RCS only.
+                            // Pass 2: attitude torque via RCS only.
                             spacecraft::Wrench torqueOnly{};
                             torqueOnly[3] = desired[3];
                             torqueOnly[4] = desired[4];
                             torqueOnly[5] = desired[5];
                             orionModel.solveAllocationRcsOnly(torqueOnly);
-                            // Restore main engine throttle (aux thrusters stay zero).
                             if (!orionModel.thrusters.empty())
                                 orionModel.thrusters[0].throttle = mainThrottle;
-                        } else if (!isDockingAttMode && autopilot.active() && autopilot.inLargeSlew) {
-                            orionModel.solveAllocation(desired);
                         } else {
                             orionModel.solveAllocationRcsOnly(desired);
                         }
@@ -1686,13 +1712,14 @@ int main(int argc, char* argv[])
 
                 // Autopilot tuning.
                 ImGui::Text("Autopilot");
+                ImGui::TextDisabled("  (calibrated from thruster geometry at startup)");
                 ImGui::SliderScalar("Max torque (N·m)", ImGuiDataType_Double,
                     &autopilot.maxTorqueNm,
-                    (const double[]){1000.0}, (const double[]){50'000.0},
+                    (const double[]){1000.0}, (const double[]){500'000.0},
                     "%.0f", ImGuiSliderFlags_Logarithmic);
                 ImGui::SliderScalar("RCS authority (N·m)", ImGuiDataType_Double,
                     &autopilot.rcsAuthorityNm,
-                    (const double[]){100.0}, (const double[]){10'000.0},
+                    (const double[]){100.0}, (const double[]){50'000.0},
                     "%.0f", ImGuiSliderFlags_Logarithmic);
                 ImGui::SliderScalar("Kd att (s)", ImGuiDataType_Double,
                     &autopilot.KdAtt,

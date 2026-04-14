@@ -206,11 +206,13 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
                        + ea2.y * inertiaDiag.y
                        + ea2.z * inertiaDiag.z;
 
-    // Max angular acceleration available — must use the torque that is *actually fired*
-    // (maxTorqueNm) so the parabolic braking-distance estimate matches reality.
-    // Using rcsAuthorityNm here would underestimate deceleration by maxTorqueNm/rcsAuthorityNm
-    // (≈4×), causing the switch to trip too early, overshoot, and oscillate.
-    const double alpha = maxTorqueNm / std::max(I_eff, 1.0);
+    // Max angular acceleration available.
+    // MUST equal the torque that is actually delivered when bang-bang fires in the
+    // braking direction — so that the parabolic braking-distance estimate is accurate.
+    // rcsAuthorityNm is calibrated at startup from actual thruster geometry (see main.cpp).
+    // Using maxTorqueNm (the *requested* torque) would underestimate the effect if
+    // the allocator delivers less than requested, causing it to brake too late → overshoot.
+    const double alpha = rcsAuthorityNm / std::max(I_eff, 1.0);
 
     // Parabolic switch value: positive → accelerate toward target,
     // negative → brake.  omega_along * |omega_along| / (2α) is the
