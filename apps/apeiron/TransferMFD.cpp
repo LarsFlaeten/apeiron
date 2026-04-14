@@ -878,6 +878,39 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     double dvTMI = vPeri - vCirc;
 
     // -----------------------------------------------------------------------
+    // Burn timing
+    // -----------------------------------------------------------------------
+    // Time from current TA to burn TA via Kepler's equation (elliptic only).
+    double timeToBurnPoint = 0.0;
+    double orbPeriod       = 0.0;
+    if (ecc < 1.0 && sma > 0.0) {
+        orbPeriod = 2.0 * M_PI * std::sqrt(sma * sma * sma / mu);
+        auto meanAnom = [&](double ta) -> double {
+            double tanH  = std::tan(ta * 0.5) * std::sqrt((1.0 - ecc) / (1.0 + ecc));
+            double E     = 2.0 * std::atan(tanH);
+            return E - ecc * std::sin(E);
+        };
+        double M_now  = meanAnom(ta_now);
+        double M_burn = meanAnom(burnTA);
+        double dM = M_burn - M_now;
+        if (dM < 0.0) dM += 2.0 * M_PI;   // wrap to next occurrence
+        timeToBurnPoint = dM / (2.0 * M_PI) * orbPeriod;
+    }
+
+    // Burn duration and remaining ΔV.
+    // accel in m/s², dvTMI in km/s → multiply by 1000 for m/s.
+    const double accelMs2    = (m_shipMass > 1.0) ? m_mainThrustN / m_shipMass : 0.97;
+    const double burnDuration = dvTMI * 1000.0 / accelMs2;   // seconds for full burn
+
+    // Live remaining ΔV: vPeri - current speed (km/s). Approaches zero as burn completes.
+    const double currentSpeed = glm::length(m_shipV);         // km/s
+    const double dvRemaining  = std::max(0.0, vPeri - currentSpeed);
+    const double burnRemaining = dvRemaining * 1000.0 / accelMs2; // seconds left
+
+    // Time to start burn = time to burn point - half burn duration (periapsis-centered).
+    const double timeToStartBurn = timeToBurnPoint - burnDuration * 0.5;
+
+    // -----------------------------------------------------------------------
     // HH:MM:SS formatter
     // -----------------------------------------------------------------------
     auto fmtHMS = [](double sec, char* buf, int sz) {
@@ -1061,7 +1094,27 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // Burn + TMI
     add(kCyan,   "BURN  TA %.1f  Alt %.0f km", burnTADeg, altBurn);
     add(kDim,    "TMI  alt %.0f km  [ALT]", rPark - kRE);
-    add(kYellow, " dV %.3f km/s  Vp %.3f  Vc %.3f", dvTMI, vPeri, vCirc);
+    add(kYellow, " dV-TMI %.3f km/s  (Vp %.3f  Vc %.3f)", dvTMI, vPeri, vCirc);
+    {
+        char bufBurn[12], bufStart[12], bufToBurn[12];
+        fmtHMS(burnDuration,    bufBurn,   sizeof(bufBurn));
+        fmtHMS(timeToBurnPoint, bufToBurn, sizeof(bufToBurn));
+        fmtHMS(std::max(0.0, timeToStartBurn), bufStart, sizeof(bufStart));
+        add(kDim,    " accel %.3f m/s²  burn dur %s", accelMs2, bufBurn);
+        add(kGreen,  " T-to-burn-point %s", bufToBurn);
+        add(kYellow, " T-to-ignition   %s  (T-0.5burn)", bufStart);
+    }
+    sep();
+    // Live ΔV remaining — updates in real time as the engine burns.
+    {
+        char bufRem[12];
+        fmtHMS(burnRemaining, bufRem, sizeof(bufRem));
+        ImU32 dvCol = (dvRemaining < 0.001) ? kGreen :
+                      (dvRemaining < dvTMI * 0.1) ? kYellow : kOrange;
+        add(dvCol, "dV-REMAINING %.3f km/s  (%s)", dvRemaining, bufRem);
+        if (dvRemaining < 0.001)
+            add(kGreen, " BURN COMPLETE");
+    }
 
     // Measure max text width
     float maxW = 0.0f;

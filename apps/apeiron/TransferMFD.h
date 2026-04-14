@@ -53,6 +53,13 @@ public:
         m_currentET = currentET;
     }
 
+    // Feed current propulsion parameters — used for burn timing on page 2.
+    void updateBurnParams(double mainThrustN, double massKg)
+    {
+        m_mainThrustN = mainThrustN;
+        m_shipMass    = massKg;
+    }
+
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
     const char* leftLabel (int slot) const override;
@@ -120,4 +127,8 @@ private:
     glm::dvec3 m_shipV     { 0.0 };
     double     m_muEarth   = 398600.4418;
     double     m_currentET = 0.0;
+
+    // Propulsion parameters for burn timing (fed by main.cpp each frame).
+    double     m_mainThrustN = 25700.0;   // N
+    double     m_shipMass    = 26500.0;   // kg
 };
