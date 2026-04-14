@@ -63,8 +63,8 @@ struct Autopilot {
 
     // Attitude hold gains / thresholds
     double KdAtt              = 15.0;    // s — cross-axis rate damping weight
-    double attFireThreshold   = 0.010;   // rad  (~0.57°) — coast if att error below this
-    double rateFireThreshold  = 0.003;   // rad/s (~0.17°/s) — coast if rate error below this
+    double attFireThreshold   = 0.003;   // rad  (~0.17°) — coast if att error below this
+    double rateFireThreshold  = 0.0005;  // rad/s (~0.03°/s) — coast if rate error below this
 
     // Secondary mode — runs alongside NullV.
     // When mode == NullV and secondaryMode == RelVelPlus or RelVelMinus,
