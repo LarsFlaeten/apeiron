@@ -1046,6 +1046,9 @@ int main(int argc, char* argv[])
             auto  now     = std::chrono::steady_clock::now();
             float frameDt = std::chrono::duration<float>(now - prevFrameTime).count();
             prevFrameTime = now;
+            // Cap frameDt so that defocusing / alt-tabbing doesn't produce a multi-second
+            // timestep that blows up the autopilot bang-bang controller or the physics integrator.
+            frameDt = std::min(frameDt, 0.1f);
 
             // --- Orbit camera input (ignored when ImGui is using the mouse) ---
             double mx{}, my{};
@@ -1095,14 +1098,16 @@ int main(int argc, char* argv[])
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
-            // ---- Thruster input (active in Nav view at 1x only) ----
+            // ---- Thruster input (active in Nav/MfdFull/ShipInspect at 1x only) ----
             // Controls are disabled at time acceleration > 1x — thrust at 1000x makes no sense.
+            // Autopilot runs in all three views so switching to MFD fullscreen doesn't freeze it.
             bool mainEngineOn = false;
             glm::dvec3 shipForce(0.0);   // body-frame thrust force (N), hoisted for nav console
             {
                 glm::dvec3 shipTorque(0.0);
 
-                if ((viewMode == ViewMode::Nav || viewMode == ViewMode::ShipInspect)
+                if ((viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull ||
+                     viewMode == ViewMode::ShipInspect)
                     && simSpeedTarget <= 1.0
                     && !ImGui::GetIO().WantCaptureKeyboard) {
 
