@@ -37,8 +37,9 @@ public:
                const glm::dmat3& inertiaKgM2,
                const astro::State& initialState);
 
-    // Add a gravitational attractor (position in km, GM in km³/s²).
+    // Add / clear gravitational attractors (position in km, GM in km³/s²).
     void addAttractor(const astro::Attractor& a);
+    void clearAttractors();
 
     // Set instantaneous applied force/torque (body frame, SI units).
     // Call once per frame before the physics sub-step loop.  Both default to zero.

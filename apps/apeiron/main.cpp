@@ -301,9 +301,42 @@ int main(int argc, char* argv[])
         // Coordinate system: Earth-centred ECLIPJ2000 (km, km/s).
         // =================================================================
 
-        // Earth's GM (km³/s²) and attractor at origin of ECI frame.
+        // Earth's GM (km³/s²) — always needed for orbit calculations.
         constexpr double kGM_Earth = 398600.4418;
-        astro::Attractor earthAttractor{ glm::dvec3(0.0), kGM_Earth };
+
+        // Gravity bodies: all scenario bodies that have a GM in SPICE.
+        // Positions are updated from SPICE each frame; attractors are rebuilt then.
+        struct GravBody {
+            std::string name;
+            SpiceInt    naifId;
+            double      gm;       // km³/s²
+            double      soiKm;    // Hill-sphere radius (approx), km
+            glm::dvec3  posECI;   // geocentric ECLIPJ2000, km  (updated each frame)
+        };
+        std::vector<GravBody> gravBodies;
+        {
+            for (auto& bi : bodyInfos) {
+                const std::string& name = bi.node->naifName();
+                // bodn2c_c is safe to call raw: it signals failure via the found
+                // output flag rather than the SPICE error system.
+                SpiceInt id; SpiceBoolean found;
+                bodn2c_c(name.c_str(), &id, &found);
+                if (!found) continue;
+                // Use the astro helper which calls checkError() internally.
+                double gm = 0.0;
+                try {
+                    astro::Spice().getPlanetaryConstants(
+                        static_cast<int>(id), "GM", gm);
+                } catch (const astro::SpiceException&) {
+                    continue;  // body has no GM in the loaded kernels — skip
+                }
+                if (gm <= 0.0) continue;
+                gravBodies.push_back({ name, id, gm, 0.0, glm::dvec3(0.0) });
+            }
+        }
+        // Track which body currently dominates gravity for the player spacecraft.
+        // Start assuming Earth.
+        std::string dominantBodyName = "EARTH";
 
         // Circular LEO at 400 km altitude (r = earthRadius + 400 km).
         const double orbitRadius = static_cast<double>(earthRadius) + 400.0;
@@ -404,7 +437,7 @@ int main(int argc, char* argv[])
 
         std::vector<std::unique_ptr<Spacecraft>> spacecraft;
         spacecraft.push_back(std::make_unique<Spacecraft>(shipMass, shipInertia, shipState));
-        spacecraft[0]->addAttractor(earthAttractor);
+        // Attractors are set per-frame from gravBodies below.
 
         // Index of the spacecraft the player controls / camera follows.
         const size_t playerIdx = 0;
@@ -430,7 +463,7 @@ int main(int argc, char* argv[])
                     glm::dvec3(0, 0, aiVehicle.inertiaDiag.z))
                 : glm::dmat3(1.0e10);
             spacecraft.push_back(std::make_unique<Spacecraft>(issM, issInertia, issSt));
-            spacecraft[issIdx]->addAttractor(earthAttractor);
+            // Attractors set per-frame.
         }
 
         // MFD apps — updated and rendered every frame in Nav view.
@@ -1133,6 +1166,75 @@ int main(int argc, char* argv[])
 
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
+
+            // ---- Per-frame gravity update ----------------------------------------
+            // Fetch geocentric positions of all gravity bodies from SPICE and rebuild
+            // attractors on every spacecraft.  Also determine the dominant body
+            // (highest GM/r² at the player position) for OrbitalMFD and autopilot.
+            {
+                const double etVal = currentEt.getETValue();
+                auto& player = *spacecraft[playerIdx];
+
+                // Fetch positions: Earth is always at origin of our ECI frame.
+                // Other bodies: query geocentric state from SPICE.
+                for (auto& gb : gravBodies) {
+                    if (gb.name == "EARTH") {
+                        gb.posECI = glm::dvec3(0.0);
+                    } else {
+                        astro::PosState s;
+                        astro::Spice().getRelativeGeometricState(
+                            static_cast<int>(gb.naifId), 399,
+                            currentEt, s);
+                        gb.posECI = glm::dvec3(s.r.x, s.r.y, s.r.z);
+                    }
+                }
+
+                // Rebuild attractors on all spacecraft.
+                for (auto& sc : spacecraft) {
+                    sc->clearAttractors();
+                    for (const auto& gb : gravBodies) {
+                        sc->addAttractor({ gb.posECI, gb.gm });
+                    }
+                }
+
+                // Dominant body: highest GM / r² at player position.
+                {
+                    glm::dvec3 playerPos = player.position();
+                    double     bestAccel = 0.0;
+                    std::string bestName = dominantBodyName;
+                    for (const auto& gb : gravBodies) {
+                        glm::dvec3 rel  = gb.posECI - playerPos;
+                        double     r2   = glm::dot(rel, rel);
+                        double     accel = (r2 > 1.0) ? gb.gm / r2 : 0.0;
+                        if (accel > bestAccel) {
+                            bestAccel = accel;
+                            bestName  = gb.name;
+                        }
+                    }
+
+                    if (bestName != dominantBodyName) {
+                        dominantBodyName = bestName;
+
+                        // Update OrbitalMFD reference body.
+                        // GM is already in gravBodies; fetch radius via astro helper.
+                        for (const auto& gb : gravBodies) {
+                            if (gb.name != dominantBodyName) continue;
+                            double radiusKm = 0.0;
+                            try {
+                                astro::Vec3 radii;
+                                astro::Spice().getPlanetaryConstants(
+                                    static_cast<int>(gb.naifId), "RADII", radii);
+                                radiusKm = radii.x;  // equatorial
+                            } catch (const astro::SpiceException&) {}
+                            refBody = { dominantBodyName, gb.gm, radiusKm,
+                                        static_cast<SpiceInt>(gb.naifId) };
+                            orbitalMFD.setContext(refBody.name.c_str(), "");
+                            break;
+                        }
+                    }
+                }
+            }
+            // -----------------------------------------------------------------------
 
             // ---- Thruster input (active in Nav/MfdFull/ShipInspect at 1x only) ----
             // Controls are disabled at time acceleration > 1x — thrust at 1000x makes no sense.
@@ -1847,27 +1949,31 @@ int main(int argc, char* argv[])
                 {
                     std::string pending = orbitalMFD.consumePendingRef();
                     if (!pending.empty()) {
-                        SpiceInt    id;  SpiceBoolean found;
+                        SpiceInt id; SpiceBoolean found;
                         bodn2c_c(pending.c_str(), &id, &found);
                         if (found) {
-                            SpiceInt    n;
-                            SpiceDouble muArr[1], radii[3];
-                            bodvrd_c(pending.c_str(), "GM",    1, &n, muArr);
-                            bodvrd_c(pending.c_str(), "RADII", 3, &n, radii);
-                            refBody = { pending, muArr[0], radii[0], id };
-                            orbitalMFD.setContext(refBody.name.c_str(), "");
+                            try {
+                                double      gm = 0.0;
+                                astro::Vec3 radii;
+                                astro::Spice().getPlanetaryConstants(
+                                    static_cast<int>(id), "GM", gm);
+                                astro::Spice().getPlanetaryConstants(
+                                    static_cast<int>(id), "RADII", radii);
+                                refBody = { pending, gm, radii.x, id };
+                                orbitalMFD.setContext(refBody.name.c_str(), "");
+                            } catch (const astro::SpiceException&) {}
                         }
                     }
                 }
 
                 astro::PosState shipRelRef(ship.position(), ship.velocity());
                 if (refBody.naifId != 399) {
-                    SpiceDouble refState[6], lt;
-                    spkgeo_c(refBody.naifId, currentEt.getETValue(),
-                             "ECLIPJ2000", 399, refState, &lt);
+                    astro::PosState refState;
+                    astro::Spice().getRelativeGeometricState(
+                        static_cast<int>(refBody.naifId), 399, currentEt, refState);
                     shipRelRef = astro::PosState(
-                        ship.position() - glm::dvec3(refState[0], refState[1], refState[2]),
-                        ship.velocity() - glm::dvec3(refState[3], refState[4], refState[5]));
+                        ship.position() - glm::dvec3(refState.r.x, refState.r.y, refState.r.z),
+                        ship.velocity() - glm::dvec3(refState.v.x, refState.v.y, refState.v.z));
                 }
                 orbitalMFD.update(shipRelRef, currentEt, refBody.mu, refBody.radiusKm);
                 // Feed geocentric state to TransferMFD departure page.

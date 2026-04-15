@@ -22,6 +22,11 @@ void Spacecraft::addAttractor(const astro::Attractor& a)
     m_ode.addAttractor(a);
 }
 
+void Spacecraft::clearAttractors()
+{
+    m_ode.clearAttractors();
+}
+
 void Spacecraft::setBodyForce(const glm::dvec3& forceN)
 {
     m_baseForceN = forceN;
