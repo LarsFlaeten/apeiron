@@ -1192,10 +1192,14 @@ int main(int argc, char* argv[])
                 }
 
                 // Rebuild attractors on all spacecraft.
+                // Non-Earth bodies use tidal=true so that only the differential
+                // tidal acceleration is applied (the indirect correction cancels
+                // the spurious whole-frame pull that would otherwise destroy LEO).
                 for (auto& sc : spacecraft) {
                     sc->clearAttractors();
                     for (const auto& gb : gravBodies) {
-                        sc->addAttractor({ gb.posECI, gb.gm });
+                        const bool isTidal = (gb.name != "EARTH");
+                        sc->addAttractor({ gb.posECI, gb.gm, isTidal });
                     }
                 }
 
