@@ -45,6 +45,91 @@ static glm::dquat tomlToQuat(const toml::array* a)
 }
 
 // ---------------------------------------------------------------------------
+// Helpers: build / parse a [transfer_plan] table in isolation.
+// ---------------------------------------------------------------------------
+static toml::table planToToml(const TransferPlanSnapshot& snap)
+{
+    toml::table tp;
+    const auto& p = snap.params;
+    tp.insert("departure_body", p.departureBody);
+    tp.insert("arrival_body",   p.arrivalBody);
+    tp.insert("central_body",   p.centralBody);
+    tp.insert("t0",             p.t0);
+    tp.insert("t1",             p.t1);
+    tp.insert("tof_min",        p.tofMin);
+    tp.insert("tof_max",        p.tofMax);
+    tp.insert("n_dep",          p.nDep);
+    tp.insert("n_tof",          p.nTof);
+    tp.insert("sel_dep",        snap.selDep);
+    tp.insert("sel_tof",        snap.selTof);
+    tp.insert("park_idx",       snap.parkIdx);
+    return tp;
+}
+
+static void planFromToml(const toml::table& tp, TransferPlanSnapshot& snap)
+{
+    snap.valid = true;
+    auto& p = snap.params;
+    p.departureBody = tp["departure_body"].value_or(399);
+    p.arrivalBody   = tp["arrival_body"]  .value_or(4);
+    p.centralBody   = tp["central_body"]  .value_or(10);
+    p.t0            = tp["t0"]            .value_or(0.0);
+    p.t1            = tp["t1"]            .value_or(0.0);
+    p.tofMin        = tp["tof_min"]       .value_or(0.0);
+    p.tofMax        = tp["tof_max"]       .value_or(0.0);
+    p.nDep          = tp["n_dep"]         .value_or(80);
+    p.nTof          = tp["n_tof"]         .value_or(60);
+    snap.selDep     = tp["sel_dep"]       .value_or(-1);
+    snap.selTof     = tp["sel_tof"]       .value_or(-1);
+    snap.parkIdx    = tp["park_idx"]      .value_or(0);
+}
+
+// ---------------------------------------------------------------------------
+bool savePlanSnapshot(const std::string& path, const TransferPlanSnapshot& snap)
+{
+    if (!snap.valid) {
+        std::cerr << "[SimSave] No valid plan to save\n";
+        return false;
+    }
+    try {
+        std::filesystem::create_directories(
+            std::filesystem::path(path).parent_path());
+
+        toml::table root;
+        root.insert("transfer_plan", planToToml(snap));
+
+        std::ofstream ofs(path);
+        if (!ofs) {
+            std::cerr << "[SimSave] Cannot open '" << path << "' for writing\n";
+            return false;
+        }
+        ofs << root;
+        std::cout << "[SimSave] Plan saved to " << path << "\n";
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "[SimSave] Plan save failed: " << e.what() << "\n";
+        return false;
+    }
+}
+
+bool loadPlanSnapshot(const std::string& path, TransferPlanSnapshot& snap)
+{
+    try {
+        auto tbl = toml::parse_file(path);
+        if (auto* tp = tbl["transfer_plan"].as_table()) {
+            planFromToml(*tp, snap);
+            std::cout << "[SimSave] Plan loaded from " << path << "\n";
+            return true;
+        }
+        std::cerr << "[SimSave] No [transfer_plan] section in " << path << "\n";
+        return false;
+    } catch (const std::exception& e) {
+        std::cerr << "[SimSave] Plan load failed: " << e.what() << "\n";
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 bool saveSimState(const std::string& path, const SimSaveData& data)
 {
     try {
@@ -72,23 +157,8 @@ bool saveSimState(const std::string& path, const SimSaveData& data)
         root.insert("spacecraft", std::move(scArr));
 
         // ---- [transfer_plan] ----
-        if (data.plan.valid) {
-            toml::table tp;
-            const auto& p = data.plan.params;
-            tp.insert("departure_body", p.departureBody);
-            tp.insert("arrival_body",   p.arrivalBody);
-            tp.insert("central_body",   p.centralBody);
-            tp.insert("t0",             p.t0);
-            tp.insert("t1",             p.t1);
-            tp.insert("tof_min",        p.tofMin);
-            tp.insert("tof_max",        p.tofMax);
-            tp.insert("n_dep",          p.nDep);
-            tp.insert("n_tof",          p.nTof);
-            tp.insert("sel_dep",        data.plan.selDep);
-            tp.insert("sel_tof",        data.plan.selTof);
-            tp.insert("park_idx",       data.plan.parkIdx);
-            root.insert("transfer_plan", std::move(tp));
-        }
+        if (data.plan.valid)
+            root.insert("transfer_plan", planToToml(data.plan));
 
         std::ofstream ofs(path);
         if (!ofs) {
@@ -132,22 +202,8 @@ bool loadSimState(const std::string& path, SimSaveData& data)
 
         // ---- [transfer_plan] ----
         data.plan = {};
-        if (auto* tp = tbl["transfer_plan"].as_table()) {
-            data.plan.valid = true;
-            auto& p = data.plan.params;
-            p.departureBody = (*tp)["departure_body"].value_or(399);
-            p.arrivalBody   = (*tp)["arrival_body"]  .value_or(4);
-            p.centralBody   = (*tp)["central_body"]  .value_or(10);
-            p.t0            = (*tp)["t0"]            .value_or(0.0);
-            p.t1            = (*tp)["t1"]            .value_or(0.0);
-            p.tofMin        = (*tp)["tof_min"]       .value_or(0.0);
-            p.tofMax        = (*tp)["tof_max"]       .value_or(0.0);
-            p.nDep          = (*tp)["n_dep"]         .value_or(80);
-            p.nTof          = (*tp)["n_tof"]         .value_or(60);
-            data.plan.selDep  = (*tp)["sel_dep"]     .value_or(-1);
-            data.plan.selTof  = (*tp)["sel_tof"]     .value_or(-1);
-            data.plan.parkIdx = (*tp)["park_idx"]    .value_or(0);
-        }
+        if (auto* tp = tbl["transfer_plan"].as_table())
+            planFromToml(*tp, data.plan);
 
         std::cout << "[SimSave] Loaded from " << path << "\n";
         return true;

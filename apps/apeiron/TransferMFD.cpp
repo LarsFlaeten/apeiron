@@ -142,6 +142,8 @@ const char* TransferMFD::rightLabel(int slot) const
         return "";
     }
     if (m_page == 1) {
+        if (slot == 0) return "SAVE";
+        if (slot == 1) return "LOAD";
         if (slot == 4) return "BURN";
         return "";
     }
@@ -210,6 +212,8 @@ void TransferMFD::onRight(int slot)
         return;
     }
     if (m_page == 1) {
+        if (slot == 0) { m_wantSavePlan = true; return; }
+        if (slot == 1) { m_wantLoadPlan = true; return; }
         if (slot == 4) m_page = 2;
         return;
     }
@@ -683,6 +687,12 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     row(kYellow, "  dV-TMI %.3f km/s", dvTMI);
     if (std::abs(vInfInc) > 0.5)
         row(kOrange, "  inc    %.1f deg above ecl", vInfInc);
+
+    // Plan save/load status (set by main.cpp after file I/O).
+    if (!m_planStatusMsg.empty()) {
+        y += pad;
+        row(IM_COL32(180, 255, 180, 230), "%s", m_planStatusMsg.c_str());
+    }
 
     // ---- Orbit diagram via OrbitDiagram ----
     const float diagH = size.y - (y - origin.y) - pad;
