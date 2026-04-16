@@ -1169,11 +1169,9 @@ int main(int argc, char* argv[])
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
-            // ---- Quicksave / quickload  &  explicit plan save/load ---------------
+            // ---- Quicksave / quickload -----------------------------------------------
             static const std::string kSavePath =
                 std::string(APEIRON_DATA_DIR) + "/saves/quicksave.toml";
-            static const std::string kPlanPath =
-                std::string(APEIRON_DATA_DIR) + "/saves/transfer_plan.toml";
 
             // F5 — quicksave sim state + plan.
             if (ImGui::IsKeyPressed(ImGuiKey_F5, /*repeat=*/false)) {
@@ -1209,25 +1207,6 @@ int main(int argc, char* argv[])
                         transferMFD.restorePlan(sd.plan);
                 }
             }
-            // F6 — save plan only.
-            if (ImGui::IsKeyPressed(ImGuiKey_F6, /*repeat=*/false)
-                || transferMFD.consumeWantSavePlan()) {
-                auto snap = transferMFD.getPlan();
-                bool ok = savePlanSnapshot(kPlanPath, snap);
-                transferMFD.setPlanStatusMsg(ok ? "Plan saved  (F6)" : "Save failed");
-            }
-            // F7 — load plan only (recomputes porkchop grid).
-            if (ImGui::IsKeyPressed(ImGuiKey_F7, /*repeat=*/false)
-                || transferMFD.consumeWantLoadPlan()) {
-                TransferPlanSnapshot snap;
-                if (loadPlanSnapshot(kPlanPath, snap)) {
-                    transferMFD.restorePlan(snap);
-                    transferMFD.setPlanStatusMsg("Plan loaded  (F7)");
-                } else {
-                    transferMFD.setPlanStatusMsg("Load failed — no plan file");
-                }
-            }
-
             // ---- Per-frame gravity update ----------------------------------------
             // Fetch geocentric positions of all gravity bodies from SPICE and rebuild
             // attractors on every spacecraft.  Also determine the dominant body

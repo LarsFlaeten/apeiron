@@ -86,13 +86,6 @@ public:
     TransferPlanSnapshot getPlan() const;
     void                 restorePlan(const TransferPlanSnapshot& snap);
 
-    // Polled by main.cpp each frame to trigger file I/O outside the widget.
-    bool consumeWantSavePlan() { bool v = m_wantSavePlan; m_wantSavePlan = false; return v; }
-    bool consumeWantLoadPlan() { bool v = m_wantLoadPlan; m_wantLoadPlan = false; return v; }
-
-    // Status message set by main.cpp after save/load completes (shown on page 1).
-    void setPlanStatusMsg(const std::string& msg) { m_planStatusMsg = msg; }
-
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
     const char* leftLabel (int slot) const override;
@@ -172,8 +165,4 @@ private:
     glm::dvec3 m_shipHelioR { 0.0 };
     glm::dvec3 m_shipHelioV { 0.0 };
 
-    // Explicit plan save/load flags — set by button handler, cleared by main.cpp.
-    bool        m_wantSavePlan  = false;
-    bool        m_wantLoadPlan  = false;
-    std::string m_planStatusMsg;          // brief result shown on detail page
 };

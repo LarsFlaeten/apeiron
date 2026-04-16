@@ -85,51 +85,6 @@ static void planFromToml(const toml::table& tp, TransferPlanSnapshot& snap)
 }
 
 // ---------------------------------------------------------------------------
-bool savePlanSnapshot(const std::string& path, const TransferPlanSnapshot& snap)
-{
-    if (!snap.valid) {
-        std::cerr << "[SimSave] No valid plan to save\n";
-        return false;
-    }
-    try {
-        std::filesystem::create_directories(
-            std::filesystem::path(path).parent_path());
-
-        toml::table root;
-        root.insert("transfer_plan", planToToml(snap));
-
-        std::ofstream ofs(path);
-        if (!ofs) {
-            std::cerr << "[SimSave] Cannot open '" << path << "' for writing\n";
-            return false;
-        }
-        ofs << root;
-        std::cout << "[SimSave] Plan saved to " << path << "\n";
-        return true;
-    } catch (const std::exception& e) {
-        std::cerr << "[SimSave] Plan save failed: " << e.what() << "\n";
-        return false;
-    }
-}
-
-bool loadPlanSnapshot(const std::string& path, TransferPlanSnapshot& snap)
-{
-    try {
-        auto tbl = toml::parse_file(path);
-        if (auto* tp = tbl["transfer_plan"].as_table()) {
-            planFromToml(*tp, snap);
-            std::cout << "[SimSave] Plan loaded from " << path << "\n";
-            return true;
-        }
-        std::cerr << "[SimSave] No [transfer_plan] section in " << path << "\n";
-        return false;
-    } catch (const std::exception& e) {
-        std::cerr << "[SimSave] Plan load failed: " << e.what() << "\n";
-        return false;
-    }
-}
-
-// ---------------------------------------------------------------------------
 bool saveSimState(const std::string& path, const SimSaveData& data)
 {
     try {

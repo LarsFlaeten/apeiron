@@ -47,7 +47,3 @@ bool saveSimState(const std::string& path, const SimSaveData& data);
 
 // Returns true on success.  On failure data is unchanged.
 bool loadSimState(const std::string& path, SimSaveData& data);
-
-// Save / load just the transfer plan (independent of sim state).
-bool savePlanSnapshot(const std::string& path, const TransferPlanSnapshot& snap);
-bool loadPlanSnapshot(const std::string& path, TransferPlanSnapshot& snap);
