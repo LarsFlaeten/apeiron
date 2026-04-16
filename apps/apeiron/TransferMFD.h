@@ -12,6 +12,19 @@
 #include <string>
 
 // ---------------------------------------------------------------------------
+// Serialisable snapshot of the TransferMFD plan — used by SimSave.
+// Contains just the parameters needed to reconstruct the full display;
+// the porkchop grid and orbit diagram are re-derived on restore.
+// ---------------------------------------------------------------------------
+struct TransferPlanSnapshot {
+    bool                        valid   = false;
+    spacecraft::PorkchopParams  params;       // window / TOF / body config
+    int                         selDep  = -1; // selected column in grid
+    int                         selTof  = -1; // selected row in grid
+    int                         parkIdx = 0;  // parking altitude index
+};
+
+// ---------------------------------------------------------------------------
 // TransferMFD — interplanetary transfer planning display.
 //
 // Page 0 — Porkchop plot  (departure date × TOF grid, colour = total ΔV)
@@ -60,6 +73,19 @@ public:
         m_shipMass    = massKg;
     }
 
+    // Feed current heliocentric ship state (Sun-centred ECLIPJ2000, km / km/s).
+    // Called from main.cpp alongside updateShipState.
+    void updateHelioState(const glm::dvec3& r, const glm::dvec3& v)
+    {
+        m_shipHelioR = r;
+        m_shipHelioV = v;
+    }
+
+    // Save / restore the plan state (used by SimSave).
+    // restorePlan re-resolves the selected cell so the detail page is ready.
+    TransferPlanSnapshot getPlan() const;
+    void                 restorePlan(const TransferPlanSnapshot& snap);
+
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
     const char* leftLabel (int slot) const override;
@@ -71,6 +97,7 @@ private:
     void renderPorkchop (ImDrawList* dl, ImVec2 origin, ImVec2 size);
     void renderDetail   (ImDrawList* dl, ImVec2 origin, ImVec2 size);
     void renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size);
+    void renderCoasting (ImDrawList* dl, ImVec2 origin, ImVec2 size);
 
     // Re-solve Lambert for the selected cell and cache the result.
     void resolveSelected();
@@ -88,7 +115,7 @@ private:
     // ---- Selection ----
     int  m_selDep = -1;
     int  m_selTof = -1;
-    int  m_page   = 0;   // 0 = porkchop, 1 = detail
+    int  m_page   = 0;   // 0 = porkchop, 1 = detail, 2 = departure, 3 = coasting
 
     // ---- Cached detail for selected cell ----
     struct SelDetail {
@@ -121,6 +148,7 @@ private:
     // Persistent view rotations (right-drag to tumble, double-right-click resets).
     glm::dmat3 m_detailViewRot  { 1.0 };   // page 1: heliocentric
     glm::dmat3 m_depViewRot     { 1.0 };   // page 2: geocentric departure
+    glm::dmat3 m_coastViewRot   { 1.0 };   // page 3: heliocentric coasting
 
     // Current ship geocentric state and sim time (fed by main.cpp each frame).
     glm::dvec3 m_shipR     { 0.0 };
@@ -131,4 +159,9 @@ private:
     // Propulsion parameters for burn timing (fed by main.cpp each frame).
     double     m_mainThrustN = 25700.0;   // N
     double     m_shipMass    = 26500.0;   // kg
+
+    // Heliocentric ship state (Sun-centred ECLIPJ2000, km / km/s).
+    // Computed in main.cpp from Earth heliocentric + geocentric ship state.
+    glm::dvec3 m_shipHelioR { 0.0 };
+    glm::dvec3 m_shipHelioV { 0.0 };
 };

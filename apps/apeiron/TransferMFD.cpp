@@ -32,6 +32,32 @@ ImU32 TransferMFD::dvColor(float t)
 }
 
 // ---------------------------------------------------------------------------
+TransferPlanSnapshot TransferMFD::getPlan() const
+{
+    TransferPlanSnapshot snap;
+    snap.valid   = m_hasData;
+    snap.params  = m_params;
+    snap.selDep  = m_selDep;
+    snap.selTof  = m_selTof;
+    snap.parkIdx = m_parkIdx;
+    return snap;
+}
+
+void TransferMFD::restorePlan(const TransferPlanSnapshot& snap)
+{
+    if (!snap.valid) return;
+    m_params  = snap.params;
+    m_selDep  = snap.selDep;
+    m_selTof  = snap.selTof;
+    m_parkIdx = snap.parkIdx;
+    // Re-compute the grid from the restored parameters, then re-resolve
+    // the selected cell so the detail/departure/coasting pages are ready.
+    compute();
+    if (m_hasData && m_selDep >= 0 && m_selTof >= 0)
+        resolveSelected();
+}
+
+// ---------------------------------------------------------------------------
 void TransferMFD::setEpoch(const astro::EphemerisTime& et)
 {
     const double now = et.getETValue();
@@ -84,6 +110,10 @@ void TransferMFD::compute()
 // ---------------------------------------------------------------------------
 const char* TransferMFD::leftLabel(int slot) const
 {
+    if (m_page == 3) {
+        if (slot == 4) return "BACK";
+        return "";
+    }
     if (m_page == 2) {
         if (slot == 4) return "BACK";
         if (slot == 3) return "ALT";
@@ -106,7 +136,11 @@ const char* TransferMFD::leftLabel(int slot) const
 
 const char* TransferMFD::rightLabel(int slot) const
 {
-    if (m_page == 2) return "";
+    if (m_page == 3) return "";
+    if (m_page == 2) {
+        if (slot == 4) return "CST";
+        return "";
+    }
     if (m_page == 1) {
         if (slot == 4) return "BURN";
         return "";
@@ -123,6 +157,10 @@ const char* TransferMFD::rightLabel(int slot) const
 
 void TransferMFD::onLeft(int slot)
 {
+    if (m_page == 3) {
+        if (slot == 4) m_page = 2;
+        return;
+    }
     if (m_page == 2) {
         if (slot == 4) m_page = 1;
         if (slot == 3) m_parkIdx = (m_parkIdx + 1)
@@ -166,7 +204,11 @@ void TransferMFD::onLeft(int slot)
 
 void TransferMFD::onRight(int slot)
 {
-    if (m_page == 2) return;
+    if (m_page == 3) return;
+    if (m_page == 2) {
+        if (slot == 4) m_page = 3;
+        return;
+    }
     if (m_page == 1) {
         if (slot == 4) m_page = 2;
         return;
@@ -262,6 +304,7 @@ void TransferMFD::resolveSelected()
 // ---------------------------------------------------------------------------
 void TransferMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 {
+    if (m_page == 3) { renderCoasting (dl, origin, size); return; }
     if (m_page == 2) { renderDeparture(dl, origin, size); return; }
     if (m_page == 1) { renderDetail   (dl, origin, size); return; }
     renderPorkchop(dl, origin, size);
@@ -1132,5 +1175,276 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     for (auto& l : lines) {
         if (l.col) dl->AddText({tx, ty}, l.col, l.txt);
         ty += lineH;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Page 3: heliocentric coasting view.
+//
+// Shows the ship's progress along the planned Lambert arc.  Uses the
+// heliocentric ship state fed from main.cpp (Earth heliocentric + geocentric
+// ship position).
+//
+// Re-solves Lambert from current heliocentric position to the planned Mars
+// arrival point to compute the mid-course correction (MCC) ΔV.
+// ---------------------------------------------------------------------------
+void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
+{
+    const ImU32 kGreen   = IM_COL32(  0, 210,  75, 210);
+    const ImU32 kDim     = IM_COL32(  0, 140,  50, 140);
+    const ImU32 kYellow  = IM_COL32(255, 220,   0, 230);
+    const ImU32 kCyan    = IM_COL32(  0, 200, 220, 220);
+    const ImU32 kOrange  = IM_COL32(255, 140,   0, 220);
+    const ImU32 kBacking = IM_COL32(  0,   0,   0, 175);
+
+    if (!m_detail.valid) {
+        dl->AddText({ origin.x + 4.0f, origin.y + 4.0f }, kDim, "No transfer selected");
+        return;
+    }
+
+    // -----------------------------------------------------------------------
+    // Sun GM
+    // -----------------------------------------------------------------------
+    double muSun = m_params.muCentral;
+    if (muSun <= 0.0) {
+        try { astro::Spice().getPlanetaryConstants(10, "GM", muSun); }
+        catch (...) {}
+    }
+    if (muSun <= 0.0) muSun = 1.32712440018e11;  // fallback km³/s²
+
+    // -----------------------------------------------------------------------
+    // Heliocentric ship state — computed from Earth heliocentric + geocentric.
+    // m_shipHelioR/V is fed by main.cpp via updateHelioState().
+    // -----------------------------------------------------------------------
+    const glm::dvec3 shipR = m_shipHelioR;
+    const glm::dvec3 shipV = m_shipHelioV;
+
+    // -----------------------------------------------------------------------
+    // Current positions of Earth and Mars from SPICE
+    // -----------------------------------------------------------------------
+    astro::PosState earthNow, marsNow;
+    try {
+        astro::Spice().getRelativeGeometricState(399, 10,
+            astro::EphemerisTime(m_currentET), earthNow);
+        astro::Spice().getRelativeGeometricState(4, 10,
+            astro::EphemerisTime(m_currentET), marsNow);
+    } catch (...) {
+        dl->AddText({ origin.x + 4.0f, origin.y + 4.0f }, kDim,
+                    "SPICE query failed");
+        return;
+    }
+
+    // -----------------------------------------------------------------------
+    // Lambert arc builder helper (position r1, velocity v1, endpoint r2)
+    // -----------------------------------------------------------------------
+    auto buildArc = [&](const glm::dvec3& r1, const glm::dvec3& v1,
+                        const glm::dvec3& r2, double mu)
+            -> std::vector<glm::dvec3>
+    {
+        std::vector<glm::dvec3> pts;
+        glm::dvec3 h    = glm::cross(r1, v1);
+        double     hMag = glm::length(h);
+        if (hMag < 1e-6) return pts;
+        glm::dvec3 hn      = h / hMag;
+        double     p_      = hMag * hMag / mu;
+        glm::dvec3 ev      = glm::cross(v1, h) / mu - glm::normalize(r1);
+        double     ecc     = glm::length(ev);
+        glm::dvec3 periDir = (ecc > 1e-9) ? glm::normalize(ev)
+                                           : glm::normalize(r1);
+        glm::dvec3 qDir    = glm::cross(hn, periDir);
+
+        auto nu_of = [&](const glm::dvec3& r) -> double {
+            double cosnu = glm::dot(periDir, glm::normalize(r));
+            cosnu = std::clamp(cosnu, -1.0, 1.0);
+            double nu = std::acos(cosnu);
+            if (glm::dot(glm::cross(periDir, r), hn) < 0.0) nu = -nu;
+            return nu;
+        };
+
+        double nu1 = nu_of(r1);
+        double nu2 = nu_of(r2);
+        if (nu2 < nu1) nu2 += 2.0 * M_PI;
+
+        for (int k = 0; k <= 80; ++k) {
+            double nu = nu1 + (nu2 - nu1) * k / 80.0;
+            double r_ = p_ / (1.0 + ecc * std::cos(nu));
+            pts.push_back(r_ * (std::cos(nu) * periDir + std::sin(nu) * qDir));
+        }
+        return pts;
+    };
+
+    // -----------------------------------------------------------------------
+    // Planned Lambert arc (departure → arrival)
+    // -----------------------------------------------------------------------
+    OrbitDiagram::Arc planArc;
+    planArc.colour    = IM_COL32(255, 220, 0, 120);   // dim yellow: the plan
+    planArc.thickness = 1.2f;
+    planArc.pts = buildArc(m_detail.depPos, m_detail.vDep,
+                           m_detail.arrPos, muSun);
+
+    // -----------------------------------------------------------------------
+    // Mid-course correction (MCC): re-solve Lambert from now to arrival.
+    // Only meaningful when inside the transfer window.
+    // -----------------------------------------------------------------------
+    double tofRemaining = m_detail.arrET - m_currentET;
+    glm::dvec3 vMCC_dep, vMCC_arr;
+    bool   mccValid = false;
+    double dvMCC    = 0.0;
+    OrbitDiagram::Arc mccArc;
+
+    if (tofRemaining > kDay) {   // at least 1 day remaining
+        mccValid = spacecraft::solveLambert(muSun, shipR, m_detail.arrPos,
+                                            tofRemaining, true,
+                                            vMCC_dep, vMCC_arr);
+        if (mccValid) {
+            dvMCC = glm::length(vMCC_dep - shipV);
+            // Draw MCC arc only when noticeably off-nominal (> 0.5 m/s).
+            if (dvMCC > 5e-4) {
+                mccArc.colour    = kCyan;
+                mccArc.thickness = 1.5f;
+                mccArc.pts = buildArc(shipR, vMCC_dep, m_detail.arrPos, muSun);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Transfer progress
+    // -----------------------------------------------------------------------
+    double elapsed  = m_currentET - m_detail.depET;
+    double tofTotal = m_detail.tofSec;
+    double progress = (tofTotal > 0.0)
+                    ? std::clamp(elapsed / tofTotal, 0.0, 1.0) : 0.0;
+    int elapsedDays  = static_cast<int>(elapsed  / kDay);
+    int remainDays   = static_cast<int>(tofRemaining / kDay);
+
+    double helioSpeed   = glm::length(shipV);              // km/s
+    double distToMars   = glm::length(marsNow.r - shipR);  // km
+    double distToEarth  = glm::length(earthNow.r - shipR); // km
+
+    // -----------------------------------------------------------------------
+    // Orbit diagram (heliocentric, Sun at centre)
+    // -----------------------------------------------------------------------
+    OrbitDiagram diag;
+
+    // Earth orbit (grey-blue, drawn from Earth's current position)
+    diag.addOrbit(earthNow.r, earthNow.v, muSun,
+                  IM_COL32(60, 140, 255, 80), "", false, false);
+    // Mars orbit (reddish)
+    diag.addOrbit(marsNow.r, marsNow.v, muSun,
+                  IM_COL32(200, 80, 50, 80), "", false, false);
+
+    // Planned Lambert arc
+    diag.addArc(planArc);
+
+    // MCC arc (if off-nominal)
+    if (!mccArc.pts.empty())
+        diag.addArc(mccArc);
+
+    // Departure and arrival reference points
+    diag.addMarker(m_detail.depPos, IM_COL32(60, 140, 255, 150), "D");
+    diag.addMarker(m_detail.arrPos, IM_COL32(200, 80, 50, 150), "A");
+
+    // Current positions
+    diag.addMarker(earthNow.r, IM_COL32(60, 140, 255, 255), "E");
+    diag.addMarker(marsNow.r,  IM_COL32(200, 80, 50, 255), "M");
+    diag.addMarker(shipR,      kGreen, "S");
+
+    // Sun
+    OrbitDiagram::CentralBody sun;
+    sun.rimColour  = IM_COL32(255, 210, 60, 200);
+    sun.axisColour = IM_COL32(255, 210, 60, 80);
+    sun.drawAxes   = false;
+    diag.setCentralBody(sun);
+
+    diag.render(dl, origin, size, &m_coastViewRot);
+
+    // -----------------------------------------------------------------------
+    // Text overlay
+    // -----------------------------------------------------------------------
+    const float pad   = 3.0f;
+    const float lineH = 11.0f;
+
+    struct Line { ImU32 col; char txt[80]; };
+    std::vector<Line> lines;
+    auto addLine = [&](ImU32 col, const char* fmt, ...) {
+        Line l; l.col = col;
+        va_list ap; va_start(ap, fmt);
+        std::vsnprintf(l.txt, sizeof(l.txt), fmt, ap);
+        va_end(ap);
+        lines.push_back(l);
+    };
+    auto sep = [&]() {
+        Line l; l.col = 0; l.txt[0] = '\0';
+        lines.push_back(l);
+    };
+
+    // -- Dates ---------------------------------------------------------------
+    {
+        std::string depStr = astro::EphemerisTime(m_detail.depET).toISOUTCString(0);
+        std::string arrStr = astro::EphemerisTime(m_detail.arrET).toISOUTCString(0);
+        addLine(kDim,    "DEP  %.10s", depStr.c_str());
+        addLine(kDim,    "ARR  %.10s", arrStr.c_str());
+    }
+    sep();
+
+    // -- Progress bar --------------------------------------------------------
+    {
+        // ASCII progress bar: [=====>    ]  XX%
+        const int barW = 18;
+        int filled = static_cast<int>(progress * barW);
+        char bar[24]; bar[0] = '[';
+        for (int i = 0; i < barW; ++i)
+            bar[1 + i] = (i < filled) ? '=' : (i == filled ? '>' : ' ');
+        bar[1 + barW] = ']'; bar[2 + barW] = '\0';
+        ImU32 pCol = (progress < 0.5) ? kGreen :
+                     (progress < 0.9) ? kYellow : kOrange;
+        addLine(pCol, "PROG %s %3.0f%%", bar, progress * 100.0);
+        addLine(kGreen,  " T+%d d  (T-%d d to arrival)", elapsedDays, remainDays);
+    }
+    sep();
+
+    // -- Heliocentric state --------------------------------------------------
+    {
+        constexpr double kAU = 149597870.7;  // km per AU
+        double rSun = glm::length(shipR);    // km from Sun
+        addLine(kCyan,  "HELIO  v %.3f km/s  r %.3f AU",
+                        helioSpeed, rSun / kAU);
+        addLine(kDim,   " dE %.1f Mkm  dM %.1f Mkm",
+                        distToEarth / 1.0e6, distToMars / 1.0e6);
+    }
+    sep();
+
+    // -- MCC ----------------------------------------------------------------
+    if (!mccValid || tofRemaining <= kDay) {
+        if (tofRemaining <= 0.0)
+            addLine(kGreen,  "ARRIVAL  dV-arr %.3f km/s", m_detail.dv2);
+        else
+            addLine(kDim,    "MCC  N/A (near arrival)");
+    } else {
+        ImU32 mccCol = (dvMCC < 0.001) ? kGreen :
+                       (dvMCC < 0.05)  ? kYellow : kOrange;
+        addLine(mccCol,  "MCC  dV %.3f km/s", dvMCC);
+        if (dvMCC < 0.001)
+            addLine(kGreen,  " ON NOMINAL TRAJECTORY");
+        else
+            addLine(kDim,    " arr dV %.3f km/s (new)", glm::length(vMCC_arr - marsNow.v));
+    }
+
+    // -- Measure max width and draw backing ----------------------------------
+    float maxW = 0.0f;
+    for (auto& l : lines)
+        if (l.col) maxW = std::max(maxW, ImGui::CalcTextSize(l.txt).x);
+
+    float bx0 = origin.x + pad;
+    float by0 = origin.y + pad;
+    float bx1 = bx0 + maxW + pad * 2.0f;
+    float by1 = by0 + static_cast<float>(lines.size()) * lineH + pad;
+
+    dl->AddRectFilled({ bx0, by0 }, { bx1, by1 }, kBacking, 3.0f);
+
+    float ox = bx0 + pad, oy = by0 + pad * 0.5f;
+    for (auto& l : lines) {
+        if (l.col) dl->AddText({ ox, oy }, l.col, l.txt);
+        oy += lineH;
     }
 }
