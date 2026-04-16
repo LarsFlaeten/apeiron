@@ -11,6 +11,24 @@
 static constexpr double kDay = 86400.0;
 
 // ---------------------------------------------------------------------------
+// Format a signed time delta (seconds) as "T+1d", "T-3d", or "T+HH:MM" when
+// inside the final 24 hours.
+static void fmtTplus(double deltaSec, char* buf, int sz)
+{
+    const char sign = (deltaSec >= 0.0) ? '+' : '-';
+    double abs_s = std::abs(deltaSec);
+    if (abs_s >= kDay) {
+        int days = static_cast<int>(abs_s / kDay);   // floor
+        std::snprintf(buf, sz, "T%c%dd", sign, days);
+    } else {
+        int total_m = static_cast<int>(abs_s / 60.0);
+        int hh = total_m / 60;
+        int mm = total_m % 60;
+        std::snprintf(buf, sz, "T%c%02d:%02d", sign, hh, mm);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Colour map: t ∈ [0,1]  →  green → yellow → red
 // ---------------------------------------------------------------------------
 ImU32 TransferMFD::dvColor(float t)
@@ -657,10 +675,11 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     std::string depStr = astro::EphemerisTime(m_detail.depET).toISOUTCString(0);
     std::string arrStr = astro::EphemerisTime(m_detail.arrET).toISOUTCString(0);
     int tofDays    = static_cast<int>(m_detail.tofSec / kDay + 0.5);
-    int daysToLaunch = static_cast<int>((m_detail.depET - m_currentET) / kDay + 0.5);
+    char tplusBuf[16];
+    fmtTplus(m_detail.depET - m_currentET, tplusBuf, sizeof(tplusBuf));
 
     row(kDim,    "NOW  %.10s", nowStr.c_str());
-    row(kGreen,  "DEP  %.10s  (T%+d d)", depStr.c_str(), daysToLaunch);
+    row(kGreen,  "DEP  %.10s  (%s)", depStr.c_str(), tplusBuf);
     row(kGreen,  "ARR  %.10s", arrStr.c_str());
     row(kGreen,  "TOF  %d days", tofDays);
     y += pad;
@@ -1039,9 +1058,10 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     {
         std::string nowStr = astro::EphemerisTime(m_currentET).toISOUTCString(0);
         std::string depStr = astro::EphemerisTime(m_detail.depET).toISOUTCString(0);
-        int daysToLaunch   = static_cast<int>((m_detail.depET - m_currentET) / kDay + 0.5);
+        char tplusBuf2[16];
+        fmtTplus(m_detail.depET - m_currentET, tplusBuf2, sizeof(tplusBuf2));
         add(kDim,   "NOW  %.10s", nowStr.c_str());
-        add(kGreen, "DEP  %.10s  (T%+d d)", depStr.c_str(), daysToLaunch);
+        add(kGreen, "DEP  %.10s  (%s)", depStr.c_str(), tplusBuf2);
     }
     add(kCyan,  "V-inf %.3f km/s  C3 %.1f km2/s2", vInfMag, m_detail.c3);
     sep();
