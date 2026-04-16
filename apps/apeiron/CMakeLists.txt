@@ -45,6 +45,7 @@ add_executable(apeiron
     NavConsole.cpp
     NavHUD.cpp
     VoiceAnnouncer.cpp
+    SimSave.cpp
 )
 
 add_dependencies(apeiron apeiron_shaders)

@@ -30,6 +30,7 @@
 #include "apeiron/universe/Scene.h"
 
 #include "astro/Time.h"
+#include "astro/SpiceCore.h"
 #include "ScenarioConfig.h"
 #include "Spacecraft.h"
 #include "MFD.h"
@@ -43,6 +44,7 @@
 #include "OffscreenCam.h"
 #include "CamMFD.h"
 #include "TransferMFD.h"
+#include "SimSave.h"
 #include "MFDMenu.h"
 #include "VoiceAnnouncer.h"
 #include "apeiron/spacecraft/Autopilot.h"
@@ -1167,6 +1169,44 @@ int main(int argc, char* argv[])
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
+            // ---- Quicksave / quickload (F5 / F9) --------------------------------
+            static const std::string kSavePath =
+                std::string(APEIRON_DATA_DIR) + "/saves/quicksave.toml";
+            if (ImGui::IsKeyPressed(ImGuiKey_F5, /*repeat=*/false)) {
+                SimSaveData sd;
+                sd.simElapsed     = simElapsed;
+                sd.simSpeedTarget = simSpeedTarget;
+                for (const auto& sc : spacecraft) {
+                    SimSaveData::ScState st;
+                    st.position        = sc->position();
+                    st.velocity        = sc->velocity();
+                    st.attitude        = sc->attitude();
+                    st.angularVelocity = sc->angularVelocity();
+                    sd.spacecraft.push_back(st);
+                }
+                sd.plan = transferMFD.getPlan();
+                saveSimState(kSavePath, sd);
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_F9, /*repeat=*/false)) {
+                SimSaveData sd;
+                if (loadSimState(kSavePath, sd)) {
+                    simElapsed     = sd.simElapsed;
+                    simSpeedTarget = sd.simSpeedTarget;
+                    // Restore each spacecraft that was saved.
+                    const size_t n = std::min(sd.spacecraft.size(), spacecraft.size());
+                    for (size_t i = 0; i < n; ++i) {
+                        const auto& st = sd.spacecraft[i];
+                        spacecraft[i]->setPosition(st.position);
+                        spacecraft[i]->setVelocity(st.velocity);
+                        spacecraft[i]->setAttitude(st.attitude);
+                        spacecraft[i]->setAngularVelocity(st.angularVelocity);
+                    }
+                    // Restore transfer plan (recomputes porkchop grid).
+                    if (sd.plan.valid)
+                        transferMFD.restorePlan(sd.plan);
+                }
+            }
+
             // ---- Per-frame gravity update ----------------------------------------
             // Fetch geocentric positions of all gravity bodies from SPICE and rebuild
             // attractors on every spacecraft.  Also determine the dominant body
@@ -1979,6 +2019,18 @@ int main(int argc, char* argv[])
                 // Feed geocentric state to TransferMFD departure page.
                 transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
                 transferMFD.updateBurnParams(mainEngineThrust, shipMass);
+                // Heliocentric ship state for TransferMFD coasting page.
+                {
+                    astro::PosState earthHelio;
+                    try {
+                        astro::Spice().getRelativeGeometricState(399, 10, currentEt, earthHelio);
+                        transferMFD.updateHelioState(
+                            glm::dvec3(earthHelio.r.x, earthHelio.r.y, earthHelio.r.z)
+                                + ship.position(),
+                            glm::dvec3(earthHelio.v.x, earthHelio.v.y, earthHelio.v.z)
+                                + ship.velocity());
+                    } catch (...) {}
+                }
                 // Target: TGT index 0 = ISS (spacecraft[issIdx]).
                 if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
@@ -2056,12 +2108,16 @@ int main(int argc, char* argv[])
                         SpiceInt    id;  SpiceBoolean found;
                         bodn2c_c(pending.c_str(), &id, &found);
                         if (found) {
-                            SpiceInt    n;
-                            SpiceDouble muArr[1], radii[3];
-                            bodvrd_c(pending.c_str(), "GM",    1, &n, muArr);
-                            bodvrd_c(pending.c_str(), "RADII", 3, &n, radii);
-                            refBody = { pending, muArr[0], radii[0], id };
-                            orbitalMFD.setContext(refBody.name.c_str(), "");
+                            try {
+                                double      gm = 0.0;
+                                astro::Vec3 radii;
+                                astro::Spice().getPlanetaryConstants(
+                                    static_cast<int>(id), "GM", gm);
+                                astro::Spice().getPlanetaryConstants(
+                                    static_cast<int>(id), "RADII", radii);
+                                refBody = { pending, gm, radii.x, id };
+                                orbitalMFD.setContext(refBody.name.c_str(), "");
+                            } catch (const astro::SpiceException&) {}
                         }
                         // If not found, silently ignore (body stays unchanged).
                     }
@@ -2069,21 +2125,31 @@ int main(int argc, char* argv[])
 
                 // Compute spacecraft state relative to the reference body.
                 astro::PosState shipRelRef(ship.position(), ship.velocity());
-                if (refBody.naifId != 399) {  // 399 = Earth (already the origin)
-                    SpiceDouble refState[6], lt;
-                    spkgeo_c(refBody.naifId,
-                             currentEt.getETValue(),
-                             "ECLIPJ2000", 399,
-                             refState, &lt);
+                if (refBody.naifId != 399) {
+                    astro::PosState refState;
+                    astro::Spice().getRelativeGeometricState(
+                        static_cast<int>(refBody.naifId), 399, currentEt, refState);
                     shipRelRef = astro::PosState(
-                        ship.position() - glm::dvec3(refState[0], refState[1], refState[2]),
-                        ship.velocity() - glm::dvec3(refState[3], refState[4], refState[5]));
+                        ship.position() - glm::dvec3(refState.r.x, refState.r.y, refState.r.z),
+                        ship.velocity() - glm::dvec3(refState.v.x, refState.v.y, refState.v.z));
                 }
 
                 orbitalMFD.update(shipRelRef, currentEt,
                                   refBody.mu, refBody.radiusKm);
                 transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
                 transferMFD.updateBurnParams(mainEngineThrust, shipMass);
+                // Heliocentric ship state for TransferMFD coasting page.
+                {
+                    astro::PosState earthHelio;
+                    try {
+                        astro::Spice().getRelativeGeometricState(399, 10, currentEt, earthHelio);
+                        transferMFD.updateHelioState(
+                            glm::dvec3(earthHelio.r.x, earthHelio.r.y, earthHelio.r.z)
+                                + ship.position(),
+                            glm::dvec3(earthHelio.v.x, earthHelio.v.y, earthHelio.v.z)
+                                + ship.velocity());
+                    } catch (...) {}
+                }
                 if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
                     orbitalMFD.updateTarget(
