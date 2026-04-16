@@ -1169,44 +1169,6 @@ int main(int argc, char* argv[])
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
-            // ---- Quicksave / quickload -----------------------------------------------
-            static const std::string kSavePath =
-                std::string(APEIRON_DATA_DIR) + "/saves/quicksave.toml";
-
-            // F5 — quicksave sim state + plan.
-            if (ImGui::IsKeyPressed(ImGuiKey_F5, /*repeat=*/false)) {
-                SimSaveData sd;
-                sd.simElapsed     = simElapsed;
-                sd.simSpeedTarget = simSpeedTarget;
-                for (const auto& sc : spacecraft) {
-                    SimSaveData::ScState st;
-                    st.position        = sc->position();
-                    st.velocity        = sc->velocity();
-                    st.attitude        = sc->attitude();
-                    st.angularVelocity = sc->angularVelocity();
-                    sd.spacecraft.push_back(st);
-                }
-                sd.plan = transferMFD.getPlan();
-                saveSimState(kSavePath, sd);
-            }
-            // F9 — quickload sim state + plan.
-            if (ImGui::IsKeyPressed(ImGuiKey_F9, /*repeat=*/false)) {
-                SimSaveData sd;
-                if (loadSimState(kSavePath, sd)) {
-                    simElapsed     = sd.simElapsed;
-                    simSpeedTarget = sd.simSpeedTarget;
-                    const size_t n = std::min(sd.spacecraft.size(), spacecraft.size());
-                    for (size_t i = 0; i < n; ++i) {
-                        const auto& st = sd.spacecraft[i];
-                        spacecraft[i]->setPosition(st.position);
-                        spacecraft[i]->setVelocity(st.velocity);
-                        spacecraft[i]->setAttitude(st.attitude);
-                        spacecraft[i]->setAngularVelocity(st.angularVelocity);
-                    }
-                    if (sd.plan.valid)
-                        transferMFD.restorePlan(sd.plan);
-                }
-            }
             // ---- Per-frame gravity update ----------------------------------------
             // Fetch geocentric positions of all gravity bodies from SPICE and rebuild
             // attractors on every spacecraft.  Also determine the dominant body
@@ -1920,6 +1882,64 @@ int main(int argc, char* argv[])
                     &rcsTorque,
                     (const double[]){10.0}, (const double[]){100'000.0},
                     "%.0f", ImGuiSliderFlags_Logarithmic);
+
+                ImGui::End();
+            }
+
+            // ---- Dev: Scenario save / load panel ----
+            if (viewMode == ViewMode::Dev) {
+                static const std::string kSavePath =
+                    std::string(APEIRON_DATA_DIR) + "/saves/quicksave.toml";
+                static std::string scenarioStatusMsg;
+
+                ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_FirstUseEver);
+                ImGui::Begin("Scenario");
+
+                ImGui::TextDisabled("%s", kSavePath.c_str());
+                ImGui::Spacing();
+
+                if (ImGui::Button("Save scenario", ImVec2(-1, 0))) {
+                    SimSaveData sd;
+                    sd.simElapsed     = simElapsed;
+                    sd.simSpeedTarget = simSpeedTarget;
+                    for (const auto& sc : spacecraft) {
+                        SimSaveData::ScState st;
+                        st.position        = sc->position();
+                        st.velocity        = sc->velocity();
+                        st.attitude        = sc->attitude();
+                        st.angularVelocity = sc->angularVelocity();
+                        sd.spacecraft.push_back(st);
+                    }
+                    sd.plan = transferMFD.getPlan();
+                    scenarioStatusMsg = saveSimState(kSavePath, sd) ? "Saved." : "Save failed!";
+                }
+
+                ImGui::Spacing();
+                if (ImGui::Button("Load scenario", ImVec2(-1, 0))) {
+                    SimSaveData sd;
+                    if (loadSimState(kSavePath, sd)) {
+                        simElapsed     = sd.simElapsed;
+                        simSpeedTarget = sd.simSpeedTarget;
+                        const size_t n = std::min(sd.spacecraft.size(), spacecraft.size());
+                        for (size_t i = 0; i < n; ++i) {
+                            const auto& st = sd.spacecraft[i];
+                            spacecraft[i]->setPosition(st.position);
+                            spacecraft[i]->setVelocity(st.velocity);
+                            spacecraft[i]->setAttitude(st.attitude);
+                            spacecraft[i]->setAngularVelocity(st.angularVelocity);
+                        }
+                        if (sd.plan.valid)
+                            transferMFD.restorePlan(sd.plan);
+                        scenarioStatusMsg = "Loaded.";
+                    } else {
+                        scenarioStatusMsg = "Load failed — no save file?";
+                    }
+                }
+
+                if (!scenarioStatusMsg.empty()) {
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), "%s", scenarioStatusMsg.c_str());
+                }
 
                 ImGui::End();
             }
