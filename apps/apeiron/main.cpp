@@ -1169,9 +1169,13 @@ int main(int argc, char* argv[])
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
-            // ---- Quicksave / quickload (F5 / F9) --------------------------------
+            // ---- Quicksave / quickload  &  explicit plan save/load ---------------
             static const std::string kSavePath =
                 std::string(APEIRON_DATA_DIR) + "/saves/quicksave.toml";
+            static const std::string kPlanPath =
+                std::string(APEIRON_DATA_DIR) + "/saves/transfer_plan.toml";
+
+            // F5 — quicksave sim state + plan.
             if (ImGui::IsKeyPressed(ImGuiKey_F5, /*repeat=*/false)) {
                 SimSaveData sd;
                 sd.simElapsed     = simElapsed;
@@ -1187,12 +1191,12 @@ int main(int argc, char* argv[])
                 sd.plan = transferMFD.getPlan();
                 saveSimState(kSavePath, sd);
             }
+            // F9 — quickload sim state + plan.
             if (ImGui::IsKeyPressed(ImGuiKey_F9, /*repeat=*/false)) {
                 SimSaveData sd;
                 if (loadSimState(kSavePath, sd)) {
                     simElapsed     = sd.simElapsed;
                     simSpeedTarget = sd.simSpeedTarget;
-                    // Restore each spacecraft that was saved.
                     const size_t n = std::min(sd.spacecraft.size(), spacecraft.size());
                     for (size_t i = 0; i < n; ++i) {
                         const auto& st = sd.spacecraft[i];
@@ -1201,9 +1205,26 @@ int main(int argc, char* argv[])
                         spacecraft[i]->setAttitude(st.attitude);
                         spacecraft[i]->setAngularVelocity(st.angularVelocity);
                     }
-                    // Restore transfer plan (recomputes porkchop grid).
                     if (sd.plan.valid)
                         transferMFD.restorePlan(sd.plan);
+                }
+            }
+            // F6 — save plan only.
+            if (ImGui::IsKeyPressed(ImGuiKey_F6, /*repeat=*/false)
+                || transferMFD.consumeWantSavePlan()) {
+                auto snap = transferMFD.getPlan();
+                bool ok = savePlanSnapshot(kPlanPath, snap);
+                transferMFD.setPlanStatusMsg(ok ? "Plan saved  (F6)" : "Save failed");
+            }
+            // F7 — load plan only (recomputes porkchop grid).
+            if (ImGui::IsKeyPressed(ImGuiKey_F7, /*repeat=*/false)
+                || transferMFD.consumeWantLoadPlan()) {
+                TransferPlanSnapshot snap;
+                if (loadPlanSnapshot(kPlanPath, snap)) {
+                    transferMFD.restorePlan(snap);
+                    transferMFD.setPlanStatusMsg("Plan loaded  (F7)");
+                } else {
+                    transferMFD.setPlanStatusMsg("Load failed — no plan file");
                 }
             }
 
@@ -1398,11 +1419,24 @@ int main(int argc, char* argv[])
                             orionModel.solveAllocation(thrustOnly);
                             const float mainThrottle = orionModel.thrusters.empty()
                                                        ? 0.0f : orionModel.thrusters[0].throttle;
-                            // Pass 2: attitude torque via RCS only.
+
+                            // Compute residual torque the main engine will produce at
+                            // this throttle due to its position offset from the CoM.
+                            // Pass 2 must cancel it in addition to the commanded torque.
+                            glm::dvec3 mainResidualTorque(0.0);
+                            if (!orionModel.thrusters.empty() && mainThrottle > 0.0f) {
+                                const auto& me = orionModel.thrusters[0];
+                                glm::vec3 arm = me.position - orionModel.centerOfMass;
+                                glm::vec3 forceVec = me.direction
+                                                   * (me.thrustN * mainThrottle);
+                                mainResidualTorque = glm::dvec3(glm::cross(arm, forceVec));
+                            }
+
+                            // Pass 2: RCS counteracts desired torque + main engine offset.
                             spacecraft::Wrench torqueOnly{};
-                            torqueOnly[3] = desired[3];
-                            torqueOnly[4] = desired[4];
-                            torqueOnly[5] = desired[5];
+                            torqueOnly[3] = desired[3] - mainResidualTorque.x;
+                            torqueOnly[4] = desired[4] - mainResidualTorque.y;
+                            torqueOnly[5] = desired[5] - mainResidualTorque.z;
                             orionModel.solveAllocationRcsOnly(torqueOnly);
                             if (!orionModel.thrusters.empty())
                                 orionModel.thrusters[0].throttle = mainThrottle;
