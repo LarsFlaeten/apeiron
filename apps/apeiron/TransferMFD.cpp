@@ -2,11 +2,17 @@
 #include "OrbitDiagram.h"
 
 #include <astro/SpiceCore.h>
+#include <astro/ReferenceFrame.h>
 
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
 #include <iostream>
+
+// All heliocentric SPICE queries use ECLIPJ2000 to match the spacecraft
+// integrator frame (vehicleStateAtEt rotates J2000 equatorial → ECLIPJ2000).
+static const astro::ReferenceFrame kEclipJ2000 =
+    astro::ReferenceFrame::createEclipJ2000();
 
 static constexpr double kDay = 86400.0;
 
@@ -290,10 +296,10 @@ void TransferMFD::resolveSelected()
     try {
         astro::Spice().getRelativeGeometricState(
             m_params.departureBody, m_params.centralBody,
-            astro::EphemerisTime(depET), dep);
+            astro::EphemerisTime(depET), dep, kEclipJ2000);
         astro::Spice().getRelativeGeometricState(
             m_params.arrivalBody, m_params.centralBody,
-            astro::EphemerisTime(arrET), arr);
+            astro::EphemerisTime(arrET), arr, kEclipJ2000);
     } catch (...) { return; }
 
     double mu = m_params.muCentral;
@@ -1246,9 +1252,9 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     astro::PosState earthNow, marsNow;
     try {
         astro::Spice().getRelativeGeometricState(399, 10,
-            astro::EphemerisTime(m_currentET), earthNow);
+            astro::EphemerisTime(m_currentET), earthNow, kEclipJ2000);
         astro::Spice().getRelativeGeometricState(4, 10,
-            astro::EphemerisTime(m_currentET), marsNow);
+            astro::EphemerisTime(m_currentET), marsNow, kEclipJ2000);
     } catch (...) {
         dl->AddText({ origin.x + 4.0f, origin.y + 4.0f }, kDim,
                     "SPICE query failed");

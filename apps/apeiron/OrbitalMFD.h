@@ -41,12 +41,24 @@ public:
     // or an empty string when there is no pending request.
     std::string consumePendingRef();
 
+    // Called by main.cpp each frame; returns a target string the user typed
+    // (spacecraft name or NAIF body name/id), or empty if no pending request.
+    std::string consumePendingTgt();
+
     // Set the list of target names for the TGT button to cycle through.
     // Index -1 = no target. Call once after spacecraft are created.
     void setTargets(std::vector<std::string> names);
 
     // Returns the currently selected target index (-1 = none).
     int targetIndex() const { return m_tgtIdx; }
+
+    // Set a NAIF body as target (e.g. Mars=4). Pass naifId=-1 to clear.
+    // Called from main.cpp after resolving the user-typed name via SPICE.
+    void setTgtBody(int naifId, const std::string& displayName);
+    int  tgtBodyNaifId() const { return m_tgtBodyNaifId; }
+
+    // Set the spacecraft target index directly (clears any body target).
+    void setTgtIdx(int idx);
 
     // Recompute every frame.
     //   mu           — GM of the reference body (km³/s²)
@@ -81,9 +93,15 @@ private:
     std::vector<MFDFrame> m_frames;
     int                   m_frameIdx = 0;
 
-    // TGT cycling (slot 2)
-    std::vector<std::string> m_tgtNames;  // display names; index matches spacecraft[]
-    int                      m_tgtIdx = -1;  // -1 = none
+    // TGT input overlay (slot 2)
+    std::vector<std::string> m_tgtNames;     // display names; index matches spacecraft[]
+    int                      m_tgtIdx = -1;  // -1 = none (spacecraft index)
+    bool        m_tgtInputActive = false;
+    char        m_tgtInputBuf[32]{};
+    std::string m_pendingTgt;
+    // NAIF body target (mutually exclusive with m_tgtIdx)
+    int         m_tgtBodyNaifId = -1;
+    std::string m_tgtBodyName;
 
     // --- updated every frame ---
     double m_altKm        = 0.0;

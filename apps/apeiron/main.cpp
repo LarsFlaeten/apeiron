@@ -1128,11 +1128,6 @@ int main(int argc, char* argv[])
             float dy = static_cast<float>(my - prevMouseY);
             prevMouseX = mx; prevMouseY = my;
 
-            // Cache Earth world position (used for both camera modes and rendering).
-            glm::dvec3 earthWorld(0.0);
-            for (auto& bi : bodyInfos)
-                if (bi.node->naifName() == "EARTH") { earthWorld = bi.node->worldPosition(); break; }
-
             if (viewMode == ViewMode::Dev) {
                 if (!ImGui::GetIO().WantCaptureMouse) {
                     if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
@@ -1178,7 +1173,12 @@ int main(int argc, char* argv[])
                 auto& player = *spacecraft[playerIdx];
 
                 // Fetch positions: Earth is always at origin of our ECI frame.
-                // Other bodies: query geocentric state from SPICE.
+                // Other bodies: query geocentric state from SPICE in ECLIPJ2000 —
+                // the spacecraft integrator runs in ECLIPJ2000 (vehicleStateAtEt
+                // rotates J2000 equatorial → ECLIPJ2000), so attractor positions
+                // must be in the same frame.
+                static const astro::ReferenceFrame kEclipJ2000 =
+                    astro::ReferenceFrame::createEclipJ2000();
                 for (auto& gb : gravBodies) {
                     if (gb.name == "EARTH") {
                         gb.posECI = glm::dvec3(0.0);
@@ -1186,7 +1186,7 @@ int main(int argc, char* argv[])
                         astro::PosState s;
                         astro::Spice().getRelativeGeometricState(
                             static_cast<int>(gb.naifId), 399,
-                            currentEt, s);
+                            currentEt, s, kEclipJ2000);
                         gb.posECI = glm::dvec3(s.r.x, s.r.y, s.r.z);
                     }
                 }
@@ -1444,6 +1444,12 @@ int main(int argc, char* argv[])
 
             observerPos = observer.worldPosition(currentEt);
             scene.update(currentEt, observerPos);
+
+            // Cache Earth world position AFTER scene.update() so node positions are
+            // current — using a stale value here causes Earth to jump at large distances.
+            glm::dvec3 earthWorld(0.0);
+            for (auto& bi : bodyInfos)
+                if (bi.node->naifName() == "EARTH") { earthWorld = bi.node->worldPosition(); break; }
 
             // ---- Docking port proximity & matching logic ----
             // Runs every frame; keeps nav.dockPortIdx and nav.compatiblePortCount fresh.
@@ -2057,10 +2063,16 @@ int main(int argc, char* argv[])
                 transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
                 transferMFD.updateBurnParams(mainEngineThrust, shipMass);
                 // Heliocentric ship state for TransferMFD coasting page.
+                // Both the spacecraft and Earth's heliocentric position must be
+                // in ECLIPJ2000 so that the vector addition is consistent with
+                // the spacecraft's integration frame.
                 {
+                    static const astro::ReferenceFrame kEclipJ2000b =
+                        astro::ReferenceFrame::createEclipJ2000();
                     astro::PosState earthHelio;
                     try {
-                        astro::Spice().getRelativeGeometricState(399, 10, currentEt, earthHelio);
+                        astro::Spice().getRelativeGeometricState(399, 10, currentEt, earthHelio,
+                                                                 kEclipJ2000b);
                         transferMFD.updateHelioState(
                             glm::dvec3(earthHelio.r.x, earthHelio.r.y, earthHelio.r.z)
                                 + ship.position(),
@@ -2068,8 +2080,49 @@ int main(int argc, char* argv[])
                                 + ship.velocity());
                     } catch (...) {}
                 }
-                // Target: TGT index 0 = ISS (spacecraft[issIdx]).
-                if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
+                // Resolve a pending TGT string typed by the user.
+                {
+                    std::string pendingTgt = orbitalMFD.consumePendingTgt();
+                    if (!pendingTgt.empty()) {
+                        // Try spacecraft names first.
+                        bool foundSC = false;
+                        for (int vi = 0; vi < (int)kSpacecraftNames.size(); ++vi) {
+                            if (kSpacecraftNames[vi] == pendingTgt) {
+                                orbitalMFD.setTgtIdx(vi);
+                                foundSC = true;
+                                break;
+                            }
+                        }
+                        if (!foundSC) {
+                            // Try NAIF body name or integer ID.
+                            SpiceInt naifId = -1;
+                            SpiceBoolean found = SPICEFALSE;
+                            bodn2c_c(pendingTgt.c_str(), &naifId, &found);
+                            if (!found) {
+                                try { naifId = std::stoi(pendingTgt); found = SPICETRUE; }
+                                catch (...) {}
+                            }
+                            if (found) orbitalMFD.setTgtBody(static_cast<int>(naifId), pendingTgt);
+                            // If neither, silently ignore.
+                        }
+                    }
+                }
+                // Update target state.
+                if (orbitalMFD.tgtBodyNaifId() >= 0) {
+                    // Planet / NAIF body target — query SPICE relative to current ref.
+                    try {
+                        static const astro::ReferenceFrame kEclipJ2000c =
+                            astro::ReferenceFrame::createEclipJ2000();
+                        astro::PosState bodyState;
+                        astro::Spice().getRelativeGeometricState(
+                            orbitalMFD.tgtBodyNaifId(),
+                            static_cast<int>(refBody.naifId),
+                            currentEt, bodyState, kEclipJ2000c);
+                        orbitalMFD.updateTarget(bodyState, refBody.mu, refBody.radiusKm);
+                    } catch (...) {
+                        orbitalMFD.clearTarget();
+                    }
+                } else if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
                     orbitalMFD.updateTarget(
                         astro::PosState(tgt.position(), tgt.velocity()),
@@ -2176,10 +2229,16 @@ int main(int argc, char* argv[])
                 transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
                 transferMFD.updateBurnParams(mainEngineThrust, shipMass);
                 // Heliocentric ship state for TransferMFD coasting page.
+                // Both the spacecraft and Earth's heliocentric position must be
+                // in ECLIPJ2000 so that the vector addition is consistent with
+                // the spacecraft's integration frame.
                 {
+                    static const astro::ReferenceFrame kEclipJ2000b =
+                        astro::ReferenceFrame::createEclipJ2000();
                     astro::PosState earthHelio;
                     try {
-                        astro::Spice().getRelativeGeometricState(399, 10, currentEt, earthHelio);
+                        astro::Spice().getRelativeGeometricState(399, 10, currentEt, earthHelio,
+                                                                 kEclipJ2000b);
                         transferMFD.updateHelioState(
                             glm::dvec3(earthHelio.r.x, earthHelio.r.y, earthHelio.r.z)
                                 + ship.position(),

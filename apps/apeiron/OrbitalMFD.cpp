@@ -74,6 +74,31 @@ std::string OrbitalMFD::consumePendingRef()
 }
 
 // ---------------------------------------------------------------------------
+std::string OrbitalMFD::consumePendingTgt()
+{
+    std::string out;
+    std::swap(out, m_pendingTgt);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+void OrbitalMFD::setTgtBody(int naifId, const std::string& displayName)
+{
+    m_tgtBodyNaifId = naifId;
+    m_tgtBodyName   = displayName;
+    m_tgtIdx        = -1;
+    if (naifId < 0) m_hasTgt = false;
+}
+
+// ---------------------------------------------------------------------------
+void OrbitalMFD::setTgtIdx(int idx)
+{
+    m_tgtIdx        = idx;
+    m_tgtBodyNaifId = -1;
+    m_tgtBodyName.clear();
+}
+
+// ---------------------------------------------------------------------------
 void OrbitalMFD::setTargets(std::vector<std::string> names)
 {
     m_tgtNames = std::move(names);
@@ -187,10 +212,12 @@ void OrbitalMFD::onLeft(int slot)
             m_diagViewRot = glm::dmat3(1.0);
         }
     } else if (slot == 2) {
-        if (m_tgtNames.empty()) return;
-        // Cycle: none(-1) → 0 → 1 → … → N-1 → none(-1)
-        m_tgtIdx = (m_tgtIdx + 2) % (static_cast<int>(m_tgtNames.size()) + 1) - 1;
-        if (m_tgtIdx < 0) m_hasTgt = false;
+        // Toggle TGT input box (close REF input if open).
+        m_tgtInputActive = !m_tgtInputActive;
+        if (m_tgtInputActive) {
+            m_tgtInputBuf[0] = '\0';
+            m_refInputActive  = false;
+        }
     }
 }
 
@@ -431,25 +458,54 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         renderDiagram(dl, { origin.x + size.x - diagSize, origin.y }, diagSize);
     }
 
-    // ---- REF input overlay (drawn first so other text appears on top) ----
+    // ---- REF input overlay ----
     if (m_refInputActive) {
         ImGui::SetCursorScreenPos({ origin.x + pad, origin.y + pad });
         ImGui::SetNextItemWidth(size.x * 0.5f - pad * 2.0f);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg,     IM_COL32( 0, 40, 15, 200));
-        ImGui::PushStyleColor(ImGuiCol_Text,         IM_COL32( 0,210, 75, 255));
-        ImGui::PushStyleColor(ImGuiCol_Border,       IM_COL32( 0,210, 75, 180));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,  IM_COL32( 0, 40, 15, 200));
+        ImGui::PushStyleColor(ImGuiCol_Text,      IM_COL32( 0,210, 75, 255));
+        ImGui::PushStyleColor(ImGuiCol_Border,    IM_COL32( 0,210, 75, 180));
         bool entered = ImGui::InputText("##refInput", m_refInputBuf,
                                         sizeof(m_refInputBuf),
                                         ImGuiInputTextFlags_EnterReturnsTrue |
                                         ImGuiInputTextFlags_AutoSelectAll);
         ImGui::PopStyleColor(3);
-        ImGui::SetKeyboardFocusHere(-1);  // keep focus
+        ImGui::SetKeyboardFocusHere(-1);
         if (entered && m_refInputBuf[0] != '\0') {
             m_pendingRef     = m_refInputBuf;
             m_refInputActive = false;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape))
             m_refInputActive = false;
+    }
+
+    // ---- TGT input overlay ----
+    if (m_tgtInputActive) {
+        ImGui::SetCursorScreenPos({ origin.x + pad, origin.y + pad });
+        ImGui::SetNextItemWidth(size.x * 0.5f - pad * 2.0f);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,  IM_COL32( 0, 20, 50, 200));
+        ImGui::PushStyleColor(ImGuiCol_Text,      IM_COL32(80,180,255, 255));
+        ImGui::PushStyleColor(ImGuiCol_Border,    IM_COL32(60,160,255, 180));
+        bool entered = ImGui::InputText("##tgtInput", m_tgtInputBuf,
+                                        sizeof(m_tgtInputBuf),
+                                        ImGuiInputTextFlags_EnterReturnsTrue |
+                                        ImGuiInputTextFlags_AutoSelectAll);
+        ImGui::PopStyleColor(3);
+        ImGui::SetKeyboardFocusHere(-1);
+        if (entered) {
+            if (m_tgtInputBuf[0] != '\0') {
+                m_pendingTgt = m_tgtInputBuf;
+            } else {
+                // Empty → clear target
+                m_tgtBodyNaifId = -1;
+                m_tgtBodyName.clear();
+                m_tgtIdx = -1;
+                m_hasTgt = false;
+            }
+            m_tgtInputActive = false;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+            m_tgtInputActive = false;
     }
 
     // ---- Header ----
@@ -467,13 +523,19 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         dl->AddText({ origin.x + pad, origin.y + 2.0f }, hdrCol, buf);
 
         // TGT label in header (right-aligned, blue)
-        if (m_tgtIdx >= 0 && m_tgtIdx < static_cast<int>(m_tgtNames.size())) {
-            char tgtBuf[48];
-            std::snprintf(tgtBuf, sizeof(tgtBuf), "TGT: %s",
-                          m_tgtNames[m_tgtIdx].c_str());
-            ImVec2 tsz = ImGui::CalcTextSize(tgtBuf);
-            dl->AddText({ origin.x + size.x - tsz.x - pad, origin.y + 2.0f },
-                        kColTgtText, tgtBuf);
+        {
+            const char* tgtName = nullptr;
+            if (m_tgtBodyNaifId >= 0 && !m_tgtBodyName.empty())
+                tgtName = m_tgtBodyName.c_str();
+            else if (m_tgtIdx >= 0 && m_tgtIdx < static_cast<int>(m_tgtNames.size()))
+                tgtName = m_tgtNames[m_tgtIdx].c_str();
+            if (tgtName) {
+                char tgtBuf[48];
+                std::snprintf(tgtBuf, sizeof(tgtBuf), "TGT: %s", tgtName);
+                ImVec2 tsz = ImGui::CalcTextSize(tgtBuf);
+                dl->AddText({ origin.x + size.x - tsz.x - pad, origin.y + 2.0f },
+                            kColTgtText, tgtBuf);
+            }
         }
     }
     const float headerH = lineH + 2.0f;
@@ -530,48 +592,108 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     fmtTime(m_tToApoSec, tApBuf, sizeof(tApBuf));
     fmtTime(m_tToPerSec, tPeBuf, sizeof(tPeBuf));
 
+    // Heliocentric mode: body radius > 500,000 km → show distances in AU,
+    // period in days.  "Alt" becomes orbital radius ("r").
+    constexpr double kAUkm = 149597870.7;
+    const bool useAU = (m_bodyRadiusKm > 500000.0);
+
     // Ship rows
-    row   ("Alt",   "%.1f",   m_altKm,     " km");
-    row   ("Vel",   "%.3f",   m_velKms,    " km/s");
-    if (m_apoAltKm >= 0.0)
-        row("Apo",  "%.1f",   m_apoAltKm,  " km");
-    else
-        rowStr("Apo", "\xe2\x88\x9e", kColEscape);
-    row   ("Per",   "%.1f",   m_perAltKm,  " km");
-    if (!m_isHyperbolic) {
-        rowStr("t-AP", tApBuf);
-        rowStr("t-PE", tPeBuf);
+    if (useAU) {
+        double r_AU   = (m_altKm + m_bodyRadiusKm) / kAUkm;
+        double apo_AU = (m_apoAltKm >= 0.0) ? (m_apoAltKm + m_bodyRadiusKm) / kAUkm : -1.0;
+        double per_AU = (m_perAltKm  + m_bodyRadiusKm) / kAUkm;
+        row   ("r",    "%.4f",  r_AU,   " AU");
+        row   ("Vel",  "%.3f",  m_velKms, " km/s");
+        if (apo_AU >= 0.0) row("Aph", "%.4f", apo_AU, " AU");
+        else                rowStr("Aph", "\xe2\x88\x9e", kColEscape);
+        row   ("Phe",  "%.4f",  per_AU, " AU");
+        if (!m_isHyperbolic) {
+            rowStr("t-AP", tApBuf);
+            rowStr("t-PE", tPeBuf);
+        } else {
+            row("v\xe2\x88\x9e", "%.3f", m_hypVinfKms, " km/s", kColEscape);
+        }
+        row   ("Inc",   "%.2f\xc2\xb0", m_incDeg);
+        row   ("RAAN",  "%.2f\xc2\xb0", m_raanDeg);
+        row   ("Ecc",   "%.5f",   m_eccen);
+        row   ("ArgPe", "%.2f\xc2\xb0", m_argpeDeg);
+        rowStr("h", "");  // placeholder to align with km mode
+        if (m_periodMin > 0.0) {
+            double periodDays = m_periodMin / 1440.0;
+            if (periodDays < 3650.0)
+                row("T", "%.1f", periodDays, " d");
+            else
+                row("T", "%.2f", periodDays / 365.25, " yr");
+        } else {
+            rowStr("T", "---");
+        }
     } else {
-        row("v\xe2\x88\x9e", "%.3f", m_hypVinfKms, " km/s", kColEscape);
+        row   ("Alt",   "%.1f",   m_altKm,     " km");
+        row   ("Vel",   "%.3f",   m_velKms,    " km/s");
+        if (m_apoAltKm >= 0.0)
+            row("Apo",  "%.1f",   m_apoAltKm,  " km");
+        else
+            rowStr("Apo", "\xe2\x88\x9e", kColEscape);
+        row   ("Per",   "%.1f",   m_perAltKm,  " km");
+        if (!m_isHyperbolic) {
+            rowStr("t-AP", tApBuf);
+            rowStr("t-PE", tPeBuf);
+        } else {
+            row("v\xe2\x88\x9e", "%.3f", m_hypVinfKms, " km/s", kColEscape);
+        }
+        row   ("Inc",   "%.2f\xc2\xb0", m_incDeg);
+        row   ("RAAN",  "%.2f\xc2\xb0", m_raanDeg);
+        row   ("Ecc",   "%.5f",   m_eccen);
+        row   ("ArgPe", "%.2f\xc2\xb0", m_argpeDeg);
+        row   ("h",     "%.0f",   m_angMomKm2s, " km\xc2\xb2/s");
+        if (m_periodMin > 0.0)
+            row("T",    "%.2f",   m_periodMin,  " min");
+        else
+            rowStr("T", "---");
     }
-    row   ("Inc",   "%.2f\xc2\xb0", m_incDeg);
-    row   ("RAAN",  "%.2f\xc2\xb0", m_raanDeg);
-    row   ("Ecc",   "%.5f",   m_eccen);
-    row   ("ArgPe", "%.2f\xc2\xb0", m_argpeDeg);
-    row   ("h",     "%.0f",   m_angMomKm2s, " km\xc2\xb2/s");
-    if (m_periodMin > 0.0)
-        row("T",    "%.2f",   m_periodMin,  " min");
-    else
-        rowStr("T", "---");
 
     // Target rows (only when a target is selected)
     if (m_hasTgt) {
-        rowTgt   ("Alt",   "%.1f",   m_tgtAltKm,    " km");
-        rowTgt   ("Vel",   "%.3f",   m_tgtVelKms,   " km/s");
-        if (m_tgtApoKm >= 0.0)
-            rowTgt("Apo",  "%.1f",   m_tgtApoKm,    " km");
-        else
-            rowTgtStr("Apo", "\xe2\x88\x9e");
-        rowTgt   ("Per",   "%.1f",   m_tgtPerKm,    " km");
-        dy2 += lineH * 2.0f;  // skip t-AP / t-PE rows (align with Inc)
-        rowTgt   ("Inc",   "%.2f\xc2\xb0", m_tgtIncDeg);
-        rowTgt   ("RAAN",  "%.2f\xc2\xb0", m_tgtRaanDeg);
-        rowTgt   ("Ecc",   "%.5f",   m_tgtEccen);
-        rowTgt   ("ArgPe", "%.2f\xc2\xb0", m_tgtArgpeDeg);
-        rowTgt   ("",      "",       0.0);  // h row placeholder
-        if (m_tgtPeriodMin > 0.0)
-            rowTgt("T",    "%.2f",   m_tgtPeriodMin, " min");
-        else
-            rowTgtStr("T", "---");
+        if (useAU) {
+            double tr_AU   = (m_tgtAltKm + m_tgtBodyRadKm) / kAUkm;
+            double tapo_AU = (m_tgtApoKm >= 0.0) ? (m_tgtApoKm + m_tgtBodyRadKm) / kAUkm : -1.0;
+            double tper_AU = (m_tgtPerKm  + m_tgtBodyRadKm) / kAUkm;
+            rowTgt("r",    "%.4f",  tr_AU,   " AU");
+            rowTgt("Vel",  "%.3f",  m_tgtVelKms, " km/s");
+            if (tapo_AU >= 0.0) rowTgt("Aph", "%.4f", tapo_AU, " AU");
+            else                rowTgtStr("Aph", "\xe2\x88\x9e");
+            rowTgt("Phe",  "%.4f",  tper_AU, " AU");
+            dy2 += lineH * 2.0f;  // skip t-AP / t-PE rows
+            rowTgt("Inc",   "%.2f\xc2\xb0", m_tgtIncDeg);
+            rowTgt("RAAN",  "%.2f\xc2\xb0", m_tgtRaanDeg);
+            rowTgt("Ecc",   "%.5f",   m_tgtEccen);
+            rowTgt("ArgPe", "%.2f\xc2\xb0", m_tgtArgpeDeg);
+            rowTgtStr("", "");  // h placeholder
+            if (m_tgtPeriodMin > 0.0) {
+                double pd = m_tgtPeriodMin / 1440.0;
+                if (pd < 3650.0) rowTgt("T", "%.1f", pd, " d");
+                else             rowTgt("T", "%.2f", pd / 365.25, " yr");
+            } else {
+                rowTgtStr("T", "---");
+            }
+        } else {
+            rowTgt   ("Alt",   "%.1f",   m_tgtAltKm,    " km");
+            rowTgt   ("Vel",   "%.3f",   m_tgtVelKms,   " km/s");
+            if (m_tgtApoKm >= 0.0)
+                rowTgt("Apo",  "%.1f",   m_tgtApoKm,    " km");
+            else
+                rowTgtStr("Apo", "\xe2\x88\x9e");
+            rowTgt   ("Per",   "%.1f",   m_tgtPerKm,    " km");
+            dy2 += lineH * 2.0f;  // skip t-AP / t-PE rows (align with Inc)
+            rowTgt   ("Inc",   "%.2f\xc2\xb0", m_tgtIncDeg);
+            rowTgt   ("RAAN",  "%.2f\xc2\xb0", m_tgtRaanDeg);
+            rowTgt   ("Ecc",   "%.5f",   m_tgtEccen);
+            rowTgt   ("ArgPe", "%.2f\xc2\xb0", m_tgtArgpeDeg);
+            rowTgt   ("",      "",       0.0);  // h row placeholder
+            if (m_tgtPeriodMin > 0.0)
+                rowTgt("T",    "%.2f",   m_tgtPeriodMin, " min");
+            else
+                rowTgtStr("T", "---");
+        }
     }
 }

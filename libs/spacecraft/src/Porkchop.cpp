@@ -4,6 +4,7 @@
 #include <astro/SpiceCore.h>
 #include <astro/State.h>
 #include <astro/Time.h>
+#include <astro/ReferenceFrame.h>
 
 #include <cmath>
 #include <algorithm>
@@ -48,6 +49,11 @@ PorkchopData computePorkchop(const PorkchopParams& paramsIn,
     out.dv2    .assign(total, PorkchopData::kNoSolution);
     out.dvTotal.assign(total, PorkchopData::kNoSolution);
 
+    // All Lambert arcs are computed in ECLIPJ2000 to match the spacecraft
+    // integrator frame (which is ECLIPJ2000).
+    static const astro::ReferenceFrame kEclipJ2000 =
+        astro::ReferenceFrame::createEclipJ2000();
+
     int done = 0;
     for (int iDep = 0; iDep < nDep; ++iDep) {
         const double etDep = out.depET(iDep);
@@ -56,7 +62,8 @@ PorkchopData computePorkchop(const PorkchopParams& paramsIn,
         // Position + velocity of departure body at departure ET.
         astro::PosState dep;
         astro::Spice().getRelativeGeometricState(
-            out.params.departureBody, out.params.centralBody, etDepT, dep);
+            out.params.departureBody, out.params.centralBody, etDepT, dep,
+            kEclipJ2000);
 
         for (int iTof = 0; iTof < nTof; ++iTof) {
             const double tofSec = out.tofS(iTof);
@@ -66,7 +73,8 @@ PorkchopData computePorkchop(const PorkchopParams& paramsIn,
             // Position + velocity of arrival body at arrival ET.
             astro::PosState arr;
             astro::Spice().getRelativeGeometricState(
-                out.params.arrivalBody, out.params.centralBody, etArrT, arr);
+                out.params.arrivalBody, out.params.centralBody, etArrT, arr,
+                kEclipJ2000);
 
             // Lambert solve.
             glm::dvec3 vDep, vArr;
