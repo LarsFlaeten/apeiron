@@ -971,9 +971,21 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     const double accelMs2    = (m_shipMass > 1.0) ? m_mainThrustN / m_shipMass : 0.97;
     const double burnDuration = dvTMI * 1000.0 / accelMs2;   // seconds for full burn
 
-    // Live remaining ΔV: vPeri - current speed (km/s). Approaches zero as burn completes.
-    const double currentSpeed = glm::length(m_shipV);         // km/s
-    const double dvRemaining  = std::max(0.0, vPeri - currentSpeed);
+    // Live remaining ΔV — use C3 (v² - 2μ/r), not instantaneous speed.
+    // Speed-based comparison breaks immediately after the burn: the spacecraft
+    // moves away from periapsis, slows down due to gravity, and the difference
+    // (vPeri - currentSpeed) grows again even though no more burn is needed.
+    // C3 = v² - 2μ/r is a conserved orbital quantity that stays constant after
+    // the burn, so the comparison is meaningful throughout the coast phase.
+    const double currentSpeed = glm::length(m_shipV);  // km/s
+    const double rNow         = glm::length(m_shipR);  // km
+    const double c3Now        = currentSpeed * currentSpeed - 2.0 * mu / rNow;
+    const double c3Req        = m_detail.c3;            // required C3 from Lambert
+    // Remaining ΔV expressed as the speed deficit at the current radius.
+    // When c3Now >= c3Req the burn is complete and dV-remaining reads zero.
+    const double dvRemaining  = (c3Now < c3Req)
+        ? std::max(0.0, std::sqrt(c3Req + 2.0 * mu / rNow) - currentSpeed)
+        : 0.0;
     const double burnRemaining = dvRemaining * 1000.0 / accelMs2; // seconds left
 
     // Time to start burn = time to burn point - half burn duration (periapsis-centered).
