@@ -803,8 +803,8 @@ int main(int argc, char* argv[])
         offscreenCam.init(ctx, allocator, pipeline, swapchain);
         dockingOffscreenCam.init(ctx, allocator, pipeline, swapchain);
 
-        // View mode: F1=Nav, F2=MFD fullscreen, F11=Ship inspect, F12=Dev.
-        enum class ViewMode { Dev, Nav, MfdFull, ShipInspect };
+        // View mode: F1=Nav, F2=MFD fullscreen, F3=MFD fullscreen 2, F11=Ship inspect, F12=Dev.
+        enum class ViewMode { Dev, Nav, MfdFull, MfdFull2, ShipInspect };
         ViewMode viewMode = ViewMode::Dev;
 
         // Navigation sub-mode state.
@@ -880,6 +880,8 @@ int main(int argc, char* argv[])
                 *s->viewMode = ViewMode::Nav;
             else if (key == GLFW_KEY_F2)
                 *s->viewMode = ViewMode::MfdFull;
+            else if (key == GLFW_KEY_F3)
+                *s->viewMode = ViewMode::MfdFull2;
             else if (key == GLFW_KEY_F11)
                 *s->viewMode = ViewMode::ShipInspect;
             else if (key == GLFW_KEY_TAB &&
@@ -892,7 +894,8 @@ int main(int argc, char* argv[])
             }
             else if (key == GLFW_KEY_C &&
                      (*s->viewMode == ViewMode::Nav ||
-                      *s->viewMode == ViewMode::MfdFull) &&
+                      *s->viewMode == ViewMode::MfdFull ||
+                      *s->viewMode == ViewMode::MfdFull2) &&
                      !s->navCams->empty())
                 *s->navCamIdx = (*s->navCamIdx + 1) % static_cast<int>(s->navCams->size());
             else if (key == GLFW_KEY_F12)
@@ -1087,6 +1090,10 @@ int main(int argc, char* argv[])
         MFDPanel mfdFullPanel;
         mfdFullPanel.app     = &orbitalMFD;
         mfdFullPanel.menuApp = &mfdMenu;
+
+        MFDPanel mfdFullPanel2;
+        mfdFullPanel2.app     = &transferMFD;
+        mfdFullPanel2.menuApp = &mfdMenu;
 
         MFDPanel mfdLeftPanel;
         mfdLeftPanel.app     = &orbitalMFD;
@@ -2158,6 +2165,15 @@ int main(int argc, char* argv[])
                 mfdFullPanel.render("##MFDFull");
             }
 
+            if (viewMode == ViewMode::MfdFull2) {
+                ImGuiIO& io = ImGui::GetIO();
+                const float W = io.DisplaySize.x;
+                const float H = io.DisplaySize.y;
+                mfdFullPanel2.pos  = { 0.0f, 0.0f };
+                mfdFullPanel2.size = { W, H };
+                mfdFullPanel2.render("##MFDFull2");
+            }
+
             // ---- Nav view HUD ----
             if (viewMode == ViewMode::Nav) {
                 auto& ship = *spacecraft[playerIdx];
@@ -2304,7 +2320,8 @@ int main(int argc, char* argv[])
 
                 // ---- Helmet HUD overlay ----
                 navHUD.render(*spacecraft[playerIdx], spacecraft, nav,
-                              earthWorld, scene, camera, W, H, kSpacecraftNames, scPorts);
+                              earthWorld, scene, camera, W, H, kSpacecraftNames, scPorts,
+                              refBody.name.c_str());
             }
 
             // ---- Atmosphere LUT inspector (Map view only) ----
