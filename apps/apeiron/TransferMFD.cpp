@@ -922,26 +922,39 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // -----------------------------------------------------------------------
     // Optimal burn TA
     // -----------------------------------------------------------------------
+    // The burn is prograde (along current velocity) at the point in the parking
+    // orbit where the resulting escape hyperbola's asymptote aligns with V∞.
+    //
+    // A prograde burn at orbit angle θ produces an asymptote at angle:
+    //   φ_asymptote = θ + ν∞   where ν∞ = acos(-1/e_hyp)
+    // (derived from: asymptote_dir = cos(ν∞)·r̂_burn + sin(ν∞)·T_burn,
+    //  which expands to angle θ+ν∞ in the (periDir,qDir) frame)
+    //
+    // Setting φ_asymptote = φ_target:  θ = φ_target − ν∞
+    //
+    // The previous formula (atan2(-vp,vq) = φ_target−90°) aligned the VELOCITY
+    // with V∞ instead of the asymptote — correct only for infinite C3, off by
+    // ~60° for C3 ≈ 9 km²/s².
+    const double rPark = kParkAlts[m_parkIdx];
+    const double e_hyp  = 1.0 + static_cast<double>(m_detail.c3) * rPark / mu;
+    const double nu_inf = std::acos(-1.0 / e_hyp);   // asymptote true anomaly [rad]
+
     glm::dvec3 vInfProj    = vInf - glm::dot(vInf, hHat) * hHat;
     double     vInfProjMag = glm::length(vInfProj);
     double burnTA = 0.0, burnTADeg = 0.0;
     if (vInfProjMag > 1e-9) {
         double vp = glm::dot(vInfProj, periDir);
         double vq = glm::dot(vInfProj, qDir);
-        burnTA = std::atan2(-vp, vq);
-        double chk = -std::sin(burnTA)*vp + (ecc + std::cos(burnTA))*vq;
-        if (chk < 0.0) burnTA += M_PI;
-        if (burnTA >  M_PI) burnTA -= 2.0 * M_PI;
-        if (burnTA < -M_PI) burnTA += 2.0 * M_PI;
+        double phi_target = std::atan2(vq, vp);   // direction of V∞_proj in orbit plane
+        burnTA = phi_target - nu_inf;
+        while (burnTA >  M_PI) burnTA -= 2.0 * M_PI;
+        while (burnTA < -M_PI) burnTA += 2.0 * M_PI;
         burnTADeg = burnTA * 180.0 / M_PI;
         if (burnTADeg < 0.0) burnTADeg += 360.0;
     }
     double rBurn   = p_orb / (1.0 + ecc * std::cos(burnTA));
     double altBurn = rBurn - kRE;
     glm::dvec3 burnPos = rBurn * (std::cos(burnTA) * periDir + std::sin(burnTA) * qDir);
-
-    // TMI ΔV
-    const double rPark = kParkAlts[m_parkIdx];
     double vCirc = std::sqrt(mu / rPark);
     double vPeri = std::sqrt(m_detail.c3 + 2.0 * mu / rPark);
     double dvTMI = vPeri - vCirc;
