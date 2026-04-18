@@ -96,7 +96,8 @@ void NavHUD::render(const Spacecraft&                              ship,
                     float                                          W,
                     float                                          H,
                     const std::vector<std::string>&                scNames,
-                    const std::vector<std::vector<DockPort>>&      scPorts)
+                    const std::vector<std::vector<DockPort>>&      scPorts,
+                    const char*                                    refBodyName)
 {
     ImDrawList* dl  = ImGui::GetForegroundDrawList();
     const float cx  = W * 0.5f;
@@ -302,5 +303,13 @@ void NavHUD::render(const Spacecraft&                              ship,
                 }
             }
         }
+    }
+
+    // ---- REF body indicator (top-right corner) ----
+    if (refBodyName && refBodyName[0]) {
+        char refBuf[32];
+        std::snprintf(refBuf, sizeof(refBuf), "REF %s", refBodyName);
+        const ImVec2 refSz = ImGui::CalcTextSize(refBuf);
+        dl->AddText({ W - refSz.x - 8.0f, 8.0f }, kHudGreen, refBuf);
     }
 }

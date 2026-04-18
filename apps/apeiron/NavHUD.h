@@ -43,5 +43,6 @@ public:
                 float                                          screenW,
                 float                                          screenH,
                 const std::vector<std::string>&                scNames,
-                const std::vector<std::vector<DockPort>>&      scPorts);
+                const std::vector<std::vector<DockPort>>&      scPorts,
+                const char*                                    refBodyName = "EARTH");
 };
