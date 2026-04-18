@@ -2051,9 +2051,13 @@ int main(int argc, char* argv[])
 
                 astro::PosState shipRelRef(ship.position(), ship.velocity());
                 if (refBody.naifId != 399) {
+                    // Must use ECLIPJ2000: ship state is in ECLIPJ2000 (the integrator's
+                    // frame), so the reference body position must be in the same frame.
+                    static const astro::ReferenceFrame kEclipJ2000ref =
+                        astro::ReferenceFrame::createEclipJ2000();
                     astro::PosState refState;
                     astro::Spice().getRelativeGeometricState(
-                        static_cast<int>(refBody.naifId), 399, currentEt, refState);
+                        static_cast<int>(refBody.naifId), 399, currentEt, refState, kEclipJ2000ref);
                     shipRelRef = astro::PosState(
                         ship.position() - glm::dvec3(refState.r.x, refState.r.y, refState.r.z),
                         ship.velocity() - glm::dvec3(refState.v.x, refState.v.y, refState.v.z));
@@ -2216,9 +2220,13 @@ int main(int argc, char* argv[])
                 // Compute spacecraft state relative to the reference body.
                 astro::PosState shipRelRef(ship.position(), ship.velocity());
                 if (refBody.naifId != 399) {
+                    // Must use ECLIPJ2000: ship state is in ECLIPJ2000 (the integrator's
+                    // frame), so the reference body position must be in the same frame.
+                    static const astro::ReferenceFrame kEclipJ2000ref2 =
+                        astro::ReferenceFrame::createEclipJ2000();
                     astro::PosState refState;
                     astro::Spice().getRelativeGeometricState(
-                        static_cast<int>(refBody.naifId), 399, currentEt, refState);
+                        static_cast<int>(refBody.naifId), 399, currentEt, refState, kEclipJ2000ref2);
                     shipRelRef = astro::PosState(
                         ship.position() - glm::dvec3(refState.r.x, refState.r.y, refState.r.z),
                         ship.velocity() - glm::dvec3(refState.v.x, refState.v.y, refState.v.z));
