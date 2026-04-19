@@ -44,6 +44,7 @@
 #include "OffscreenCam.h"
 #include "CamMFD.h"
 #include "TransferMFD.h"
+#include "MapMFD.h"
 #include "SimSave.h"
 #include "MFDMenu.h"
 #include "VoiceAnnouncer.h"
@@ -1088,11 +1089,14 @@ int main(int argc, char* argv[])
         TransferMFD transferMFD;
         transferMFD.setEpoch(et);
 
+        MapMFD mapMFD;
+
         MFDMenu    mfdMenu;
         mfdMenu.addApp(&orbitalMFD,  "ORB");
         mfdMenu.addApp(&dockingMFD,  "DOCK");
         mfdMenu.addApp(&camMFD,      "CAM");
         mfdMenu.addApp(&transferMFD, "XFER");
+        mfdMenu.addApp(&mapMFD,      "MAP");
 
         MFDPanel mfdFullPanel;
         mfdFullPanel.app     = &orbitalMFD;
@@ -2111,6 +2115,52 @@ int main(int argc, char* argv[])
                         ship.velocity() - glm::dvec3(refState.v.x, refState.v.y, refState.v.z));
                 }
                 orbitalMFD.update(shipRelRef, currentEt, refBody.mu, refBody.radiusKm);
+                // Update MapMFD: body-fixed orientation, rotation rate, sun direction.
+                {
+                    const double etVal = currentEt.getETValue();
+                    // Rotation matrix ECLIPJ2000 → IAU_<refBody>
+                    std::string iauFrame = "IAU_" + refBody.name;
+                    glm::dmat3 inertialToBody(1.0);
+                    {
+                        SpiceDouble m[3][3];
+                        pxform_c("ECLIPJ2000", iauFrame.c_str(), etVal, m);
+                        if (!failed_c()) {
+                            for (int ri = 0; ri < 3; ++ri)
+                                for (int ci = 0; ci < 3; ++ci)
+                                    inertialToBody[ci][ri] = m[ri][ci];
+                        }
+                        reset_c();
+                    }
+                    // Rotation rate: PM[1] deg/day → rad/s
+                    double mapRotRate = 0.0;
+                    {
+                        SpiceInt n = 0;
+                        SpiceDouble pm[3] = {0.0, 0.0, 0.0};
+                        bodvrd_c(refBody.name.c_str(), "PM", 3, &n, pm);
+                        if (!failed_c() && n >= 2)
+                            mapRotRate = pm[1] * (M_PI / 180.0) / 86400.0;
+                        reset_c();
+                    }
+                    // Sun direction in ECLIPJ2000 from refBody
+                    glm::dvec3 sunDirInertial(1.0, 0.0, 0.0);
+                    try {
+                        static const astro::ReferenceFrame kEclipMap =
+                            astro::ReferenceFrame::createEclipJ2000();
+                        astro::PosState sunState;
+                        astro::Spice().getRelativeGeometricState(
+                            10, static_cast<int>(refBody.naifId), currentEt, sunState, kEclipMap);
+                        glm::dvec3 sv(sunState.r.x, sunState.r.y, sunState.r.z);
+                        double len = glm::length(sv);
+                        if (len > 0.0) sunDirInertial = sv / len;
+                    } catch (...) {}
+
+                    MapMFD::Config mapCfg;
+                    mapCfg.mu            = refBody.mu;
+                    mapCfg.radiusKm      = refBody.radiusKm;
+                    mapCfg.rotRateRadSec = mapRotRate;
+                    mapMFD.setRefName(refBody.name.c_str());
+                    mapMFD.update(shipRelRef.r, shipRelRef.v, mapCfg, inertialToBody, sunDirInertial);
+                }
                 // Feed geocentric state to TransferMFD departure page.
                 transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
                 transferMFD.updateBurnParams(mainEngineThrust, shipMass);
@@ -2296,6 +2346,49 @@ int main(int argc, char* argv[])
 
                 orbitalMFD.update(shipRelRef, currentEt,
                                   refBody.mu, refBody.radiusKm);
+                // Update MapMFD: body-fixed orientation, rotation rate, sun direction.
+                {
+                    const double etVal = currentEt.getETValue();
+                    std::string iauFrame = "IAU_" + refBody.name;
+                    glm::dmat3 inertialToBody2(1.0);
+                    {
+                        SpiceDouble m[3][3];
+                        pxform_c("ECLIPJ2000", iauFrame.c_str(), etVal, m);
+                        if (!failed_c()) {
+                            for (int ri = 0; ri < 3; ++ri)
+                                for (int ci = 0; ci < 3; ++ci)
+                                    inertialToBody2[ci][ri] = m[ri][ci];
+                        }
+                        reset_c();
+                    }
+                    double mapRotRate2 = 0.0;
+                    {
+                        SpiceInt n = 0;
+                        SpiceDouble pm[3] = {0.0, 0.0, 0.0};
+                        bodvrd_c(refBody.name.c_str(), "PM", 3, &n, pm);
+                        if (!failed_c() && n >= 2)
+                            mapRotRate2 = pm[1] * (M_PI / 180.0) / 86400.0;
+                        reset_c();
+                    }
+                    glm::dvec3 sunDirInertial2(1.0, 0.0, 0.0);
+                    try {
+                        static const astro::ReferenceFrame kEclipMap2 =
+                            astro::ReferenceFrame::createEclipJ2000();
+                        astro::PosState sunState;
+                        astro::Spice().getRelativeGeometricState(
+                            10, static_cast<int>(refBody.naifId), currentEt, sunState, kEclipMap2);
+                        glm::dvec3 sv(sunState.r.x, sunState.r.y, sunState.r.z);
+                        double len = glm::length(sv);
+                        if (len > 0.0) sunDirInertial2 = sv / len;
+                    } catch (...) {}
+
+                    MapMFD::Config mapCfg2;
+                    mapCfg2.mu            = refBody.mu;
+                    mapCfg2.radiusKm      = refBody.radiusKm;
+                    mapCfg2.rotRateRadSec = mapRotRate2;
+                    mapMFD.setRefName(refBody.name.c_str());
+                    mapMFD.update(shipRelRef.r, shipRelRef.v, mapCfg2, inertialToBody2, sunDirInertial2);
+                }
                 transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
                 transferMFD.updateBurnParams(mainEngineThrust, shipMass);
                 // Heliocentric ship state for TransferMFD coasting page.
@@ -2470,7 +2563,10 @@ int main(int argc, char* argv[])
                 glm::vec3 fwd = glm::normalize(glm::vec3(camWorld[0]));
                 glm::vec3 up  = glm::normalize(glm::vec3(camWorld[1]));
                 camPosOut = pos;
-                glm::mat4 proj = glm::perspective(glm::radians(fovDeg), 1.0f, 1e-4f, 200.0f);
+                // near: 0.1 m (1e-4 km) for close spacecraft views.
+                // far: 1e9 km — must match C_FAR in the planet/mesh shaders which use
+                // logarithmic depth; the projection far plane is just the hardware clip limit.
+                glm::mat4 proj = glm::perspective(glm::radians(fovDeg), 1.0f, 1e-4f, 1.0e9f);
                 proj[1][1] *= -1.0f;
                 glm::mat4 view = glm::lookAt(pos, pos + fwd, up);
                 vpOut = proj * view;
@@ -2485,9 +2581,10 @@ int main(int argc, char* argv[])
             glm::mat4 offVPRot   = glm::mat4(1.0f);
             glm::vec3 offCamPos  = glm::vec3(0.0f);
             glm::mat4 dockVP     = glm::mat4(1.0f);
+            glm::mat4 dockVPRot  = glm::mat4(1.0f);
             glm::vec3 dockCamPos = glm::vec3(0.0f);
-            buildCamVP(camMFD.activeCamNode(),        70.0f,                  offVP,  offCamPos, &offVPRot);
-            buildCamVP(dockingMFD.preferredCamNode(), dockingMFD.fovDeg(),    dockVP, dockCamPos);
+            buildCamVP(camMFD.activeCamNode(),        70.0f,                  offVP,  offCamPos,  &offVPRot);
+            buildCamVP(dockingMFD.preferredCamNode(), dockingMFD.fovDeg(),    dockVP, dockCamPos, &dockVPRot);
 
             if (!renderer.acquireFrame()) continue;
 
@@ -2547,6 +2644,40 @@ int main(int argc, char* argv[])
 
                 // DockingMFD offscreen
                 dockingOffscreenCam.begin(renderer.currentCmd(), fi);
+
+                starField.draw(renderer.currentCmd(), dockVPRot);
+
+                for (std::size_t i = 0; i < bodyInfos.size(); ++i) {
+                    auto& bi = bodyInfos[i];
+                    glm::vec3 renderPos = scene.origin().toRenderSpace(
+                        bi.node->worldPosition());
+                    float distKm = glm::length(renderPos - dockCamPos);
+                    float dockApparentPx = (bi.radiusKm / distKm)
+                        * (static_cast<float>(OffscreenCam::kHeight)
+                           / std::tan(glm::radians(dockingMFD.fovDeg()) * 0.5f));
+                    float sizeScale = (dockApparentPx < 2.0f)
+                                    ? (2.0f / dockApparentPx) : 1.0f;
+                    glm::mat4 model = glm::translate(glm::mat4(1.0f), renderPos);
+                    model = model * glm::mat4(bi.node->orientation());
+                    glm::vec3 bodyScale = bi.meshPath.empty()
+                        ? glm::vec3(bi.radiusKm, bi.bRadiusKm, bi.polarRadiusKm)
+                        : glm::vec3(bi.radiusKm);
+                    model = glm::scale(model, bodyScale * sizeScale);
+                    bool isEmissive = (sunIndex >= 0 && static_cast<int>(i) == sunIndex);
+                    glm::vec3 sunDir      = glm::vec3(0.0f, 1.0f, 0.0f);
+                    float     lightIntens = 1.0f;
+                    if (sunIndex >= 0 && !isEmissive) {
+                        sunDir = glm::normalize(sunRenderPos - renderPos);
+                        float distAU = glm::length(sunRenderPos - renderPos) / 149'597'870.7f;
+                        lightIntens  = 1.0f / (distAU * distAU);
+                    }
+                    glm::vec3 viewDir = glm::normalize(dockCamPos - renderPos);
+                    float dispScale = (sizeScale > 1.0f) ? 0.0f : bi.displaceScale;
+                    renderer.draw(dockVP * model, model, sunDir, viewDir,
+                                  isEmissive, lightIntens, dispScale,
+                                  descriptorSets[i], *meshes[i]);
+                }
+
                 if (orionGltf.isLoaded())
                     orionGltf.draw(renderer.currentCmd(), meshPipeline,
                                    dockVP, offOrion, offSunDir, dockCamPos);
