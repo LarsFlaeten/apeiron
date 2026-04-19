@@ -1258,7 +1258,7 @@ int main(int argc, char* argv[])
                 glm::dvec3 shipTorque(0.0);
 
                 if ((viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull ||
-                     viewMode == ViewMode::ShipInspect)
+                     viewMode == ViewMode::MfdFull2 || viewMode == ViewMode::ShipInspect)
                     && simSpeedTarget <= 1.0
                     && !ImGui::GetIO().WantCaptureKeyboard) {
 
@@ -1626,7 +1626,8 @@ int main(int argc, char* argv[])
 
             // Recenter the floating origin.
             // In Nav view, track the player ship; in Map view, track the selected body.
-            if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull) {
+            if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull ||
+                viewMode == ViewMode::MfdFull2) {
                 // Recenter on the interpolated position — same point the camera sits at.
                 // Using the true physics position would leave a step-size-dependent offset
                 // between camera and origin, causing Earth to jump when time accel changes.
@@ -1652,7 +1653,8 @@ int main(int argc, char* argv[])
             camera.setNear(viewMode == ViewMode::ShipInspect ? 1e-3f : 0.1f);
 
             // ---- Nav / MfdFull camera: driven by cam_* node from the glTF model ----
-            if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull) {
+            if (viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull ||
+                viewMode == ViewMode::MfdFull2) {
                 auto& ship = *spacecraft[playerIdx];
                 glm::vec3 shipRp = scene.origin().toRenderSpace(
                     earthWorld + ship.position());
@@ -2028,8 +2030,8 @@ int main(int argc, char* argv[])
                 ImGui::End();
             }
 
-            // ---- MFD fullscreen view (F2) ----
-            if (viewMode == ViewMode::MfdFull) {
+            // ---- MFD fullscreen view (F2 / F3) ----
+            if (viewMode == ViewMode::MfdFull || viewMode == ViewMode::MfdFull2) {
                 auto& ship = *spacecraft[playerIdx];
                 ImGuiIO& io = ImGui::GetIO();
                 const float W = io.DisplaySize.x;
