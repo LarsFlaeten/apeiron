@@ -2162,9 +2162,11 @@ int main(int argc, char* argv[])
                     dockingMFD.setCaptureThresholds(dp.maxRangeM, dp.maxClosureMs, dp.maxAttErrDeg);
                 }
 
-                mfdFullPanel.pos  = { 0.0f, 0.0f };
-                mfdFullPanel.size = { W, H };
-                mfdFullPanel.render("##MFDFull");
+                if (viewMode == ViewMode::MfdFull) {
+                    mfdFullPanel.pos  = { 0.0f, 0.0f };
+                    mfdFullPanel.size = { W, H };
+                    mfdFullPanel.render("##MFDFull");
+                }
             }
 
             if (viewMode == ViewMode::MfdFull2) {
