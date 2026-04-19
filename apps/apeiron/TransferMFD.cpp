@@ -1350,16 +1350,8 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                                             vMCC_dep, vMCC_arr);
         if (mccValid) {
             dvMCC = glm::length(vMCC_dep - shipV);
-            // Suppress arc when Lambert returns a wildly out-of-plane solution
-            // (happens near departure due to near-π transfer angle singularity).
-            // Check ecliptic inclination of the MCC orbit: h = r × vMCC_dep.
-            glm::dvec3 hMCC     = glm::cross(shipR, vMCC_dep);
-            double     hMCCMag  = glm::length(hMCC);
-            double     mccIncDeg = (hMCCMag > 1e-9)
-                ? std::acos(std::clamp(std::abs(hMCC.z / hMCCMag), 0.0, 1.0)) * 180.0 / M_PI
-                : 90.0;
-            // Draw MCC arc only when noticeably off-nominal (> 0.5 m/s) and sane.
-            if (dvMCC > 5e-4 && mccIncDeg < 30.0) {
+            // Draw MCC arc only when noticeably off-nominal (> 0.5 m/s).
+            if (dvMCC > 5e-4) {
                 mccArc.colour    = kCyan;
                 mccArc.thickness = 1.5f;
                 mccArc.pts = buildArc(shipR, vMCC_dep, m_detail.arrPos, muSun);
