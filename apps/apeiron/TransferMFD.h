@@ -194,8 +194,5 @@ private:
     double     m_bplanePeCurrentKm = 0.0;    // projected periapsis altitude (km, may be <0 = impact)
     bool       m_bplaneValid      = false;
 
-    // B-plane display activates within this many SOI radii of the arrival body.
-    // 5× SOI gives ~2–4 weeks lead time at typical interplanetary approach speeds.
-    static constexpr double kBplaneSoiMultiple = 5.0;
 
 };

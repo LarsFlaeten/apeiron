@@ -1310,14 +1310,12 @@ void TransferMFD::tickBplane()
     glm::dvec3 v = m_shipHelioV - glm::dvec3(arrState.v.x, arrState.v.y, arrState.v.z);
 
     double rMag = glm::length(r);
-    if (rMag < 100.0) return;   // too close to body centre
+    if (rMag < 100.0) return;   // too close to body centre (inside body)
 
-    // SOI radius: r_SOI = |r_body_helio| × (μ_body / μ_central)^(2/5).
-    // Use 5× SOI as the outer display threshold — gives 2–4 weeks lead time
-    // for typical interplanetary approach speeds.
-    double rBodyHelio = glm::length(glm::dvec3(arrState.r.x, arrState.r.y, arrState.r.z));
-    double rSOI = rBodyHelio * std::pow(muArr / muCentral, 0.4);
-    if (rMag > 5.0 * rSOI) return;   // too far — numbers not yet meaningful
+    // No upper distance threshold: the lever-arm formula ΔV = v∞×|Δb|/r is
+    // valid at any range where v∞² > 0.  The ΔV naturally shrinks with
+    // distance, so the display is useful throughout the approach.
+    // (SOI is computed for informational use only, not as a gate.)
 
     // Hyperbolic excess speed v∞² = v² − 2μ/r.
     double vInfSq = glm::dot(v, v) - 2.0 * muArr / rMag;
@@ -1627,7 +1625,7 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         // Pe current — colour-code: green = already safe, red = impact
         ImU32 peNowCol = (peNow > 0.0) ? kGreen : IM_COL32(255, 60, 60, 220);
         if (peNow > 0.0)
-            addLine(peNowCol, "Pe now  %+.0f km", peNow);
+            addLine(peNowCol, "Pe now  %.0f km", peNow);
         else
             addLine(peNowCol, "Pe now  %.0f km  IMPACT", peNow);
 
@@ -1640,6 +1638,103 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         addLine(bplCol, "BPL dV  %.3f km/s", bplDv);
         if (bplDv < 0.001)
             addLine(kGreen, " Pe ON TARGET");
+
+        // -- Time to Pe, MOI circularisation burn, and T-ignition ---------
+        // Recompute arrival-body relative state (same approach as tickBplane).
+        [&]() {
+            const int arrNaif = m_params.arrivalBody;
+            double muArr = 0.0, arrRadius = 0.0;
+            {
+                int planetId = (arrNaif < 10) ? arrNaif * 100 + 99 : arrNaif;
+                try { astro::Spice().getPlanetaryConstants(planetId, "GM", muArr); } catch (...) {}
+                if (muArr <= 0.0)
+                    try { astro::Spice().getPlanetaryConstants(arrNaif, "GM", muArr); } catch (...) {}
+                if (muArr <= 0.0) return;
+                astro::Vec3 radii;
+                try { astro::Spice().getPlanetaryConstants(planetId, "RADII", radii);
+                      arrRadius = radii.x; } catch (...) {}
+                if (arrRadius <= 0.0)
+                    try { astro::Vec3 r2;
+                          astro::Spice().getPlanetaryConstants(arrNaif, "RADII", r2);
+                          arrRadius = r2.x; } catch (...) {}
+                if (arrRadius <= 0.0) return;
+            }
+
+            astro::PosState arrState;
+            try {
+                astro::Spice().getRelativeGeometricState(arrNaif, m_params.centralBody,
+                    astro::EphemerisTime(m_currentET), arrState, kEclipJ2000);
+            } catch (...) { return; }
+
+            const glm::dvec3 rRel = m_shipHelioR
+                - glm::dvec3(arrState.r.x, arrState.r.y, arrState.r.z);
+            const glm::dvec3 vRel = m_shipHelioV
+                - glm::dvec3(arrState.v.x, arrState.v.y, arrState.v.z);
+            const double rMag = glm::length(rRel);
+            if (rMag < 100.0) return;
+
+            const double v2     = glm::dot(vRel, vRel);
+            const double vInfSq = v2 - 2.0 * muArr / rMag;
+            if (vInfSq <= 0.0) return;   // not hyperbolic
+
+            // Eccentricity vector and magnitude.
+            const double rv   = glm::dot(rRel, vRel);
+            const glm::dvec3 eVec = ((v2 - muArr / rMag) * rRel - rv * vRel) / muArr;
+            const double ecc  = glm::length(eVec);
+            if (ecc <= 1.0) return;
+
+            // Semi-major axis magnitude (always positive for hyperbolic).
+            const double energy = 0.5 * v2 - muArr / rMag;
+            const double absA   = muArr / (2.0 * std::abs(energy));
+            if (absA < 1.0) return;
+
+            // True anomaly (negative when approaching).
+            const double cosNu = std::clamp(glm::dot(eVec / ecc, rRel / rMag), -1.0, 1.0);
+            double nu = std::acos(cosNu);
+            if (rv < 0.0) nu = -nu;
+
+            // Hyperbolic anomaly → time to periapsis.
+            const double k    = std::sqrt((ecc - 1.0) / (ecc + 1.0));
+            const double argF = k * std::tan(nu * 0.5);
+            if (!std::isfinite(argF) || std::abs(argF) >= 1.0 - 1e-9) return;
+            const double F = 2.0 * std::atanh(argF);
+            if (!std::isfinite(F)) return;
+            const double M_h  = ecc * std::sinh(F) - F;
+            const double n    = std::sqrt(muArr / (absA * absA * absA));
+            const double tToPe = -(M_h / n);   // positive = approaching
+
+            // MOI circularisation ΔV at the selected Pe target altitude.
+            const double rPeTgt    = arrRadius + kPeTargetAlts[m_peAltIdx];
+            const double vHypAtPe  = std::sqrt(vInfSq + 2.0 * muArr / rPeTgt);
+            const double vCircAtPe = std::sqrt(muArr / rPeTgt);
+            const double dvCirc    = vHypAtPe - vCircAtPe;
+
+            // Burn timing (same accel model as departure page).
+            const double accelMs2  = (m_shipMass > 1.0)
+                                   ? m_mainThrustN / m_shipMass : 0.97;
+            const double burnDur   = dvCirc * 1000.0 / accelMs2;  // seconds
+            const double tIgn      = tToPe - burnDur * 0.5;
+
+            // Signed HH:MM:SS formatter (shared by all three lines below).
+            auto fmtSgn = [](double s, char* b, int sz) {
+                if (!std::isfinite(s)) { std::snprintf(b, sz, "--:--:--"); return; }
+                const bool neg = s < 0.0;
+                int t = static_cast<int>(std::abs(s) + 0.5);
+                const int hh = t / 3600; t %= 3600;
+                const int mm = t / 60;   t %= 60;
+                std::snprintf(b, sz, "%s%d:%02d:%02d", neg ? "-" : "", hh, mm, t);
+            };
+            char bufTpe[16], bufBurn[16], bufIgn[16];
+            fmtSgn(tToPe,   bufTpe,  sizeof(bufTpe));
+            fmtSgn(burnDur, bufBurn, sizeof(bufBurn));
+            fmtSgn(tIgn,    bufIgn,  sizeof(bufIgn));
+
+            sep();
+            const ImU32 tPeCol = (tToPe > 0.0) ? kCyan : kOrange;
+            addLine(tPeCol,  "T-to-Pe   %s", bufTpe);
+            addLine(kYellow, "MOI dV    %.3f km/s  (%s)", dvCirc, bufBurn);
+            addLine(kCyan,   "T-ign     %s  (T-0.5burn)", bufIgn);
+        }();
     }
 
     // -- Measure max width and draw backing ----------------------------------

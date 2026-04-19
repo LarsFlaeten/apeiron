@@ -1263,6 +1263,12 @@ int main(int argc, char* argv[])
             // Autopilot runs in all three views so switching to MFD fullscreen doesn't freeze it.
             bool mainEngineOn = false;
             glm::dvec3 shipForce(0.0);   // body-frame thrust force (N), hoisted for nav console
+            // Active burn-direction for MCC+ autopilot and HUD marker.
+            // BPL (B-plane Pe targeting) takes priority over Lambert MCC.
+            const glm::dvec3 activeNavDv = [&]() -> glm::dvec3 {
+                glm::dvec3 bpl = transferMFD.getBplaneDv();
+                return (glm::length(bpl) > 1e-9) ? bpl : transferMFD.getMccDv();
+            }();
             {
                 glm::dvec3 shipTorque(0.0);
 
@@ -1357,13 +1363,7 @@ int main(int argc, char* argv[])
                             }
                             autopilot.updateOrbitalTarget(apR, apV, att);
                             autopilot.updateRelVelTarget(att);
-                            // B-plane (Pe targeting near Mars) takes priority over
-                            // Lambert MCC (heliocentric correction).
-                            {
-                                glm::dvec3 bpl = transferMFD.getBplaneDv();
-                                autopilot.mccDirInertial = (glm::length(bpl) > 1e-9)
-                                    ? bpl : transferMFD.getMccDv();
-                            }
+                            autopilot.mccDirInertial = activeNavDv;
                             autopilot.updateMccTarget(att);
 
                             bool settleClamp = false;
@@ -2369,7 +2369,7 @@ int main(int argc, char* argv[])
                 // ---- Helmet HUD overlay ----
                 navHUD.render(*spacecraft[playerIdx], spacecraft, nav,
                               earthWorld, scene, camera, W, H, kSpacecraftNames, scPorts,
-                              refBody.name.c_str(), transferMFD.getMccDv(),
+                              refBody.name.c_str(), activeNavDv,
                               glm::dvec3(shipRelRef.v.x, shipRelRef.v.y, shipRelRef.v.z),
                               glm::dvec3(shipRelRef.r.x, shipRelRef.r.y, shipRelRef.r.z));
             }
