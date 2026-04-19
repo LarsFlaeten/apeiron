@@ -928,6 +928,10 @@ int main(int argc, char* argv[])
                     s->autopilot->mode = (s->autopilot->mode == M::NormalMinus) ? M::Off : M::NormalMinus;
                 }
             }
+            else if (key == GLFW_KEY_G && (mods & GLFW_MOD_SHIFT)) {
+                using M = spacecraft::AutopilotMode;
+                s->autopilot->mode = (s->autopilot->mode == M::MccPlus) ? M::Off : M::MccPlus;
+            }
             else if (key == GLFW_KEY_V && (mods & GLFW_MOD_SHIFT)) {
                 if (s->nav && s->nav->navMode == NavMode::Docking && s->nav->dockTgtIdx >= 0) {
                     using M = spacecraft::AutopilotMode;
@@ -1327,6 +1331,8 @@ int main(int argc, char* argv[])
                             // Update autopilot targets for this frame.
                             autopilot.updateOrbitalTarget(ship.position(), ship.velocity(), att);
                             autopilot.updateRelVelTarget(att);
+                            autopilot.mccDirInertial = transferMFD.getMccDv(); // km/s; normalised inside
+                            autopilot.updateMccTarget(att);
 
                             bool settleClamp = false;
                             spacecraft::Wrench apWrench = autopilot.compute(
@@ -2325,7 +2331,7 @@ int main(int argc, char* argv[])
                 // ---- Helmet HUD overlay ----
                 navHUD.render(*spacecraft[playerIdx], spacecraft, nav,
                               earthWorld, scene, camera, W, H, kSpacecraftNames, scPorts,
-                              refBody.name.c_str());
+                              refBody.name.c_str(), transferMFD.getMccDv());
             }
 
             // ---- Atmosphere LUT inspector (Map view only) ----

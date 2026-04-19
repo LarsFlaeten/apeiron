@@ -1249,6 +1249,8 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     const ImU32 kOrange  = IM_COL32(255, 140,   0, 220);
     const ImU32 kBacking = IM_COL32(  0,   0,   0, 175);
 
+    m_mccDv = glm::dvec3(0.0);   // reset each frame; set below when solution is valid
+
     if (!m_detail.valid) {
         dl->AddText({ origin.x + 4.0f, origin.y + 4.0f }, kDim, "No transfer selected");
         return;
@@ -1349,7 +1351,8 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                                             tofRemaining, true,
                                             vMCC_dep, vMCC_arr);
         if (mccValid) {
-            dvMCC = glm::length(vMCC_dep - shipV);
+            dvMCC   = glm::length(vMCC_dep - shipV);
+            m_mccDv = vMCC_dep - shipV;   // heliocentric ΔV vector, km/s
             // Draw MCC arc only when noticeably off-nominal (> 0.5 m/s).
             if (dvMCC > 5e-4) {
                 mccArc.colour    = kCyan;

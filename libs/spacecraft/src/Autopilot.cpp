@@ -56,6 +56,37 @@ void Autopilot::updateOrbitalTarget(const glm::dvec3& r, const glm::dvec3& v,
     }
 }
 
+void Autopilot::updateMccTarget(const glm::dquat& att)
+{
+    if (mode != AutopilotMode::MccPlus) return;
+
+    const double len = glm::length(mccDirInertial);
+    if (len < 1e-9) return;
+
+    const glm::dvec3 T = mccDirInertial / len;
+
+    // Build an orthonormal frame: T is body +X (burn direction).
+    // Pick a reference vector to minimise roll during transitions:
+    // prefer current +Y projected perpendicular to T.
+    glm::dvec3 upRef = att * glm::dvec3(0, 1, 0);
+    upRef -= glm::dot(upRef, T) * T;
+    if (glm::length(upRef) < 0.1) {
+        upRef = att * glm::dvec3(0, 0, 1);
+        upRef -= glm::dot(upRef, T) * T;
+    }
+    if (glm::length(upRef) < 1e-9) {
+        // Last resort: arbitrary perpendicular
+        upRef = (std::abs(T.z) < 0.9) ? glm::dvec3(0, 0, 1) : glm::dvec3(1, 0, 0);
+        upRef -= glm::dot(upRef, T) * T;
+    }
+    upRef = glm::normalize(upRef);
+    const glm::dvec3 right = glm::normalize(glm::cross(T, upRef));
+    upRef = glm::normalize(glm::cross(right, T));  // re-orthogonalise
+
+    targetAttitude = glm::quat_cast(glm::dmat3(T, upRef, right));
+    omegaFF        = glm::dvec3(0.0);
+}
+
 void Autopilot::updateRelVelTarget(const glm::dquat& att)
 {
     using M = AutopilotMode;

@@ -17,6 +17,7 @@ enum class AutopilotMode {
     NullV,       // null relative velocity to a target body (docking mode)
     RelVelPlus,  // hold body +X along relative velocity vector (+V, docking)
     RelVelMinus, // hold body +X against relative velocity vector (-V, docking)
+    MccPlus,     // hold body +X along externally-set MCC burn direction
 };
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,11 @@ struct Autopilot {
     double attFireThreshold   = 0.003;   // rad  (~0.17°) — coast if att error below this
     double rateFireThreshold  = 0.0005;  // rad/s (~0.03°/s) — coast if rate error below this
 
+    // MCC — set by caller before enabling MccPlus mode.
+    // mccDirInertial: required burn direction in inertial frame (ECLIPJ2000), km/s or unit vec.
+    // Caller must update this each frame from TransferMFD::getMccDv().
+    glm::dvec3 mccDirInertial {};
+
     // Secondary mode — runs alongside NullV.
     // When mode == NullV and secondaryMode == RelVelPlus or RelVelMinus,
     // compute() fills [3..5] from the full attitude hold rather than simple damping.
@@ -106,6 +112,12 @@ struct Autopilot {
     //   att — current body→inertial quaternion
     void updateOrbitalTarget(const glm::dvec3& r, const glm::dvec3& v,
                              const glm::dquat& att);
+
+    // For MccPlus:
+    // Builds targetAttitude so body +X aligns with mccDirInertial.
+    // Zeros omegaFF.  No-op if mode is not MccPlus.
+    //   att — current body→inertial quaternion
+    void updateMccTarget(const glm::dquat& att);
 
     // For RelVelPlus / RelVelMinus (primary or secondary alongside NullV):
     // Builds targetAttitude from relVelBody (must be set by caller first).

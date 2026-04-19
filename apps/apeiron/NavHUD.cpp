@@ -97,7 +97,8 @@ void NavHUD::render(const Spacecraft&                              ship,
                     float                                          H,
                     const std::vector<std::string>&                scNames,
                     const std::vector<std::vector<DockPort>>&      scPorts,
-                    const char*                                    refBodyName)
+                    const char*                                    refBodyName,
+                    const glm::dvec3&                              mccDv)
 {
     ImDrawList* dl  = ImGui::GetForegroundDrawList();
     const float cx  = W * 0.5f;
@@ -311,5 +312,28 @@ void NavHUD::render(const Spacecraft&                              ship,
         std::snprintf(refBuf, sizeof(refBuf), "REF %s", refBodyName);
         const ImVec2 refSz = ImGui::CalcTextSize(refBuf);
         dl->AddText({ W - refSz.x - 8.0f, 8.0f }, kHudGreen, refBuf);
+    }
+
+    // ---- MCC direction marker (orange diamond + "MCC" label) ----
+    // Drawn whenever TransferMFD has a valid MCC solution (mccDv != 0).
+    // Direction is heliocentric ECLIPJ2000 — same inertial frame as the camera.
+    const double mccDvMag = glm::length(mccDv);
+    if (mccDvMag > 1e-9) {
+        const ImU32 kMccOrange = IM_COL32(255, 140, 0, 230);
+        glm::vec3 mccDir = glm::normalize(glm::vec3(mccDv));
+        auto mcc = projectDir(mccDir);
+        if (mcc.onScreen(W, H)) {
+            // Diamond shape (rotated square).
+            constexpr float r = 12.0f;
+            ImVec2 p { mcc.sx, mcc.sy };
+            dl->AddLine({p.x,     p.y - r}, {p.x + r, p.y    }, kMccOrange, 1.5f);
+            dl->AddLine({p.x + r, p.y    }, {p.x,     p.y + r}, kMccOrange, 1.5f);
+            dl->AddLine({p.x,     p.y + r}, {p.x - r, p.y    }, kMccOrange, 1.5f);
+            dl->AddLine({p.x - r, p.y    }, {p.x,     p.y - r}, kMccOrange, 1.5f);
+            // Label
+            char mccBuf[24];
+            std::snprintf(mccBuf, sizeof(mccBuf), "MCC %.1f m/s", mccDvMag * 1000.0);
+            dl->AddText({p.x + r + 4.0f, p.y - 6.0f}, kMccOrange, mccBuf);
+        }
     }
 }

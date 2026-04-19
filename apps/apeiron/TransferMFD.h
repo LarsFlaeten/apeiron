@@ -86,6 +86,10 @@ public:
     TransferPlanSnapshot getPlan() const;
     void                 restorePlan(const TransferPlanSnapshot& snap);
 
+    // Returns the current MCC ΔV vector (heliocentric ECLIPJ2000, km/s).
+    // Zero when not on the coasting page or no valid MCC solution.
+    glm::dvec3 getMccDv() const { return m_mccDv; }
+
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
     const char* leftLabel (int slot) const override;
@@ -164,5 +168,9 @@ private:
     // Computed in main.cpp from Earth heliocentric + geocentric ship state.
     glm::dvec3 m_shipHelioR { 0.0 };
     glm::dvec3 m_shipHelioV { 0.0 };
+
+    // Most recent MCC ΔV vector (heliocentric ECLIPJ2000, km/s).
+    // Written by renderCoasting() each frame; zero when no valid solution.
+    glm::dvec3 m_mccDv { 0.0 };
 
 };
