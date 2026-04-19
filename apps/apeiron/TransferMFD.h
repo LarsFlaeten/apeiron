@@ -90,6 +90,15 @@ public:
     // Call every frame from main.cpp regardless of which view is active.
     void tickMcc();
 
+    // Recomputes the B-plane targeting correction whenever the ship is on a
+    // hyperbolic approach to Mars.  Call every frame alongside tickMcc().
+    void tickBplane();
+
+    // Returns the B-plane ΔV vector (ECLIPJ2000 inertial, km/s).
+    // Zero when not on a hyperbolic Mars approach or too far from Mars.
+    glm::dvec3 getBplaneDv() const { return m_bplaneDv; }
+    double     getBplanePeCurrentKm() const { return m_bplanePeCurrentKm; }
+
     // Returns the current MCC ΔV vector (heliocentric ECLIPJ2000, km/s).
     // Zero when no plan is set or no valid Lambert solution exists.
     glm::dvec3 getMccDv() const { return m_mccDv; }
@@ -176,5 +185,17 @@ private:
     // Most recent MCC ΔV vector (heliocentric ECLIPJ2000, km/s).
     // Written by renderCoasting() each frame; zero when no valid solution.
     glm::dvec3 m_mccDv { 0.0 };
+
+    // B-plane targeting (periapsis altitude at Mars).
+    // kPeTargetAlts: selectable target periapsis altitudes (km above Mars surface).
+    static constexpr double kPeTargetAlts[] = { 200.0, 500.0, 1000.0, 2000.0, 5000.0 };
+    int        m_peAltIdx         = 0;       // index into kPeTargetAlts
+    glm::dvec3 m_bplaneDv         { 0.0 };   // ΔV vector, ECLIPJ2000 km/s
+    double     m_bplanePeCurrentKm = 0.0;    // projected periapsis altitude (km, may be <0 = impact)
+    bool       m_bplaneValid      = false;
+
+    // B-plane display activates within this many SOI radii of the arrival body.
+    // 5× SOI gives ~2–4 weeks lead time at typical interplanetary approach speeds.
+    static constexpr double kBplaneSoiMultiple = 5.0;
 
 };

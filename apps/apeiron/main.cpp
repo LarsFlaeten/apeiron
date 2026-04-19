@@ -1357,7 +1357,13 @@ int main(int argc, char* argv[])
                             }
                             autopilot.updateOrbitalTarget(apR, apV, att);
                             autopilot.updateRelVelTarget(att);
-                            autopilot.mccDirInertial = transferMFD.getMccDv(); // km/s; normalised inside
+                            // B-plane (Pe targeting near Mars) takes priority over
+                            // Lambert MCC (heliocentric correction).
+                            {
+                                glm::dvec3 bpl = transferMFD.getBplaneDv();
+                                autopilot.mccDirInertial = (glm::length(bpl) > 1e-9)
+                                    ? bpl : transferMFD.getMccDv();
+                            }
                             autopilot.updateMccTarget(att);
 
                             bool settleClamp = false;
@@ -2126,7 +2132,8 @@ int main(int argc, char* argv[])
                                 + ship.velocity());
                     } catch (...) {}
                 }
-                transferMFD.tickMcc();  // keep MCC ΔV current regardless of active view
+                transferMFD.tickMcc();     // heliocentric Lambert correction
+                transferMFD.tickBplane();  // Mars periapsis targeting (active near Mars)
                 // Resolve a pending TGT string typed by the user.
                 {
                     std::string pendingTgt = orbitalMFD.consumePendingTgt();
@@ -2309,7 +2316,8 @@ int main(int argc, char* argv[])
                                 + ship.velocity());
                     } catch (...) {}
                 }
-                transferMFD.tickMcc();  // keep MCC ΔV current regardless of active view
+                transferMFD.tickMcc();     // heliocentric Lambert correction
+                transferMFD.tickBplane();  // Mars periapsis targeting (active near Mars)
                 if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
                     orbitalMFD.updateTarget(

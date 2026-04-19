@@ -144,6 +144,21 @@ void NavHUD::render(const Spacecraft&                              ship,
         dl->AddLine({p.x - d, p.y - d}, {p.x + d, p.y + d}, col, 1.5f);
         dl->AddLine({p.x + d, p.y - d}, {p.x - d, p.y + d}, col, 1.5f);
     };
+    // Radial markers: triangle pointing outward (R+), pointing inward (R-).
+    auto drawRadialPlus = [&](ImVec2 p, ImU32 col) {
+        constexpr float r = 14.0f;
+        dl->AddTriangle({p.x,         p.y - r      },
+                        {p.x + r*0.8f, p.y + r*0.5f},
+                        {p.x - r*0.8f, p.y + r*0.5f}, col, 1.5f);
+        dl->AddText({p.x + r + 4.0f, p.y - 6.0f}, col, "R+");
+    };
+    auto drawRadialMinus = [&](ImVec2 p, ImU32 col) {
+        constexpr float r = 14.0f;
+        dl->AddTriangle({p.x,          p.y + r      },
+                        {p.x + r*0.8f, p.y - r*0.5f},
+                        {p.x - r*0.8f, p.y - r*0.5f}, col, 1.5f);
+        dl->AddText({p.x + r + 4.0f, p.y - 6.0f}, col, "R-");
+    };
     // Orbit normal markers: circle + center dot (N+), circle + inner ring (N-).
     auto drawNormalPlus = [&](ImVec2 p, ImU32 col) {
         constexpr float r = 14.0f;
@@ -180,6 +195,16 @@ void NavHUD::render(const Spacecraft&                              ship,
                 auto nm  = projectDir(-normDir);
                 if (np.onScreen(W, H))  drawNormalPlus ({np.sx,  np.sy},  kViolet);
                 if (nm.onScreen(W, H))  drawNormalMinus({nm.sx,  nm.sy},  kViolet);
+            }
+
+            // Radial outward/inward markers (R+/R-) — shown when ref-relative
+            // position is defined (non-Earth ref or non-zero shipRelRefR).
+            if (glm::length(shipRelRefR) > 1e-3) {
+                glm::vec3 radDir = glm::normalize(glm::vec3(shipRelRefR));
+                auto rp  = projectDir( radDir);
+                auto rm  = projectDir(-radDir);
+                if (rp.onScreen(W, H))  drawRadialPlus ({rp.sx,  rp.sy},  kCyan);
+                if (rm.onScreen(W, H))  drawRadialMinus({rm.sx,  rm.sy},  kCyan);
             }
         }
     } else {

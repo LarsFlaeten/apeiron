@@ -137,6 +137,7 @@ const char* TransferMFD::leftLabel(int slot) const
 {
     if (m_page == 3) {
         if (slot == 4) return "BACK";
+        if (slot == 3) return "PE";
         return "";
     }
     if (m_page == 2) {
@@ -184,6 +185,8 @@ void TransferMFD::onLeft(int slot)
 {
     if (m_page == 3) {
         if (slot == 4) m_page = 2;
+        if (slot == 3) m_peAltIdx = (m_peAltIdx + 1)
+                                    % static_cast<int>(std::size(kPeTargetAlts));
         return;
     }
     if (m_page == 2) {
@@ -1246,6 +1249,109 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 // Keeps m_mccDv current so the HUD marker and autopilot direction are always
 // based on the latest ship trajectory.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// tickBplane — B-plane periapsis targeting for Mars approach.
+// Computes the ΔV needed to hit kPeTargetAlts[m_peAltIdx] km periapsis.
+// Burn direction: ĥ × r̂ (in orbit plane, perpendicular to velocity) — changes
+// impact parameter b without changing orbit plane or v∞.
+// Magnitude: ΔV = v∞ × |Δb| / |r|    (linear lever-arm approximation, exact
+// for a purely tangential burn; accurate when far from Mars, good enough near it).
+// ---------------------------------------------------------------------------
+void TransferMFD::tickBplane()
+{
+    m_bplaneDv          = glm::dvec3(0.0);
+    m_bplaneValid       = false;
+    m_bplanePeCurrentKm = 0.0;
+
+    if (!m_detail.valid) return;
+
+    const int arrNaif = m_params.arrivalBody;   // e.g. 4 = Mars barycenter
+
+    // Arrival-body μ and radius — try the exact planet ID first (arrNaif*100+99),
+    // then fall back to the barycenter ID (arrNaif).
+    double muArr = 0.0;
+    double arrRadius = 0.0;
+    {
+        int planetId = (arrNaif < 10) ? arrNaif * 100 + 99 : arrNaif;
+        try { astro::Spice().getPlanetaryConstants(planetId, "GM", muArr); } catch (...) {}
+        if (muArr <= 0.0)
+            try { astro::Spice().getPlanetaryConstants(arrNaif, "GM", muArr); } catch (...) {}
+        if (muArr <= 0.0) return;   // no GM — can't compute
+
+        astro::Vec3 radii;
+        try { astro::Spice().getPlanetaryConstants(planetId, "RADII", radii);
+              arrRadius = radii.x; } catch (...) {}
+        if (arrRadius <= 0.0)
+            try { astro::Vec3 r2;
+                  astro::Spice().getPlanetaryConstants(arrNaif, "RADII", r2);
+                  arrRadius = r2.x; } catch (...) {}
+        if (arrRadius <= 0.0) return;
+    }
+
+    // Central body μ (Sun by default).
+    double muCentral = m_params.muCentral;
+    if (muCentral <= 0.0) {
+        try { astro::Spice().getPlanetaryConstants(m_params.centralBody,
+                                                   "GM", muCentral); } catch (...) {}
+        if (muCentral <= 0.0) muCentral = 1.32712440018e11;
+    }
+
+    // Arrival-body heliocentric state.
+    static const astro::ReferenceFrame kEclipJ2000bp =
+        astro::ReferenceFrame::createEclipJ2000();
+    astro::PosState arrState;
+    try {
+        astro::Spice().getRelativeGeometricState(arrNaif, m_params.centralBody,
+            astro::EphemerisTime(m_currentET), arrState, kEclipJ2000bp);
+    } catch (...) { return; }
+
+    // Body-relative ship state.
+    glm::dvec3 r = m_shipHelioR - glm::dvec3(arrState.r.x, arrState.r.y, arrState.r.z);
+    glm::dvec3 v = m_shipHelioV - glm::dvec3(arrState.v.x, arrState.v.y, arrState.v.z);
+
+    double rMag = glm::length(r);
+    if (rMag < 100.0) return;   // too close to body centre
+
+    // SOI radius: r_SOI = |r_body_helio| × (μ_body / μ_central)^(2/5).
+    // Use 5× SOI as the outer display threshold — gives 2–4 weeks lead time
+    // for typical interplanetary approach speeds.
+    double rBodyHelio = glm::length(glm::dvec3(arrState.r.x, arrState.r.y, arrState.r.z));
+    double rSOI = rBodyHelio * std::pow(muArr / muCentral, 0.4);
+    if (rMag > 5.0 * rSOI) return;   // too far — numbers not yet meaningful
+
+    // Hyperbolic excess speed v∞² = v² − 2μ/r.
+    double vInfSq = glm::dot(v, v) - 2.0 * muArr / rMag;
+    if (vInfSq <= 0.0) return;   // elliptic / captured — not applicable
+    double vInf = std::sqrt(vInfSq);
+
+    // Angular momentum vector, impact parameter b = h / v∞.
+    glm::dvec3 hVec = glm::cross(r, v);
+    double h = glm::length(hVec);
+    if (h < 1e-6) return;
+    double b = h / vInf;
+
+    // Current periapsis radius: r_pe = −α + √(α² + b²), α = μ/v∞².
+    double alpha = muArr / vInfSq;
+    double rPe   = -alpha + std::sqrt(alpha * alpha + b * b);
+    m_bplanePeCurrentKm = rPe - arrRadius;
+
+    // Target impact parameter from desired Pe altitude.
+    double rPeTarget = arrRadius + kPeTargetAlts[m_peAltIdx];
+    double bTarget   = std::sqrt(rPeTarget * rPeTarget
+                                 + 2.0 * muArr * rPeTarget / vInfSq);
+
+    // ΔV: burn in direction ĥ × r to change |h| (and thus b and Pe).
+    // ΔV = v∞ × |Δb| / |r|  (lever-arm formula; exact for a tangential burn).
+    double     deltaB = bTarget - b;
+    glm::dvec3 hHat   = hVec / h;
+    glm::dvec3 dvDir  = glm::normalize(glm::cross(hHat, r));  // increases |h|
+    double     dvSign = (deltaB >= 0.0) ? 1.0 : -1.0;
+    double     dvMag  = vInf * std::abs(deltaB) / rMag;
+
+    m_bplaneDv    = dvSign * dvMag * dvDir;  // km/s, ECLIPJ2000 inertial direction
+    m_bplaneValid = true;
+}
+
 void TransferMFD::tickMcc()
 {
     m_mccDv = glm::dvec3(0.0);
@@ -1509,6 +1615,31 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             addLine(kGreen,  " ON NOMINAL TRAJECTORY");
         else
             addLine(kDim,    " arr dV %.3f km/s (new)", glm::length(vMCC_arr - marsNow.v));
+    }
+
+    // -- B-plane targeting ---------------------------------------------------
+    if (m_bplaneValid) {
+        sep();
+        const double peNow = m_bplanePeCurrentKm;
+        const double peTgt = kPeTargetAlts[m_peAltIdx];
+        const double bplDv = glm::length(m_bplaneDv);
+
+        // Pe current — colour-code: green = already safe, red = impact
+        ImU32 peNowCol = (peNow > 0.0) ? kGreen : IM_COL32(255, 60, 60, 220);
+        if (peNow > 0.0)
+            addLine(peNowCol, "Pe now  %+.0f km", peNow);
+        else
+            addLine(peNowCol, "Pe now  %.0f km  IMPACT", peNow);
+
+        // Pe target (user-selectable via PE button)
+        addLine(kYellow,  "Pe tgt  %.0f km  [PE]", peTgt);
+
+        // B-plane correction ΔV
+        ImU32 bplCol = (bplDv < 0.001) ? kGreen :
+                       (bplDv < 0.1)   ? kYellow : kOrange;
+        addLine(bplCol, "BPL dV  %.3f km/s", bplDv);
+        if (bplDv < 0.001)
+            addLine(kGreen, " Pe ON TARGET");
     }
 
     // -- Measure max width and draw backing ----------------------------------
