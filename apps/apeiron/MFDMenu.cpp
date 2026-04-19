@@ -20,8 +20,11 @@ void MFDMenu::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
     constexpr int   kCols = 2;
     constexpr float kPad  = 8.0f;
+    const int   rows  = (static_cast<int>(m_entries.size()) + kCols - 1) / kCols;
     const float tileW = (size.x - kPad * (kCols + 1)) / static_cast<float>(kCols);
-    const float tileH = tileW * 0.55f;
+    const float tileH = (rows > 0)
+                      ? (size.y - kPad * (rows + 1)) / static_cast<float>(rows)
+                      : tileW * 0.55f;
 
     const ImVec2 mousePos = ImGui::GetMousePos();
     const bool   clicked  = ImGui::IsMouseClicked(ImGuiMouseButton_Left);

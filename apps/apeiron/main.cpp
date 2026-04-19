@@ -69,6 +69,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <chrono>
 
@@ -797,6 +798,22 @@ int main(int argc, char* argv[])
                 static_cast<VkSampler>   (ap.lutSampler()),
                 static_cast<VkImageView> (ap.lutView()),
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+
+        // Register body diffuse textures with ImGui so MapMFD can display them.
+        // Body textures are equirectangular maps — perfect for the flat map view.
+        std::unordered_map<std::string, ImTextureID> bodyDiffuseTexIds;
+        for (std::size_t i = 0; i < bodyInfos.size(); ++i) {
+            std::string nm = bodyInfos[i].node->naifName();
+            for (auto& c : nm) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            auto& tex = bodyTextures[i].diffuse;
+            if (tex.imageView() && tex.sampler()) {
+                bodyDiffuseTexIds[nm] = reinterpret_cast<ImTextureID>(
+                    ImGui_ImplVulkan_AddTexture(
+                        static_cast<VkSampler>  (tex.sampler()),
+                        static_cast<VkImageView>(tex.imageView()),
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+            }
         }
 
         // Initialise offscreen camera render targets (must follow initImGui so that
@@ -2159,6 +2176,8 @@ int main(int argc, char* argv[])
                     mapCfg.radiusKm      = refBody.radiusKm;
                     mapCfg.rotRateRadSec = mapRotRate;
                     mapMFD.setRefName(refBody.name.c_str());
+                    if (auto it = bodyDiffuseTexIds.find(refBody.name); it != bodyDiffuseTexIds.end())
+                        mapMFD.setMapTexture(it->second);
                     mapMFD.update(shipRelRef.r, shipRelRef.v, mapCfg, inertialToBody, sunDirInertial);
                 }
                 // Feed geocentric state to TransferMFD departure page.
@@ -2387,6 +2406,8 @@ int main(int argc, char* argv[])
                     mapCfg2.radiusKm      = refBody.radiusKm;
                     mapCfg2.rotRateRadSec = mapRotRate2;
                     mapMFD.setRefName(refBody.name.c_str());
+                    if (auto it = bodyDiffuseTexIds.find(refBody.name); it != bodyDiffuseTexIds.end())
+                        mapMFD.setMapTexture(it->second);
                     mapMFD.update(shipRelRef.r, shipRelRef.v, mapCfg2, inertialToBody2, sunDirInertial2);
                 }
                 transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());

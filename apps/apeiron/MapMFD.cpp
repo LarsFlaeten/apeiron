@@ -205,13 +205,16 @@ static std::vector<glm::dvec2> buildForwardTrack(
             const double r_ = p / (1.0 + ecc * std::cos(nu));
             const glm::dvec3 rInertial = r_ * (std::cos(nu) * periDir
                                               + std::sin(nu) * qDir);
-            // Mean anomaly at this ν
-            const double tanH = std::tan(nu * 0.5)
-                              * std::sqrt((1.0 - ecc) / (1.0 + ecc));
-            const double E = 2.0 * std::atan(tanH);
-            const double M = E - ecc * std::sin(E);
-            const double tAtNu = M / n;
-            const double dt    = tAtNu - tFromPeStart;
+            // Time from periapsis — must be continuous for multi-orbit tracks.
+            // Normalize nu to [-π, π] so tan(nu/2) stays finite, then add
+            // 2π * orbit-count (= floor((nu+π)/2π)) to keep M monotonic.
+            const double nuNorm = std::remainder(nu, kTwoPi);  // in [-π, π]
+            const double tanH   = std::tan(nuNorm * 0.5) * std::sqrt((1.0 - ecc) / (1.0 + ecc));
+            const double E      = 2.0 * std::atan(tanH);
+            const double M      = E - ecc * std::sin(E);
+            const int    orb    = static_cast<int>(std::floor((nu + kPi) / kTwoPi));
+            const double tAtNu  = (M + kTwoPi * orb) / n;
+            const double dt     = tAtNu - tFromPeStart;
 
             const glm::dvec3 rBody = MapMFD::rotZ(inertialToBody * rInertial,
                                                    -rotRateRadSec * dt);
@@ -361,8 +364,17 @@ void MapMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     const ImU32 kSun      = IM_COL32(255, 220,  60, 255);
     const ImU32 kDim      = IM_COL32(  0, 140,  50, 140);
 
-    // Background
-    dl->AddRectFilled(origin, { origin.x + size.x, origin.y + size.y }, kBg);
+    // Background: planet texture if available, dark fill otherwise
+    if (m_mapTex) {
+        dl->AddImage(m_mapTex,
+                     origin, { origin.x + size.x, origin.y + size.y },
+                     { 0.0f, 0.0f }, { 1.0f, 1.0f });
+        // Dim overlay so grid/track colours pop against bright textures
+        dl->AddRectFilled(origin, { origin.x + size.x, origin.y + size.y },
+                          IM_COL32(0, 0, 0, 80));
+    } else {
+        dl->AddRectFilled(origin, { origin.x + size.x, origin.y + size.y }, kBg);
+    }
 
     if (!m_valid) {
         dl->AddText({ origin.x + 4.0f, origin.y + 4.0f }, kDim, "No orbital data");
@@ -407,15 +419,15 @@ void MapMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         const int   orbs    = m_isHyp ? 1 : m_showOrbits;
 
         for (int orb = 0; orb < orbs; ++orb) {
-            // Starting ν for this orbit segment
+            // Starting ν for this orbit segment (each orbit shifted by 2π).
+            // tFromPeStart is always m_tFromPe — the tAtNu formula inside
+            // buildForwardTrack already adds period × orbit_count, so dt
+            // (= tAtNu - m_tFromPe) correctly grows by one period per orbit.
+            // Passing m_tFromPe + orb*period would cancel that offset and
+            // make every orbit have the same body-rotation range (they'd overlap).
             const double nuStart = m_nuNow + orb * kTwoPi;
-            const double tStart  = m_tFromPe + orb * m_period;
-
-            // For the first orbit start at current ν; subsequent ones start at
-            // current ν + full orbit (the track is continuous but colour-coded).
-            // Build a 1-orbit segment.
             auto seg = buildForwardTrack(
-                m_ecc, m_p, nuStart, tStart,
+                m_ecc, m_p, nuStart, m_tFromPe,
                 m_period, m_cfg.mu, m_sma,
                 m_periDir, m_qDir,
                 m_inertialToBody, m_cfg.rotRateRadSec,

@@ -42,7 +42,8 @@ public:
                 const glm::dmat3&  inertialToBody,
                 const glm::dvec3&  sunDirInertial);
 
-    void setRefName(const char* name) { m_refName = name ? name : ""; }
+    void setRefName   (const char* name) { m_refName = name ? name : ""; }
+    void setMapTexture(ImTextureID tex)  { m_mapTex  = tex; }
 
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
@@ -101,4 +102,5 @@ private:
     int         m_showOrbits = 2;   // future orbits to draw (1–3)
 
     std::string m_refName;
+    ImTextureID m_mapTex = ImTextureID{};   // planet equirectangular texture (optional)
 };
