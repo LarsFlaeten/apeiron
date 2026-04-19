@@ -38,17 +38,19 @@ static const ImU32 kColTgtLine  = IM_COL32( 40, 120, 200, 180);
 static const ImU32 kColTgtText  = IM_COL32( 80, 180, 255, 220);
 
 // Format a duration in seconds as [H:]MM:SS
-static void fmtTime(double totalSeconds, char* buf, std::size_t sz)
+// allowNeg=true: show "-HH:MM:SS" for past-periapsis on hyperbolic orbits.
+static void fmtTime(double totalSeconds, char* buf, std::size_t sz, bool allowNeg = false)
 {
-    if (totalSeconds < 0.0 || !std::isfinite(totalSeconds)) {
+    if (!std::isfinite(totalSeconds) || (!allowNeg && totalSeconds < 0.0)) {
         std::snprintf(buf, sz, "--:--");
         return;
     }
-    int t = static_cast<int>(totalSeconds + 0.5);
+    bool neg = totalSeconds < 0.0;
+    int t = static_cast<int>(std::abs(totalSeconds) + 0.5);
     int h = t / 3600; t %= 3600;
     int m = t / 60;   t %= 60;
-    if (h > 0) std::snprintf(buf, sz, "%d:%02d:%02d", h, m, t);
-    else        std::snprintf(buf, sz, "%02d:%02d",       m, t);
+    if (h > 0) std::snprintf(buf, sz, "%s%d:%02d:%02d", neg ? "-" : "", h, m, t);
+    else        std::snprintf(buf, sz, "%s%02d:%02d",   neg ? "-" : "", m, t);
 }
 
 // ---------------------------------------------------------------------------
@@ -296,9 +298,12 @@ void OrbitalMFD::update(const astro::PosState&     state,
         ? kTwoPi * std::sqrt(a * a * a / mu)
         : -1.0;
 
-    // Time to apoapsis / periapsis — only for well-conditioned elliptic orbits.
-    double tToApo = -1.0, tToPer = -1.0;
+    // Time to apoapsis / periapsis.
+    // NaN = not computed; negative tToPer = past periapsis (hyperbolic only).
+    double tToApo = std::numeric_limits<double>::quiet_NaN();
+    double tToPer = std::numeric_limits<double>::quiet_NaN();
     if (trueValid && e >= kMinEcc && e < 0.9998 && T > 0.0) {
+        // Elliptic: both apoapsis and periapsis times via mean anomaly.
         double M = astro::OrbitElements::meanAnomalyFromTrueAnomaly(nu, e);
         if (std::isfinite(M)) {
             const double n     = kTwoPi / T;
@@ -306,6 +311,26 @@ void OrbitalMFD::update(const astro::PosState&     state,
             if (M_n < 0.0) M_n += kTwoPi;
             tToPer = std::fmod(kTwoPi - M_n, kTwoPi) / n;
             tToApo = std::fmod(kPi - M_n + kTwoPi, kTwoPi) / n;
+        }
+    }
+    if (e >= 1.0 && trueValid && e > 1.0) {
+        // Hyperbolic time to periapsis via hyperbolic anomaly F.
+        // F = 2 atanh( sqrt((e-1)/(e+1)) · tan(ν/2) )
+        // M_h = e sinh F − F  (hyperbolic mean anomaly)
+        // t = M_h / n,  n = sqrt(μ/|a|³)
+        // tToPer = −t:  positive → still approaching, negative → already past PE.
+        const double k    = std::sqrt((e - 1.0) / (e + 1.0));
+        const double argF = k * std::tan(nu * 0.5);
+        if (std::isfinite(argF) && std::abs(argF) < 1.0 - 1e-9) {
+            const double F = 2.0 * std::atanh(argF);
+            if (std::isfinite(F)) {
+                const double M_h = e * std::sinh(F) - F;
+                const double absA = std::abs(a);
+                if (absA > 1.0) {
+                    const double n = std::sqrt(mu / (absA * absA * absA));
+                    tToPer = -(M_h / n);   // positive = approaching PE
+                }
+            }
         }
     }
 
@@ -611,6 +636,9 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             rowStr("t-AP", tApBuf);
             rowStr("t-PE", tPeBuf);
         } else {
+            char tPeHypBuf[16];
+            fmtTime(m_tToPerSec, tPeHypBuf, sizeof(tPeHypBuf), /*allowNeg=*/true);
+            rowStr("t-PE", tPeHypBuf);
             row("v\xe2\x88\x9e", "%.3f", m_hypVinfKms, " km/s", kColEscape);
         }
         row   ("Inc",   "%.2f\xc2\xb0", m_incDeg);
@@ -639,6 +667,9 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             rowStr("t-AP", tApBuf);
             rowStr("t-PE", tPeBuf);
         } else {
+            char tPeHypBuf[16];
+            fmtTime(m_tToPerSec, tPeHypBuf, sizeof(tPeHypBuf), /*allowNeg=*/true);
+            rowStr("t-PE", tPeHypBuf);
             row("v\xe2\x88\x9e", "%.3f", m_hypVinfKms, " km/s", kColEscape);
         }
         row   ("Inc",   "%.2f\xc2\xb0", m_incDeg);
