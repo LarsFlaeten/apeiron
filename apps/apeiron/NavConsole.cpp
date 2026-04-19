@@ -303,6 +303,7 @@ void NavConsole::render(float                                           posX,
     else if (apMode == M::NullV)       apLabel = "NULL V";
     else if (apMode == M::RelVelPlus)  apLabel = "+V";
     else if (apMode == M::RelVelMinus) apLabel = "-V";
+    else if (apMode == M::MccPlus)     apLabel = "MCC+";
     ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "AP:");
     ImGui::SameLine();
     ImGui::TextColored(apMode != M::Off

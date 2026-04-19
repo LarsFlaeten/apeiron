@@ -871,6 +871,9 @@ int main(int argc, char* argv[])
         glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int scancode, int action, int mods) {
             ImGui_ImplGlfw_KeyCallback(w, key, scancode, action, mods);
             if (action != GLFW_PRESS) return;
+            // Suppress all game hotkeys while an ImGui text field has focus,
+            // so typing e.g. "MARS" doesn't trigger Shift+M/Shift+R/Shift+S.
+            if (ImGui::GetIO().WantCaptureKeyboard) return;
             auto* s = static_cast<WindowState*>(glfwGetWindowUserPointer(w));
             if (key == GLFW_KEY_ESCAPE)
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
@@ -1243,7 +1246,9 @@ int main(int argc, char* argv[])
                                     static_cast<int>(gb.naifId), "RADII", radii);
                                 radiusKm = radii.x;  // equatorial
                             } catch (const astro::SpiceException&) {}
-                            refBody = { dominantBodyName, gb.gm, radiusKm,
+                            std::string upperName = dominantBodyName;
+                            for (auto& c : upperName) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                            refBody = { upperName, gb.gm, radiusKm,
                                         static_cast<SpiceInt>(gb.naifId) };
                             orbitalMFD.setContext(refBody.name.c_str(), "");
                             break;
@@ -1334,7 +1339,23 @@ int main(int argc, char* argv[])
                             }
 
                             // Update autopilot targets for this frame.
-                            autopilot.updateOrbitalTarget(ship.position(), ship.velocity(), att);
+                            // Use reference-body-relative state so Prograde/Normal modes
+                            // are correct in Mars SOI, heliocentric, etc.
+                            glm::dvec3 apR = ship.position();
+                            glm::dvec3 apV = ship.velocity();
+                            if (refBody.naifId != 399) {
+                                static const astro::ReferenceFrame kEclipJ2000ap =
+                                    astro::ReferenceFrame::createEclipJ2000();
+                                astro::PosState refSt;
+                                try {
+                                    astro::Spice().getRelativeGeometricState(
+                                        static_cast<int>(refBody.naifId), 399,
+                                        currentEt, refSt, kEclipJ2000ap);
+                                    apR -= glm::dvec3(refSt.r.x, refSt.r.y, refSt.r.z);
+                                    apV -= glm::dvec3(refSt.v.x, refSt.v.y, refSt.v.z);
+                                } catch (...) {}
+                            }
+                            autopilot.updateOrbitalTarget(apR, apV, att);
                             autopilot.updateRelVelTarget(att);
                             autopilot.mccDirInertial = transferMFD.getMccDv(); // km/s; normalised inside
                             autopilot.updateMccTarget(att);
@@ -2062,6 +2083,7 @@ int main(int argc, char* argv[])
                                     static_cast<int>(id), "GM", gm);
                                 astro::Spice().getPlanetaryConstants(
                                     static_cast<int>(id), "RADII", radii);
+                                for (auto& c : pending) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
                                 refBody = { pending, gm, radii.x, id };
                                 orbitalMFD.setContext(refBody.name.c_str(), "");
                             } catch (const astro::SpiceException&) {}
@@ -2241,6 +2263,7 @@ int main(int argc, char* argv[])
                                     static_cast<int>(id), "GM", gm);
                                 astro::Spice().getPlanetaryConstants(
                                     static_cast<int>(id), "RADII", radii);
+                                for (auto& c : pending) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
                                 refBody = { pending, gm, radii.x, id };
                                 orbitalMFD.setContext(refBody.name.c_str(), "");
                             } catch (const astro::SpiceException&) {}
