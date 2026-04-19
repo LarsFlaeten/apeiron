@@ -2453,8 +2453,10 @@ int main(int argc, char* argv[])
             }
 
             // Build VP for a named cam node on the player ship (square 1:1 aspect).
+            // vpRotOut (optional): rotation-only VP for star rendering (no translation).
             auto buildCamVP = [&](const std::string& nodeName, float fovDeg,
-                                  glm::mat4& vpOut, glm::vec3& camPosOut) {
+                                  glm::mat4& vpOut, glm::vec3& camPosOut,
+                                  glm::mat4* vpRotOut = nullptr) {
                 if (!orionGltf.isLoaded() || nodeName.empty()) return;
                 auto& sc  = *spacecraft[playerIdx];
                 glm::vec3 rp = scene.origin().toRenderSpace(earthWorld + sc.position());
@@ -2470,14 +2472,21 @@ int main(int argc, char* argv[])
                 camPosOut = pos;
                 glm::mat4 proj = glm::perspective(glm::radians(fovDeg), 1.0f, 1e-4f, 200.0f);
                 proj[1][1] *= -1.0f;
-                vpOut = proj * glm::lookAt(pos, pos + fwd, up);
+                glm::mat4 view = glm::lookAt(pos, pos + fwd, up);
+                vpOut = proj * view;
+                if (vpRotOut) {
+                    glm::mat4 viewRot = view;
+                    viewRot[3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+                    *vpRotOut = proj * viewRot;
+                }
             };
 
             glm::mat4 offVP      = glm::mat4(1.0f);
+            glm::mat4 offVPRot   = glm::mat4(1.0f);
             glm::vec3 offCamPos  = glm::vec3(0.0f);
             glm::mat4 dockVP     = glm::mat4(1.0f);
             glm::vec3 dockCamPos = glm::vec3(0.0f);
-            buildCamVP(camMFD.activeCamNode(),        70.0f,                  offVP,  offCamPos);
+            buildCamVP(camMFD.activeCamNode(),        70.0f,                  offVP,  offCamPos, &offVPRot);
             buildCamVP(dockingMFD.preferredCamNode(), dockingMFD.fovDeg(),    dockVP, dockCamPos);
 
             if (!renderer.acquireFrame()) continue;
@@ -2488,6 +2497,45 @@ int main(int argc, char* argv[])
 
                 // CamMFD offscreen
                 offscreenCam.begin(renderer.currentCmd(), fi);
+
+                // Stars (drawn first — depth write disabled, stars at infinity).
+                starField.draw(renderer.currentCmd(), offVPRot);
+
+                // Celestial bodies — same model/lighting logic as the main HDR pass
+                // but using the offscreen VP and camera position.
+                // Rings and atmospheres are skipped (nice-to-have, add later).
+                for (std::size_t i = 0; i < bodyInfos.size(); ++i) {
+                    auto& bi = bodyInfos[i];
+                    glm::vec3 renderPos = scene.origin().toRenderSpace(
+                        bi.node->worldPosition());
+                    float distKm = glm::length(renderPos - offCamPos);
+                    float offApparentPx = (bi.radiusKm / distKm)
+                        * (static_cast<float>(OffscreenCam::kHeight)
+                           / std::tan(glm::radians(70.0f) * 0.5f));
+                    float sizeScale = (offApparentPx < 2.0f)
+                                    ? (2.0f / offApparentPx) : 1.0f;
+                    glm::mat4 model = glm::translate(glm::mat4(1.0f), renderPos);
+                    model = model * glm::mat4(bi.node->orientation());
+                    glm::vec3 bodyScale = bi.meshPath.empty()
+                        ? glm::vec3(bi.radiusKm, bi.bRadiusKm, bi.polarRadiusKm)
+                        : glm::vec3(bi.radiusKm);
+                    model = glm::scale(model, bodyScale * sizeScale);
+                    bool isEmissive = (sunIndex >= 0 && static_cast<int>(i) == sunIndex);
+                    glm::vec3 sunDir      = glm::vec3(0.0f, 1.0f, 0.0f);
+                    float     lightIntens = 1.0f;
+                    if (sunIndex >= 0 && !isEmissive) {
+                        sunDir = glm::normalize(sunRenderPos - renderPos);
+                        float distAU = glm::length(sunRenderPos - renderPos) / 149'597'870.7f;
+                        lightIntens  = 1.0f / (distAU * distAU);
+                    }
+                    glm::vec3 viewDir = glm::normalize(offCamPos - renderPos);
+                    float dispScale = (sizeScale > 1.0f) ? 0.0f : bi.displaceScale;
+                    renderer.draw(offVP * model, model, sunDir, viewDir,
+                                  isEmissive, lightIntens, dispScale,
+                                  descriptorSets[i], *meshes[i]);
+                }
+
+                // Spacecraft models drawn last (in front of background).
                 if (orionGltf.isLoaded())
                     orionGltf.draw(renderer.currentCmd(), meshPipeline,
                                    offVP, offOrion, offSunDir, offCamPos);
