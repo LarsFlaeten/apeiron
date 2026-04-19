@@ -1240,6 +1240,34 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 // Re-solves Lambert from current heliocentric position to the planned Mars
 // arrival point to compute the mid-course correction (MCC) ΔV.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// tickMcc — called every frame from main.cpp regardless of active view.
+// Keeps m_mccDv current so the HUD marker and autopilot direction are always
+// based on the latest ship trajectory.
+// ---------------------------------------------------------------------------
+void TransferMFD::tickMcc()
+{
+    m_mccDv = glm::dvec3(0.0);
+    if (!m_detail.valid) return;
+
+    const double tofRemaining = m_detail.arrET - m_currentET;
+    if (tofRemaining <= kDay) return;
+
+    double muSun = m_params.muCentral;
+    if (muSun <= 0.0) {
+        try { astro::Spice().getPlanetaryConstants(10, "GM", muSun); }
+        catch (...) {}
+    }
+    if (muSun <= 0.0) muSun = 1.32712440018e11;
+
+    glm::dvec3 vMCC_dep, vMCC_arr;
+    if (spacecraft::solveLambert(muSun, m_shipHelioR, m_detail.arrPos,
+                                 tofRemaining, true, vMCC_dep, vMCC_arr)) {
+        m_mccDv = vMCC_dep - m_shipHelioV;
+    }
+}
+
 void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 {
     const ImU32 kGreen   = IM_COL32(  0, 210,  75, 210);
@@ -1248,8 +1276,6 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     const ImU32 kCyan    = IM_COL32(  0, 200, 220, 220);
     const ImU32 kOrange  = IM_COL32(255, 140,   0, 220);
     const ImU32 kBacking = IM_COL32(  0,   0,   0, 175);
-
-    m_mccDv = glm::dvec3(0.0);   // reset each frame; set below when solution is valid
 
     if (!m_detail.valid) {
         dl->AddText({ origin.x + 4.0f, origin.y + 4.0f }, kDim, "No transfer selected");

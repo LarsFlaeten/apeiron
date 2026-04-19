@@ -86,8 +86,12 @@ public:
     TransferPlanSnapshot getPlan() const;
     void                 restorePlan(const TransferPlanSnapshot& snap);
 
+    // Recomputes the MCC ΔV vector from current ship state and plan.
+    // Call every frame from main.cpp regardless of which view is active.
+    void tickMcc();
+
     // Returns the current MCC ΔV vector (heliocentric ECLIPJ2000, km/s).
-    // Zero when not on the coasting page or no valid MCC solution.
+    // Zero when no plan is set or no valid Lambert solution exists.
     glm::dvec3 getMccDv() const { return m_mccDv; }
 
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;

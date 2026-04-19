@@ -2099,6 +2099,7 @@ int main(int argc, char* argv[])
                                 + ship.velocity());
                     } catch (...) {}
                 }
+                transferMFD.tickMcc();  // keep MCC ΔV current regardless of active view
                 // Resolve a pending TGT string typed by the user.
                 {
                     std::string pendingTgt = orbitalMFD.consumePendingTgt();
@@ -2280,6 +2281,7 @@ int main(int argc, char* argv[])
                                 + ship.velocity());
                     } catch (...) {}
                 }
+                transferMFD.tickMcc();  // keep MCC ΔV current regardless of active view
                 if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
                     auto& tgt = *spacecraft[issIdx];
                     orbitalMFD.updateTarget(
