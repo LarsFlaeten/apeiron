@@ -44,6 +44,8 @@ public:
                 float                                          screenH,
                 const std::vector<std::string>&                scNames,
                 const std::vector<std::vector<DockPort>>&      scPorts,
-                const char*                                    refBodyName = "EARTH",
-                const glm::dvec3&                              mccDv       = {});
+                const char*                                    refBodyName    = "EARTH",
+                const glm::dvec3&                              mccDv          = {},
+                const glm::dvec3&                              shipRelRefV    = {},
+                const glm::dvec3&                              shipRelRefR    = {});
 };

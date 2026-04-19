@@ -98,7 +98,9 @@ void NavHUD::render(const Spacecraft&                              ship,
                     const std::vector<std::string>&                scNames,
                     const std::vector<std::vector<DockPort>>&      scPorts,
                     const char*                                    refBodyName,
-                    const glm::dvec3&                              mccDv)
+                    const glm::dvec3&                              mccDv,
+                    const glm::dvec3&                              shipRelRefV,
+                    const glm::dvec3&                              shipRelRefR)
 {
     ImDrawList* dl  = ImGui::GetForegroundDrawList();
     const float cx  = W * 0.5f;
@@ -159,8 +161,10 @@ void NavHUD::render(const Spacecraft&                              ship,
     // ==================================================================
     if (nav.navMode == NavMode::Orbit) {
         // ---- Orbit: prograde / retrograde / normal+/normal- ----
-        const glm::dvec3 vel  = ship.velocity();
-        const glm::dvec3 pos  = ship.position();
+        // Use reference-body-relative velocity/position when provided (non-zero)
+        // so markers are correct in Mars SOI, Moon SOI, etc.
+        const glm::dvec3 vel = (glm::length(shipRelRefV) > 1e-9) ? shipRelRefV : ship.velocity();
+        const glm::dvec3 pos = (glm::length(shipRelRefR) > 1e-9) ? shipRelRefR : ship.position();
         if (glm::length(vel) > 1e-9) {
             glm::vec3 pgDir = glm::normalize(glm::vec3(vel));
             auto pg  = projectDir( pgDir);

@@ -1261,6 +1261,11 @@ int main(int argc, char* argv[])
             {
                 glm::dvec3 shipTorque(0.0);
 
+                // Disengage autopilot whenever time is accelerated — covers the T key,
+                // the slider, and any save-load that restores a fast warp.
+                if (simSpeedTarget > 1.0)
+                    autopilot.mode = spacecraft::AutopilotMode::Off;
+
                 if ((viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull ||
                      viewMode == ViewMode::MfdFull2 || viewMode == ViewMode::ShipInspect)
                     && simSpeedTarget <= 1.0
@@ -2333,7 +2338,9 @@ int main(int argc, char* argv[])
                 // ---- Helmet HUD overlay ----
                 navHUD.render(*spacecraft[playerIdx], spacecraft, nav,
                               earthWorld, scene, camera, W, H, kSpacecraftNames, scPorts,
-                              refBody.name.c_str(), transferMFD.getMccDv());
+                              refBody.name.c_str(), transferMFD.getMccDv(),
+                              glm::dvec3(shipRelRef.v.x, shipRelRef.v.y, shipRelRef.v.z),
+                              glm::dvec3(shipRelRef.r.x, shipRelRef.r.y, shipRelRef.r.z));
             }
 
             // ---- Atmosphere LUT inspector (Map view only) ----
