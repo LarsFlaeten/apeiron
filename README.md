@@ -11,18 +11,6 @@ Apeiron is a physically-correct space simulator built from first principles: rea
 ![Mars insertion burn](docs/screenshots/mars_insertion_burn.png)
 *Orion firing the main engine at Mars periapsis — orbit insertion burn with Mars filling the frame*
 
-![Nav mode in Mars orbit](docs/screenshots/mars_orbit.png)
-*Navigation console in Mars orbit: Orbital MFD (left), MapMFD ground track over Mars surface (right), Sun visible in background*
-
-![Heliocentric transfer orbit](docs/screenshots/mars_transfer_ready_for_MCC.png)
-*Mid-cruise transfer orbit plot — Earth departure and Mars arrival orbits with the transfer ellipse*
-
-![Orbital MFD at Mars](docs/screenshots/mars_orbit2.png)
-*Orbital MFD showing stable circular orbit at Mars after capture*
-
-![Mars from orbit](docs/screenshots/Mars.png)
-*Mars with dust-reddened atmosphere — reddish-orange limb characteristic of iron-oxide aerosols*
-
 ![Docking approach to ISS](docs/screenshots/DockingISS.png)
 *Orion approaching the ISS — docking MFD with live cam view, alignment cues, and relative velocity readout*
 

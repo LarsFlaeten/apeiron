@@ -1,5 +1,19 @@
 # Gallery
 
+## Interplanetary — Earth to Mars
+
+![Heliocentric transfer orbit](screenshots/mars_transfer_ready_for_MCC.png)
+*Mid-cruise transfer orbit plot — Earth departure and Mars arrival orbits with the transfer ellipse*
+
+![Mars insertion burn](screenshots/mars_insertion_burn.png)
+*Orion firing the main engine at Mars periapsis — orbit insertion burn with Mars filling the frame*
+
+![Nav mode in Mars orbit](screenshots/mars_orbit.png)
+*Navigation console in Mars orbit: Orbital MFD (left), MapMFD ground track over Mars surface (right)*
+
+![Orbital MFD at Mars](screenshots/mars_orbit2.png)
+*Orbital MFD showing stable circular orbit after capture*
+
 ## Docking
 
 ![Docking approach to ISS](screenshots/DockingISS.png)
