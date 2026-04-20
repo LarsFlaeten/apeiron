@@ -190,9 +190,10 @@ private:
     // kPeTargetAlts: selectable target periapsis altitudes (km above Mars surface).
     static constexpr double kPeTargetAlts[] = { 200.0, 500.0, 1000.0, 2000.0, 5000.0 };
     int        m_peAltIdx         = 0;       // index into kPeTargetAlts
-    glm::dvec3 m_bplaneDv         { 0.0 };   // ΔV vector, ECLIPJ2000 km/s
+    glm::dvec3 m_bplaneDv          { 0.0 };   // ΔV vector, ECLIPJ2000 km/s
     double     m_bplanePeCurrentKm = 0.0;    // projected periapsis altitude (km, may be <0 = impact)
-    bool       m_bplaneValid      = false;
+    bool       m_bplaneValid       = false;
+    bool       m_capturedAtArrival = false;   // true when in elliptic orbit around arrival body
 
 
 };

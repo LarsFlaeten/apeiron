@@ -1262,6 +1262,7 @@ void TransferMFD::tickBplane()
     m_bplaneDv          = glm::dvec3(0.0);
     m_bplaneValid       = false;
     m_bplanePeCurrentKm = 0.0;
+    m_capturedAtArrival = false;
 
     if (!m_detail.valid) return;
 
@@ -1319,7 +1320,22 @@ void TransferMFD::tickBplane()
 
     // Hyperbolic excess speed v∞² = v² − 2μ/r.
     double vInfSq = glm::dot(v, v) - 2.0 * muArr / rMag;
-    if (vInfSq <= 0.0) return;   // elliptic / captured — not applicable
+    if (vInfSq <= 0.0) {
+        // Captured in elliptic orbit — B-plane correction no longer applies,
+        // but compute Pe altitude from orbital elements so the display persists.
+        const double v2  = glm::dot(v, v);
+        const double rv  = glm::dot(r, v);
+        const glm::dvec3 eVec = ((v2 - muArr / rMag) * r - rv * v) / muArr;
+        const double ecc = glm::length(eVec);
+        if (ecc >= 0.0 && ecc < 1.0) {
+            const double energy = v2 * 0.5 - muArr / rMag;
+            const double sma    = -muArr / (2.0 * energy);
+            m_bplanePeCurrentKm = sma * (1.0 - ecc) - arrRadius;
+            m_bplaneValid       = true;
+            m_capturedAtArrival = true;
+        }
+        return;   // skip hyperbolic BPL dV computation
+    }
     double vInf = std::sqrt(vInfSq);
 
     // Angular momentum vector, impact parameter b = h / v∞.
@@ -1570,27 +1586,45 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                 const double rMag   = glm::length(rRel);
                 const double v2     = glm::dot(vRel, vRel);
                 const double vInfSq = v2 - 2.0 * muArr / rMag;
-                if (vInfSq > 0.0 && rMag > 100.0) {
-                    const double rv   = glm::dot(rRel, vRel);
-                    const glm::dvec3 eVec = ((v2 - muArr / rMag) * rRel - rv * vRel) / muArr;
-                    const double ecc  = glm::length(eVec);
-                    if (ecc > 1.0) {
-                        const double energy = 0.5 * v2 - muArr / rMag;
-                        const double absA   = muArr / (2.0 * std::abs(energy));
-                        const double cosNu  = std::clamp(
+                const double rv = glm::dot(rRel, vRel);
+                const glm::dvec3 eVec = ((v2 - muArr / rMag) * rRel - rv * vRel) / muArr;
+                const double ecc = glm::length(eVec);
+                if (vInfSq > 0.0 && rMag > 100.0 && ecc > 1.0) {
+                    // Hyperbolic approach: time to periapsis via hyperbolic anomaly.
+                    const double energy = 0.5 * v2 - muArr / rMag;
+                    const double absA   = muArr / (2.0 * std::abs(energy));
+                    const double cosNu  = std::clamp(
+                        glm::dot(eVec / ecc, rRel / rMag), -1.0, 1.0);
+                    double nu = std::acos(cosNu);
+                    if (rv < 0.0) nu = -nu;
+                    const double k    = std::sqrt((ecc - 1.0) / (ecc + 1.0));
+                    const double argF = k * std::tan(nu * 0.5);
+                    if (std::isfinite(argF) && std::abs(argF) < 1.0 - 1e-9) {
+                        const double F   = 2.0 * std::atanh(argF);
+                        if (std::isfinite(F) && absA > 1.0) {
+                            const double M_h = ecc * std::sinh(F) - F;
+                            const double n   = std::sqrt(muArr / (absA * absA * absA));
+                            tToPeHyp = -(M_h / n);
+                        }
+                    }
+                } else if (m_capturedAtArrival && rMag > 100.0 && ecc > 0.0 && ecc < 1.0) {
+                    // Captured in elliptic orbit: time to next periapsis via Kepler.
+                    const double energy = 0.5 * v2 - muArr / rMag;
+                    const double sma    = -muArr / (2.0 * energy);
+                    if (sma > 0.0) {
+                        const double cosNu = std::clamp(
                             glm::dot(eVec / ecc, rRel / rMag), -1.0, 1.0);
                         double nu = std::acos(cosNu);
                         if (rv < 0.0) nu = -nu;
-                        const double k    = std::sqrt((ecc - 1.0) / (ecc + 1.0));
-                        const double argF = k * std::tan(nu * 0.5);
-                        if (std::isfinite(argF) && std::abs(argF) < 1.0 - 1e-9) {
-                            const double F   = 2.0 * std::atanh(argF);
-                            if (std::isfinite(F) && absA > 1.0) {
-                                const double M_h = ecc * std::sinh(F) - F;
-                                const double n   = std::sqrt(muArr / (absA * absA * absA));
-                                tToPeHyp = -(M_h / n);
-                            }
-                        }
+                        const double tanH = std::tan(nu * 0.5)
+                                          * std::sqrt((1.0 - ecc) / (1.0 + ecc));
+                        const double E       = 2.0 * std::atan(tanH);
+                        const double M       = E - ecc * std::sin(E);
+                        const double n       = std::sqrt(muArr / (sma * sma * sma));
+                        const double T       = 2.0 * M_PI / n;
+                        const double tFromPe = M / n;  // negative = approaching, positive = past
+                        // Time to next periapsis (positive = countdown, negative = just passed)
+                        tToPeHyp = (tFromPe >= 0.0) ? -(T - tFromPe) : -tFromPe;
                     }
                 }
             } catch (...) {}
@@ -1699,15 +1733,21 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         // Pe target (user-selectable via PE button)
         addLine(kYellow,  "Pe tgt  %.0f km  [PE]", peTgt);
 
-        // B-plane correction ΔV
-        ImU32 bplCol = (bplDv < 0.001) ? kGreen :
-                       (bplDv < 0.1)   ? kYellow : kOrange;
-        addLine(bplCol, "BPL dV  %.3f km/s", bplDv);
-        if (bplDv < 0.001)
-            addLine(kGreen, " Pe ON TARGET");
+        // B-plane correction ΔV — only meaningful while still on hyperbolic approach.
+        if (!m_capturedAtArrival) {
+            ImU32 bplCol = (bplDv < 0.001) ? kGreen :
+                           (bplDv < 0.1)   ? kYellow : kOrange;
+            addLine(bplCol, "BPL dV  %.3f km/s", bplDv);
+            if (bplDv < 0.001)
+                addLine(kGreen, " Pe ON TARGET");
+        } else {
+            addLine(kGreen, "CAPTURED  (elliptic orbit)");
+        }
 
-        // -- Time to Pe, MOI circularisation burn, and T-ignition ---------
-        // tToPeHyp is already computed above; only need vInfSq + radius here.
+        // -- Time to Pe, MOI/circ burn, and T-ignition ---------
+        // tToPeHyp holds the pre-computed time-to-Pe (valid for both hyperbolic
+        // approach and elliptic orbit).  Circularisation ΔV uses v∞ for
+        // hyperbolic, vis-viva for elliptic.
         if (std::isfinite(tToPeHyp)) [&]() {
             const int arrNaif = m_params.arrivalBody;
             double muArr = 0.0, arrRadius = 0.0;
@@ -1727,7 +1767,7 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                 if (arrRadius <= 0.0) return;
             }
 
-            // v∞² from current body-relative state.
+            // Body-relative state.
             astro::PosState arrState;
             try {
                 astro::Spice().getRelativeGeometricState(arrNaif, m_params.centralBody,
@@ -1739,22 +1779,31 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                 - glm::dvec3(arrState.v.x, arrState.v.y, arrState.v.z);
             const double rMag   = glm::length(rRel);
             if (rMag < 100.0) return;
-            const double vInfSq = glm::dot(vRel, vRel) - 2.0 * muArr / rMag;
-            if (vInfSq <= 0.0) return;
+            const double v2     = glm::dot(vRel, vRel);
+            const double vInfSq = v2 - 2.0 * muArr / rMag;
 
-            // MOI circularisation ΔV at the selected Pe target altitude.
-            const double rPeTgt    = arrRadius + kPeTargetAlts[m_peAltIdx];
-            const double vHypAtPe  = std::sqrt(vInfSq + 2.0 * muArr / rPeTgt);
+            // Target Pe radius (target altitude for hyperbolic, current Pe for elliptic).
+            const double rPeTgt = m_capturedAtArrival
+                ? (arrRadius + m_bplanePeCurrentKm)       // actual Pe of current elliptic orbit
+                : (arrRadius + kPeTargetAlts[m_peAltIdx]); // target for MOI
+
+            // Circularisation ΔV:
+            //   Hyperbolic: v at Pe = sqrt(v∞² + 2μ/rPe)
+            //   Elliptic:   v at Pe = sqrt(v² - 2μ/r + 2μ/rPe)  (vis-viva energy transfer)
+            const double vAtPe = m_capturedAtArrival
+                ? std::sqrt(std::max(0.0, v2 - 2.0 * muArr / rMag + 2.0 * muArr / rPeTgt))
+                : std::sqrt(vInfSq + 2.0 * muArr / rPeTgt);
+            if (!m_capturedAtArrival && vInfSq <= 0.0) return;
+
             const double vCircAtPe = std::sqrt(muArr / rPeTgt);
-            const double dvCirc    = vHypAtPe - vCircAtPe;
+            const double dvCirc    = std::max(0.0, vAtPe - vCircAtPe);
 
-            // Burn timing (same accel model as departure page).
+            // Burn timing.
             const double accelMs2 = (m_shipMass > 1.0)
                                   ? m_mainThrustN / m_shipMass : 0.97;
-            const double burnDur  = dvCirc * 1000.0 / accelMs2;  // seconds
+            const double burnDur  = dvCirc * 1000.0 / accelMs2;
             const double tIgn     = tToPeHyp - burnDur * 0.5;
 
-            // Signed HH:MM:SS formatter.
             auto fmtSgn = [](double s, char* b, int sz) {
                 if (!std::isfinite(s)) { std::snprintf(b, sz, "--:--:--"); return; }
                 const bool neg = s < 0.0;
@@ -1771,8 +1820,10 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             sep();
             const ImU32 tPeCol = (tToPeHyp > 0.0) ? kCyan : kOrange;
             addLine(tPeCol,  "T-to-Pe   %s", bufTpe);
-            addLine(kYellow, "MOI dV    %.3f km/s  (%s)", dvCirc, bufBurn);
-            addLine(kCyan,   "T-ign     %s  (T-0.5burn)", bufIgn);
+            const char* dvLabel = m_capturedAtArrival ? "Circ dV" : "MOI dV ";
+            addLine(kYellow, "%s   %.3f km/s  (%s)", dvLabel, dvCirc, bufBurn);
+            if (!m_capturedAtArrival)
+                addLine(kCyan, "T-ign     %s  (T-0.5burn)", bufIgn);
         }();
     }
 
