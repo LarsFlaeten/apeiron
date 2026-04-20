@@ -1226,19 +1226,9 @@ int main(int argc, char* argv[])
                     }
                 }
 
-                // Rebuild attractors on all spacecraft.
-                // Non-Earth bodies use tidal=true so that only the differential
-                // tidal acceleration is applied (the indirect correction cancels
-                // the spurious whole-frame pull that would otherwise destroy LEO).
-                for (auto& sc : spacecraft) {
-                    sc->clearAttractors();
-                    for (const auto& gb : gravBodies) {
-                        const bool isTidal = (gb.name != "EARTH");
-                        sc->addAttractor({ gb.posECI, gb.gm, isTidal });
-                    }
-                }
-
                 // Dominant body: highest GM / r² at player position.
+                // Computed BEFORE setting attractors so the tidal reference
+                // position can track whichever body we're currently orbiting.
                 {
                     glm::dvec3 playerPos = player.position();
                     double     bestAccel = 0.0;
@@ -1273,6 +1263,29 @@ int main(int argc, char* argv[])
                                         static_cast<SpiceInt>(gb.naifId) };
                             orbitalMFD.setContext(refBody.name.c_str(), "");
                             break;
+                        }
+                    }
+                }
+
+                // Rebuild attractors on all spacecraft with the correct tidal
+                // reference position so the indirect correction cancels the
+                // dominant body's acceleration (not always Earth's).
+                // If the dominant body is Earth the reference is (0,0,0) as before.
+                {
+                    glm::dvec3 domPos(0.0);
+                    for (const auto& gb : gravBodies)
+                        if (gb.name == dominantBodyName) { domPos = gb.posECI; break; }
+
+                    for (auto& sc : spacecraft) {
+                        sc->clearAttractors();
+                        for (const auto& gb : gravBodies) {
+                            const bool isDominant = (gb.name == dominantBodyName);
+                            astro::Attractor att;
+                            att.p           = gb.posECI;
+                            att.GM          = gb.gm;
+                            att.tidal       = !isDominant;
+                            att.tidalRefPos = isDominant ? glm::dvec3(0.0) : domPos;
+                            sc->addAttractor(att);
                         }
                     }
                 }
