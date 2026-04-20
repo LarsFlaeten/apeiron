@@ -8,20 +8,42 @@ Apeiron is a physically-correct space simulator built from first principles: rea
 
 ## Screenshots
 
+![Mars insertion burn](docs/screenshots/mars_insertion_burn.png)
+*Orion firing the main engine at Mars periapsis — orbit insertion burn with Mars filling the frame*
+
+![Nav mode in Mars orbit](docs/screenshots/mars_orbit.png)
+*Navigation console in Mars orbit: Orbital MFD (left), MapMFD ground track over Mars surface (right), Sun visible in background*
+
+![Heliocentric transfer orbit](docs/screenshots/mars_transfer_ready_for_MCC.png)
+*Mid-cruise transfer orbit plot — Earth departure and Mars arrival orbits with the transfer ellipse*
+
+![Orbital MFD at Mars](docs/screenshots/mars_orbit2.png)
+*Orbital MFD showing stable circular orbit at Mars after capture*
+
+![Mars from orbit](docs/screenshots/Mars.png)
+*Mars with dust-reddened atmosphere — reddish-orange limb characteristic of iron-oxide aerosols*
+
 ![Docking approach to ISS](docs/screenshots/DockingISS.png)
 *Orion approaching the ISS — docking MFD with live cam view, alignment cues, and relative velocity readout*
 
 ![Earthrise](docs/screenshots/Earthrise_20260407.png)
 *Earthrise seen from the moon on 20260407, around the same time Artemis II turned back to earth from behind the moon*
 
-![Mars from orbit](docs/screenshots/Mars.png)
-*Mars with dust-reddened atmosphere — reddish-orange limb characteristic of iron-oxide aerosols*
-
 [Full gallery](docs/GALLERY.md)
 
 ---
 
 ## What works today
+
+### Interplanetary missions
+
+The simulator supports end-to-end interplanetary missions. An Earth→Mars transfer has been flown:
+
+- **Transfer MFD** plans the heliocentric transfer: departure C3, arrival hyperbolic excess velocity, B-plane targeting, and Mars orbit insertion (MOI) ΔV
+- Departure epoch is chosen near an actual Earth–Mars launch window; SPICE ephemeris drives all body positions
+- **Hyperbolic approach** with live B-plane display (Pe, BPL ΔV, T-to-Pe, MOI ΔV, T-ignition); readouts persist and transition gracefully through the elliptic capture
+- **N-body dynamics** with tidal correction: Sun, Earth, Mars (and all configured bodies) all contribute gravity; dominant-body–relative tidal correction keeps orbits stable across the solar system without switching frames
+- After MOI, **MapMFD** shows the spacecraft's ground track over the Mars surface texture with multi-orbit lookahead
 
 ### Solar system bodies
 - All eight planets + Moon, Phobos, Deimos rendered at SPICE-correct positions
@@ -82,12 +104,32 @@ Bruneton & Neyret single-scattering model, precomputed at load time:
 - **Docking MFD** — live offscreen camera view from a `cam_*` node on the model; Z+/Z− FOV zoom; overlaid guidance text (range, closing rate, alignment error)
 - **Camera MFD** — dedicated MFD page for any onboard camera, cycles through all `cam_*` nodes; aspect-ratio-correct display with camera name overlay
 
+### MFD suite
+
+Five instrument displays are available in the navigation console, selectable from the MFD menu:
+
+| MFD | Purpose |
+|---|---|
+| **ORB — Orbital** | Keplerian elements, period, apoapsis/periapsis, eccentricity for any reference body |
+| **DOCK — Docking** | Live offscreen camera + range/closing-rate/alignment readouts for proximity ops |
+| **CAM — Camera** | Cycles through all onboard `cam_*` nodes; aspect-correct with camera name overlay |
+| **XFER — Transfer** | Interplanetary transfer planning: B-plane targeting, MOI ΔV, burn timing |
+| **MAP — Ground Track** | Equirectangular world map with real planet texture, ground track (trail + lookahead), shadow overlay, terminator, sub-solar marker |
+
 ### Autopilots (GNC)
 
 - **Kill Rotation** — parabolic bang-bang torque with timed-burn near settle; large-slew flag suppresses AUX thrusters
 - **Attitude hold** (Prograde / Retrograde / Normal±) — quaternion error + rate damping, PD-style parabolic switch
 - **NullV** — nulls relative velocity to docking target using RCS; authority computed from the actual pseudoinverse + throttle-clamped RCS solution so stopping estimates are accurate
 - T-NV / D-NV readouts in nav console: estimated time and distance to zero relative velocity given current orientation
+
+### N-body physics
+
+Translation dynamics are integrated numerically (RKF78) with all configured solar system bodies as attractors:
+
+- **Tidal correction** — each non-dominant body carries a `tidalRefPos` set to the dominant body's ECI position; the indirect term `GM·(r_body − r_dominant)/|…|³` cancels the dominant body's free-fall acceleration, leaving only the true differential tidal force
+- Dominant body is determined each frame by highest `GM/r²` at the spacecraft position; `tidalRefPos` is updated automatically, so the correction is correct at Earth, at Mars, and anywhere else without manual configuration
+- Without the correction, the solar gravity residual at Mars distance (~0.003 m/s²) would drain ~25 m/s per orbit and collapse any captured orbit within a few revolutions
 
 ### Offscreen rendering
 
@@ -181,7 +223,7 @@ Shaders are compiled from GLSL to SPIR-V at build time by `glslc`; paths are bak
 |---|---|
 | Nav console thruster selector | Choose RCS-only or RCS+Aux for manual thrust commands |
 | RVD autopilots | Station-keeping hold, approach corridor guidance |
-| Trajectory MFD | Patched-conics transfer planner, Lambert/Izzo solver, porkchop plot |
+| Trajectory MFD improvements | Lambert/Izzo solver, porkchop plot, gravity assists |
 
 ### MFD / UI
 
@@ -189,6 +231,9 @@ Shaders are compiled from GLSL to SPIR-V at build time by `glslc`; paths are bak
 |---|---|
 | Orbit MFD fixup | Reference body input box not working; better ref-body illustration |
 | Orbit sync MFD | New module (or extend Orbit MFD) — match orbit with a target body |
+| Map MFD zoom/pan | Zoom into region of interest; polar projections |
+| Transfer MFD generalisation | Departure planet is currently Earth-only; make configurable |
+| CamMFD free-look | Right-drag slew (yaw/pitch) + FOV zoom independent of autopilot attitude |
 
 ### Docking
 
@@ -209,6 +254,14 @@ Shaders are compiled from GLSL to SPIR-V at build time by `glslc`; paths are bak
 | Gas giant atmospheres | Layered cloud-deck model; different from rocky-planet Bruneton |
 | Venus atmosphere | Extremely thick CO₂; needs higher integration step count |
 | Galilean moons | Requires large SPK satellite kernel (~1.1 GB) |
+
+### Physics
+
+| Item | Notes |
+|---|---|
+| SOI-switching integration frames | At sphere-of-influence boundary, transform state into the new dominant body's frame (patched-conics approach); replaces the current tidal-correction approximation; two-level (Sun/planet) ~2–3 days, full hierarchy with moons more |
+| J2 / oblateness perturbation | First zonal harmonic for more accurate low orbits |
+| Atmospheric drag | Simple exponential density model; needed for LEO lifetime estimates |
 
 ### Long-term
 
