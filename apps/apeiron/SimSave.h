@@ -40,6 +40,17 @@ struct SimSaveData
     std::vector<ScState> spacecraft;  // same order as main.cpp spacecraft[]
 
     TransferPlanSnapshot plan;        // plan.valid=false if no plan was active
+
+    // Scheduled OBC events — empty if none were active at save time.
+    struct SavedEvent {
+        std::string name;
+        double      eventET      = 0.0;
+        bool        ann10min     = false;
+        bool        ann5min      = false;
+        bool        ann1min      = false;
+        bool        ann0         = false;
+    };
+    std::vector<SavedEvent> events;
 };
 
 // Returns true on success.  Creates parent directories as needed.

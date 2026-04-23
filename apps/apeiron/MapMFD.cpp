@@ -506,3 +506,12 @@ void MapMFD::onLeft(int slot)
     if (slot == 0) m_showOrbits = std::max(1, m_showOrbits - 1);
     if (slot == 1) m_showOrbits = std::min(3, m_showOrbits + 1);
 }
+
+void MapMFD::update(const MFDContext& ctx)
+{
+    Config cfg;
+    cfg.mu            = ctx.refBodyMu;
+    cfg.radiusKm      = ctx.refBodyRadiusKm;
+    cfg.rotRateRadSec = ctx.mapRotRateRadSec;
+    update(ctx.shipRelRef.r, ctx.shipRelRef.v, cfg, ctx.inertialToBody, ctx.sunDirInertial);
+}

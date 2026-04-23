@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MFD.h"
+#include "MFDContext.h"
 
 #include "astro/State.h"
 #include "astro/Time.h"
@@ -67,6 +68,9 @@ public:
                 const astro::EphemerisTime& et,
                 double mu,
                 double bodyRadiusKm);
+
+    // Convenience overload: unpack from MFDContext.
+    void update(const MFDContext& ctx);
 
     // Optional: provide target state this frame. Pass empty PosState to clear.
     void updateTarget(const astro::PosState& state, double mu, double bodyRadiusKm);

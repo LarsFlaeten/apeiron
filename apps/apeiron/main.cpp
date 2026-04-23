@@ -48,6 +48,8 @@
 #include "SimSave.h"
 #include "MFDMenu.h"
 #include "VoiceAnnouncer.h"
+#include "OBCEventQueue.h"
+#include "MFDContext.h"
 #include "apeiron/spacecraft/Autopilot.h"
 #include "apeiron/spacecraft/ManifestLoader.h"
 #include "apeiron/spacecraft/OrbitLoader.h"
@@ -863,6 +865,7 @@ int main(int argc, char* argv[])
             kSpacecraftNames.push_back(vc.name.empty() ? "Spacecraft" : vc.name);
         double simSpeedTarget          = 1.0; // set instantly by t/T keys
         double simSecondsPerRealSecond = 1.0; // smoothly tracks target (log-space)
+        OBCEventQueue obcEventQueue;          // scheduled mission events (TMI, MOI, MCC…)
 
         // Window state shared between callbacks.
         struct WindowState {
@@ -1198,6 +1201,10 @@ int main(int argc, char* argv[])
 
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
+
+            // Tick OBC event queue — may cap simSpeedTarget (takes effect on
+            // the *next* frame's smooth warp interpolation, one-frame lag is fine).
+            obcEventQueue.tick(currentEt.getETValue(), simSpeedTarget);
 
             // ---- Per-frame gravity update ----------------------------------------
             // Fetch geocentric positions of all gravity bodies from SPICE and rebuild
@@ -2002,6 +2009,16 @@ int main(int argc, char* argv[])
                         sd.spacecraft.push_back(st);
                     }
                     sd.plan = transferMFD.getPlan();
+                    for (const auto& ev : obcEventQueue.events()) {
+                        SimSaveData::SavedEvent se;
+                        se.name    = ev.name;
+                        se.eventET = ev.eventET;
+                        se.ann10min = ev.announced10min;
+                        se.ann5min  = ev.announced5min;
+                        se.ann1min  = ev.announced1min;
+                        se.ann0     = ev.announced0;
+                        sd.events.push_back(se);
+                    }
                     scenarioStatusMsg = saveSimState(kSavePath, sd) ? "Saved." : "Save failed!";
                 }
 
@@ -2021,6 +2038,20 @@ int main(int argc, char* argv[])
                         }
                         if (sd.plan.valid)
                             transferMFD.restorePlan(sd.plan);
+                        {
+                            std::vector<ScheduledEvent> restored;
+                            for (const auto& se : sd.events) {
+                                ScheduledEvent ev;
+                                ev.name           = se.name;
+                                ev.eventET        = se.eventET;
+                                ev.announced10min = se.ann10min;
+                                ev.announced5min  = se.ann5min;
+                                ev.announced1min  = se.ann1min;
+                                ev.announced0     = se.ann0;
+                                restored.push_back(ev);
+                            }
+                            obcEventQueue.restoreEvents(std::move(restored));
+                        }
                         scenarioStatusMsg = "Loaded.";
                     } else {
                         scenarioStatusMsg = "Load failed — no save file?";
@@ -2102,28 +2133,30 @@ int main(int argc, char* argv[])
                 ImGui::End();
             }
 
-            // ---- MFD fullscreen view (F2 / F3) ----
-            if (viewMode == ViewMode::MfdFull || viewMode == ViewMode::MfdFull2) {
+            // ── Once-per-frame MFD context update ─────────────────────────────────
+            // Builds MFDContext and pushes state to OrbitalMFD, MapMFD, TransferMFD.
+            // Consolidated here so SPICE queries run once regardless of view mode,
+            // and the pending-ref / pending-tgt input handling is not duplicated
+            // across view branches.
+            // Also declares shipRelRef at this scope so navHUD can read it.
+            astro::PosState shipRelRef;
+            {
                 auto& ship = *spacecraft[playerIdx];
-                ImGuiIO& io = ImGui::GetIO();
-                const float W = io.DisplaySize.x;
-                const float H = io.DisplaySize.y;
 
-                // Shared ref-body update (same logic as Nav).
+                // 1. Handle pending reference-body change typed by the user.
                 {
                     std::string pending = orbitalMFD.consumePendingRef();
                     if (!pending.empty()) {
-                        SpiceInt id; SpiceBoolean found;
+                        SpiceInt id;  SpiceBoolean found;
                         bodn2c_c(pending.c_str(), &id, &found);
                         if (found) {
                             try {
                                 double      gm = 0.0;
                                 astro::Vec3 radii;
-                                astro::Spice().getPlanetaryConstants(
-                                    static_cast<int>(id), "GM", gm);
-                                astro::Spice().getPlanetaryConstants(
-                                    static_cast<int>(id), "RADII", radii);
-                                for (auto& c : pending) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                                astro::Spice().getPlanetaryConstants(static_cast<int>(id), "GM", gm);
+                                astro::Spice().getPlanetaryConstants(static_cast<int>(id), "RADII", radii);
+                                for (auto& c : pending)
+                                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
                                 refBody = { pending, gm, radii.x, id };
                                 orbitalMFD.setContext(refBody.name.c_str(), "");
                             } catch (const astro::SpiceException&) {}
@@ -2131,48 +2164,61 @@ int main(int argc, char* argv[])
                     }
                 }
 
-                astro::PosState shipRelRef(ship.position(), ship.velocity());
-                if (refBody.naifId != 399) {
-                    // Must use ECLIPJ2000: ship state is in ECLIPJ2000 (the integrator's
-                    // frame), so the reference body position must be in the same frame.
-                    static const astro::ReferenceFrame kEclipJ2000ref =
-                        astro::ReferenceFrame::createEclipJ2000();
-                    astro::PosState refState;
-                    astro::Spice().getRelativeGeometricState(
-                        static_cast<int>(refBody.naifId), 399, currentEt, refState, kEclipJ2000ref);
-                    shipRelRef = astro::PosState(
-                        ship.position() - glm::dvec3(refState.r.x, refState.r.y, refState.r.z),
-                        ship.velocity() - glm::dvec3(refState.v.x, refState.v.y, refState.v.z));
-                }
-                orbitalMFD.update(shipRelRef, currentEt, refBody.mu, refBody.radiusKm);
-                // Update MapMFD: body-fixed orientation, rotation rate, sun direction.
+                // 2. Build MFDContext.
+                MFDContext mfdCtx;
+                mfdCtx.currentEt       = currentEt;
+                mfdCtx.simElapsed      = simElapsed;
+                mfdCtx.refBodyName     = refBody.name;
+                mfdCtx.refBodyMu       = refBody.mu;
+                mfdCtx.refBodyRadiusKm = refBody.radiusKm;
+                mfdCtx.shipGeoR        = ship.position();
+                mfdCtx.shipGeoV        = ship.velocity();
+                mfdCtx.mainThrustN     = mainEngineThrust;
+                mfdCtx.shipMassKg      = shipMass;
+                mfdCtx.eventQueue      = &obcEventQueue;
+
+                // Ship state relative to reference body.
                 {
-                    const double etVal = currentEt.getETValue();
-                    // Rotation matrix ECLIPJ2000 → IAU_<refBody>
-                    std::string iauFrame = "IAU_" + refBody.name;
-                    glm::dmat3 inertialToBody(1.0);
+                    astro::PosState rel(ship.position(), ship.velocity());
+                    if (refBody.naifId != 399) {
+                        static const astro::ReferenceFrame kEclipRef =
+                            astro::ReferenceFrame::createEclipJ2000();
+                        astro::PosState refState;
+                        try {
+                            astro::Spice().getRelativeGeometricState(
+                                static_cast<int>(refBody.naifId), 399,
+                                currentEt, refState, kEclipRef);
+                            rel = astro::PosState(
+                                ship.position() - glm::dvec3(refState.r.x, refState.r.y, refState.r.z),
+                                ship.velocity() - glm::dvec3(refState.v.x, refState.v.y, refState.v.z));
+                        } catch (...) {}
+                    }
+                    mfdCtx.shipRelRef = rel;
+                    shipRelRef        = rel;   // expose to navHUD below
+                }
+
+                // Body-fixed orientation, rotation rate, sun direction.
+                {
+                    const double etVal   = currentEt.getETValue();
+                    const std::string iau = "IAU_" + refBody.name;
                     {
                         SpiceDouble m[3][3];
-                        pxform_c("ECLIPJ2000", iauFrame.c_str(), etVal, m);
+                        pxform_c("ECLIPJ2000", iau.c_str(), etVal, m);
                         if (!failed_c()) {
                             for (int ri = 0; ri < 3; ++ri)
                                 for (int ci = 0; ci < 3; ++ci)
-                                    inertialToBody[ci][ri] = m[ri][ci];
+                                    mfdCtx.inertialToBody[ci][ri] = m[ri][ci];
                         }
                         reset_c();
                     }
-                    // Rotation rate: PM[1] deg/day → rad/s
-                    double mapRotRate = 0.0;
                     {
                         SpiceInt n = 0;
                         SpiceDouble pm[3] = {0.0, 0.0, 0.0};
                         bodvrd_c(refBody.name.c_str(), "PM", 3, &n, pm);
                         if (!failed_c() && n >= 2)
-                            mapRotRate = pm[1] * (M_PI / 180.0) / 86400.0;
+                            mfdCtx.mapRotRateRadSec = pm[1] * (M_PI / 180.0) / 86400.0;
                         reset_c();
                     }
-                    // Sun direction in ECLIPJ2000 from refBody
-                    glm::dvec3 sunDirInertial(1.0, 0.0, 0.0);
                     try {
                         static const astro::ReferenceFrame kEclipMap =
                             astro::ReferenceFrame::createEclipJ2000();
@@ -2181,46 +2227,41 @@ int main(int argc, char* argv[])
                             10, static_cast<int>(refBody.naifId), currentEt, sunState, kEclipMap);
                         glm::dvec3 sv(sunState.r.x, sunState.r.y, sunState.r.z);
                         double len = glm::length(sv);
-                        if (len > 0.0) sunDirInertial = sv / len;
+                        if (len > 0.0) mfdCtx.sunDirInertial = sv / len;
                     } catch (...) {}
-
-                    MapMFD::Config mapCfg;
-                    mapCfg.mu            = refBody.mu;
-                    mapCfg.radiusKm      = refBody.radiusKm;
-                    mapCfg.rotRateRadSec = mapRotRate;
-                    mapMFD.setRefName(refBody.name.c_str());
-                    if (auto it = bodyDiffuseTexIds.find(refBody.name); it != bodyDiffuseTexIds.end())
-                        mapMFD.setMapTexture(it->second);
-                    mapMFD.update(shipRelRef.r, shipRelRef.v, mapCfg, inertialToBody, sunDirInertial);
                 }
-                // Feed geocentric state to TransferMFD departure page.
-                transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
-                transferMFD.updateBurnParams(mainEngineThrust, shipMass);
-                // Heliocentric ship state for TransferMFD coasting page.
-                // Both the spacecraft and Earth's heliocentric position must be
-                // in ECLIPJ2000 so that the vector addition is consistent with
-                // the spacecraft's integration frame.
+
+                // Heliocentric ship state.
                 {
-                    static const astro::ReferenceFrame kEclipJ2000b =
+                    static const astro::ReferenceFrame kEclipHelio =
                         astro::ReferenceFrame::createEclipJ2000();
                     astro::PosState earthHelio;
                     try {
-                        astro::Spice().getRelativeGeometricState(399, 10, currentEt, earthHelio,
-                                                                 kEclipJ2000b);
-                        transferMFD.updateHelioState(
+                        astro::Spice().getRelativeGeometricState(399, 10, currentEt,
+                                                                 earthHelio, kEclipHelio);
+                        mfdCtx.shipHelioR =
                             glm::dvec3(earthHelio.r.x, earthHelio.r.y, earthHelio.r.z)
-                                + ship.position(),
+                            + ship.position();
+                        mfdCtx.shipHelioV =
                             glm::dvec3(earthHelio.v.x, earthHelio.v.y, earthHelio.v.z)
-                                + ship.velocity());
+                            + ship.velocity();
                     } catch (...) {}
                 }
-                transferMFD.tickMcc();     // heliocentric Lambert correction
-                transferMFD.tickBplane();  // Mars periapsis targeting (active near Mars)
-                // Resolve a pending TGT string typed by the user.
+
+                // 3. Set MapMFD texture and ref name, then update all MFDs.
+                mapMFD.setRefName(refBody.name.c_str());
+                if (auto it = bodyDiffuseTexIds.find(refBody.name);
+                    it != bodyDiffuseTexIds.end())
+                    mapMFD.setMapTexture(it->second);
+
+                orbitalMFD.update(mfdCtx);
+                mapMFD.update(mfdCtx);
+                transferMFD.update(mfdCtx);   // calls tickMcc + tickBplane internally
+
+                // 4. Resolve pending TGT input.
                 {
                     std::string pendingTgt = orbitalMFD.consumePendingTgt();
                     if (!pendingTgt.empty()) {
-                        // Try spacecraft names first.
                         bool foundSC = false;
                         for (int vi = 0; vi < (int)kSpacecraftNames.size(); ++vi) {
                             if (kSpacecraftNames[vi] == pendingTgt) {
@@ -2230,30 +2271,29 @@ int main(int argc, char* argv[])
                             }
                         }
                         if (!foundSC) {
-                            // Try NAIF body name or integer ID.
-                            SpiceInt naifId = -1;
-                            SpiceBoolean found = SPICEFALSE;
+                            SpiceInt naifId;  SpiceBoolean found;
                             bodn2c_c(pendingTgt.c_str(), &naifId, &found);
                             if (!found) {
-                                try { naifId = std::stoi(pendingTgt); found = SPICETRUE; }
-                                catch (...) {}
+                                std::string up = pendingTgt;
+                                for (auto& c : up)
+                                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                                bodn2c_c(up.c_str(), &naifId, &found);
                             }
                             if (found) orbitalMFD.setTgtBody(static_cast<int>(naifId), pendingTgt);
-                            // If neither, silently ignore.
                         }
                     }
                 }
-                // Update target state.
+
+                // 5. Update orbital target state.
                 if (orbitalMFD.tgtBodyNaifId() >= 0) {
-                    // Planet / NAIF body target — query SPICE relative to current ref.
                     try {
-                        static const astro::ReferenceFrame kEclipJ2000c =
+                        static const astro::ReferenceFrame kEclipTgt =
                             astro::ReferenceFrame::createEclipJ2000();
                         astro::PosState bodyState;
                         astro::Spice().getRelativeGeometricState(
                             orbitalMFD.tgtBodyNaifId(),
                             static_cast<int>(refBody.naifId),
-                            currentEt, bodyState, kEclipJ2000c);
+                            currentEt, bodyState, kEclipTgt);
                         orbitalMFD.updateTarget(bodyState, refBody.mu, refBody.radiusKm);
                     } catch (...) {
                         orbitalMFD.clearTarget();
@@ -2267,8 +2307,8 @@ int main(int argc, char* argv[])
                     orbitalMFD.clearTarget();
                 }
 
-                dockingMFD.update(*spacecraft[playerIdx], scPorts, playerIdx,
-                                  nav, spacecraft);
+                // 6. Update DockingMFD (same for all views).
+                dockingMFD.update(*spacecraft[playerIdx], scPorts, playerIdx, nav, spacecraft);
                 {
                     using CP = DockingMFD::CapturePhase;
                     using DP = DockingConstraint::Phase;
@@ -2284,6 +2324,13 @@ int main(int argc, char* argv[])
                     const DockingConstraintParams& dp = DockingConstraintParams{};
                     dockingMFD.setCaptureThresholds(dp.maxRangeM, dp.maxClosureMs, dp.maxAttErrDeg);
                 }
+            }
+
+            // ---- MFD fullscreen view (F2 / F3) ----
+            if (viewMode == ViewMode::MfdFull || viewMode == ViewMode::MfdFull2) {
+                ImGuiIO& io = ImGui::GetIO();
+                const float W = io.DisplaySize.x;
+                const float H = io.DisplaySize.y;
 
                 if (viewMode == ViewMode::MfdFull) {
                     mfdFullPanel.pos  = { 0.0f, 0.0f };
@@ -2303,7 +2350,6 @@ int main(int argc, char* argv[])
 
             // ---- Nav view HUD ----
             if (viewMode == ViewMode::Nav) {
-                auto& ship = *spacecraft[playerIdx];
                 ImGuiIO& io = ImGui::GetIO();
                 const float W = io.DisplaySize.x;
                 const float H = io.DisplaySize.y;
@@ -2337,141 +2383,6 @@ int main(int argc, char* argv[])
                 ImGui::End();
 
                 // ---- MFD panels — flush to screen left/right edges ----
-
-                // Check if the user changed the reference body.
-                {
-                    std::string pending = orbitalMFD.consumePendingRef();
-                    if (!pending.empty()) {
-                        SpiceInt    id;  SpiceBoolean found;
-                        bodn2c_c(pending.c_str(), &id, &found);
-                        if (found) {
-                            try {
-                                double      gm = 0.0;
-                                astro::Vec3 radii;
-                                astro::Spice().getPlanetaryConstants(
-                                    static_cast<int>(id), "GM", gm);
-                                astro::Spice().getPlanetaryConstants(
-                                    static_cast<int>(id), "RADII", radii);
-                                for (auto& c : pending) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                                refBody = { pending, gm, radii.x, id };
-                                orbitalMFD.setContext(refBody.name.c_str(), "");
-                            } catch (const astro::SpiceException&) {}
-                        }
-                        // If not found, silently ignore (body stays unchanged).
-                    }
-                }
-
-                // Compute spacecraft state relative to the reference body.
-                astro::PosState shipRelRef(ship.position(), ship.velocity());
-                if (refBody.naifId != 399) {
-                    // Must use ECLIPJ2000: ship state is in ECLIPJ2000 (the integrator's
-                    // frame), so the reference body position must be in the same frame.
-                    static const astro::ReferenceFrame kEclipJ2000ref2 =
-                        astro::ReferenceFrame::createEclipJ2000();
-                    astro::PosState refState;
-                    astro::Spice().getRelativeGeometricState(
-                        static_cast<int>(refBody.naifId), 399, currentEt, refState, kEclipJ2000ref2);
-                    shipRelRef = astro::PosState(
-                        ship.position() - glm::dvec3(refState.r.x, refState.r.y, refState.r.z),
-                        ship.velocity() - glm::dvec3(refState.v.x, refState.v.y, refState.v.z));
-                }
-
-                orbitalMFD.update(shipRelRef, currentEt,
-                                  refBody.mu, refBody.radiusKm);
-                // Update MapMFD: body-fixed orientation, rotation rate, sun direction.
-                {
-                    const double etVal = currentEt.getETValue();
-                    std::string iauFrame = "IAU_" + refBody.name;
-                    glm::dmat3 inertialToBody2(1.0);
-                    {
-                        SpiceDouble m[3][3];
-                        pxform_c("ECLIPJ2000", iauFrame.c_str(), etVal, m);
-                        if (!failed_c()) {
-                            for (int ri = 0; ri < 3; ++ri)
-                                for (int ci = 0; ci < 3; ++ci)
-                                    inertialToBody2[ci][ri] = m[ri][ci];
-                        }
-                        reset_c();
-                    }
-                    double mapRotRate2 = 0.0;
-                    {
-                        SpiceInt n = 0;
-                        SpiceDouble pm[3] = {0.0, 0.0, 0.0};
-                        bodvrd_c(refBody.name.c_str(), "PM", 3, &n, pm);
-                        if (!failed_c() && n >= 2)
-                            mapRotRate2 = pm[1] * (M_PI / 180.0) / 86400.0;
-                        reset_c();
-                    }
-                    glm::dvec3 sunDirInertial2(1.0, 0.0, 0.0);
-                    try {
-                        static const astro::ReferenceFrame kEclipMap2 =
-                            astro::ReferenceFrame::createEclipJ2000();
-                        astro::PosState sunState;
-                        astro::Spice().getRelativeGeometricState(
-                            10, static_cast<int>(refBody.naifId), currentEt, sunState, kEclipMap2);
-                        glm::dvec3 sv(sunState.r.x, sunState.r.y, sunState.r.z);
-                        double len = glm::length(sv);
-                        if (len > 0.0) sunDirInertial2 = sv / len;
-                    } catch (...) {}
-
-                    MapMFD::Config mapCfg2;
-                    mapCfg2.mu            = refBody.mu;
-                    mapCfg2.radiusKm      = refBody.radiusKm;
-                    mapCfg2.rotRateRadSec = mapRotRate2;
-                    mapMFD.setRefName(refBody.name.c_str());
-                    if (auto it = bodyDiffuseTexIds.find(refBody.name); it != bodyDiffuseTexIds.end())
-                        mapMFD.setMapTexture(it->second);
-                    mapMFD.update(shipRelRef.r, shipRelRef.v, mapCfg2, inertialToBody2, sunDirInertial2);
-                }
-                transferMFD.updateShipState(ship.position(), ship.velocity(), kGM_Earth, currentEt.getETValue());
-                transferMFD.updateBurnParams(mainEngineThrust, shipMass);
-                // Heliocentric ship state for TransferMFD coasting page.
-                // Both the spacecraft and Earth's heliocentric position must be
-                // in ECLIPJ2000 so that the vector addition is consistent with
-                // the spacecraft's integration frame.
-                {
-                    static const astro::ReferenceFrame kEclipJ2000b =
-                        astro::ReferenceFrame::createEclipJ2000();
-                    astro::PosState earthHelio;
-                    try {
-                        astro::Spice().getRelativeGeometricState(399, 10, currentEt, earthHelio,
-                                                                 kEclipJ2000b);
-                        transferMFD.updateHelioState(
-                            glm::dvec3(earthHelio.r.x, earthHelio.r.y, earthHelio.r.z)
-                                + ship.position(),
-                            glm::dvec3(earthHelio.v.x, earthHelio.v.y, earthHelio.v.z)
-                                + ship.velocity());
-                    } catch (...) {}
-                }
-                transferMFD.tickMcc();     // heliocentric Lambert correction
-                transferMFD.tickBplane();  // Mars periapsis targeting (active near Mars)
-                if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
-                    auto& tgt = *spacecraft[issIdx];
-                    orbitalMFD.updateTarget(
-                        astro::PosState(tgt.position(), tgt.velocity()),
-                        refBody.mu, refBody.radiusKm);
-                } else {
-                    orbitalMFD.clearTarget();
-                }
-
-                // Update DockingMFD geometry (works in both Nav and MfdFull view).
-                dockingMFD.update(*spacecraft[playerIdx], scPorts, playerIdx,
-                                  nav, spacecraft);
-                {
-                    using CP = DockingMFD::CapturePhase;
-                    using DP = DockingConstraint::Phase;
-                    CP cp = CP::None;
-                    switch (dockingConstraint.phase()) {
-                        case DP::Unarmed:     cp = CP::Unarmed;     break;
-                        case DP::Armed:       cp = CP::Armed;       break;
-                        case DP::SoftCapture: cp = CP::SoftCapture; break;
-                        case DP::HardCapture: cp = CP::HardCapture; break;
-                        default: break;
-                    }
-                    dockingMFD.setCapturePhase(cp);
-                    const DockingConstraintParams& dp = DockingConstraintParams{};
-                    dockingMFD.setCaptureThresholds(dp.maxRangeM, dp.maxClosureMs, dp.maxAttErrDeg);
-                }
 
                 // Each MFD occupies 1/3 of screen width; height derived from 16:9.
                 const float kMfdW = std::round(W / 3.0f);

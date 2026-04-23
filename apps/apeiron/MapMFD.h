@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MFD.h"
+#include "MFDContext.h"
 
 #include <glm/glm.hpp>
 #include <vector>
@@ -41,6 +42,9 @@ public:
                 const Config&      cfg,
                 const glm::dmat3&  inertialToBody,
                 const glm::dvec3&  sunDirInertial);
+
+    // Convenience overload: unpack from MFDContext.
+    void update(const MFDContext& ctx);
 
     void setRefName   (const char* name) { m_refName = name ? name : ""; }
     void setMapTexture(ImTextureID tex)  { m_mapTex  = tex; }

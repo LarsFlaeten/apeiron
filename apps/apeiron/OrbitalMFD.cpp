@@ -728,3 +728,8 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         }
     }
 }
+
+void OrbitalMFD::update(const MFDContext& ctx)
+{
+    update(ctx.shipRelRef, ctx.currentEt, ctx.refBodyMu, ctx.refBodyRadiusKm);
+}

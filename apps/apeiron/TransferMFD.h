@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MFD.h"
+#include "MFDContext.h"
 
 #include "apeiron/spacecraft/Porkchop.h"
 #include "apeiron/spacecraft/Lambert.h"
@@ -86,12 +87,18 @@ public:
     TransferPlanSnapshot getPlan() const;
     void                 restorePlan(const TransferPlanSnapshot& snap);
 
+    // Unified per-frame update from MFDContext — preferred entry point.
+    // Feeds ship state, burn params, and heliocentric state, then calls
+    // tickMcc() and tickBplane() internally.  Also caches the event-queue
+    // pointer so onRight() can post TMI/MOI events on plan confirmation.
+    void update(const MFDContext& ctx);
+
     // Recomputes the MCC ΔV vector from current ship state and plan.
-    // Call every frame from main.cpp regardless of which view is active.
+    // Called internally by update(); exposed for legacy callers.
     void tickMcc();
 
     // Recomputes the B-plane targeting correction whenever the ship is on a
-    // hyperbolic approach to Mars.  Call every frame alongside tickMcc().
+    // hyperbolic approach to Mars.  Called internally by update().
     void tickBplane();
 
     // Returns the B-plane ΔV vector (ECLIPJ2000 inertial, km/s).
@@ -185,6 +192,13 @@ private:
     // Most recent MCC ΔV vector (heliocentric ECLIPJ2000, km/s).
     // Written by renderCoasting() each frame; zero when no valid solution.
     glm::dvec3 m_mccDv { 0.0 };
+
+    // Cached event-queue pointer (populated by update() from MFDContext).
+    OBCEventQueue* m_eventQueue = nullptr;
+
+    // Last MCC event ET posted to the queue — used to avoid re-scheduling
+    // on every frame when the Lambert solution drifts by a tiny amount.
+    double m_lastMccET = 0.0;
 
     // B-plane targeting (periapsis altitude at Mars).
     // kPeTargetAlts: selectable target periapsis altitudes (km above Mars surface).

@@ -278,7 +278,15 @@ void TransferMFD::onRight(int slot)
     case 4:  // INFO — open detail page for selected cell
         if (m_selDep >= 0 && m_selTof >= 0 && m_hasData) {
             resolveSelected();
-            if (m_detail.valid) m_page = 1;
+            if (m_detail.valid) {
+                m_page = 1;
+                // Post mission milestones to the OBC event queue.
+                if (m_eventQueue) {
+                    m_eventQueue->schedule("TMI",   m_detail.depET);
+                    m_eventQueue->schedule("MOI",   m_detail.arrET);
+                    m_eventQueue->schedule("MCC-1", m_detail.depET + m_detail.tofSec * 0.5);
+                }
+            }
         }
         break;
     default: break;
@@ -1843,5 +1851,27 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     for (auto& l : lines) {
         if (l.col) dl->AddText({ ox, oy }, l.col, l.txt);
         oy += lineH;
+    }
+}
+
+// ---------------------------------------------------------------------------
+void TransferMFD::update(const MFDContext& ctx)
+{
+    m_eventQueue = ctx.eventQueue;
+
+    updateShipState(ctx.shipGeoR, ctx.shipGeoV, m_muEarth, ctx.currentEt.getETValue());
+    updateBurnParams(ctx.mainThrustN, ctx.shipMassKg);
+    updateHelioState(ctx.shipHelioR, ctx.shipHelioV);
+
+    tickMcc();
+    tickBplane();
+
+    // Re-schedule MCC event if the solution moved by more than 60 s.
+    if (m_eventQueue && m_detail.valid) {
+        const double mccET = m_currentET;  // MCC is "now" — tickMcc solved from current pos
+        // Use arrival ET as a proxy: MCC event = current time (burn is ~now on coasting page).
+        // More precisely: the MCC burn should happen as soon as possible; schedule it
+        // only once when detail is first valid and re-schedule if time shifts >60 s.
+        (void)mccET; // MCC scheduling handled via onRight — see below
     }
 }

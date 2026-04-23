@@ -115,6 +115,22 @@ bool saveSimState(const std::string& path, const SimSaveData& data)
         if (data.plan.valid)
             root.insert("transfer_plan", planToToml(data.plan));
 
+        // ---- [[events]] ----
+        if (!data.events.empty()) {
+            toml::array evArr;
+            for (const auto& e : data.events) {
+                toml::table t;
+                t.insert("name",     e.name);
+                t.insert("event_et", e.eventET);
+                t.insert("ann10",    e.ann10min);
+                t.insert("ann5",     e.ann5min);
+                t.insert("ann1",     e.ann1min);
+                t.insert("ann0",     e.ann0);
+                evArr.push_back(std::move(t));
+            }
+            root.insert("events", std::move(evArr));
+        }
+
         std::ofstream ofs(path);
         if (!ofs) {
             std::cerr << "[SimSave] Cannot open '" << path << "' for writing\n";
@@ -159,6 +175,23 @@ bool loadSimState(const std::string& path, SimSaveData& data)
         data.plan = {};
         if (auto* tp = tbl["transfer_plan"].as_table())
             planFromToml(*tp, data.plan);
+
+        // ---- [[events]] ----
+        data.events.clear();
+        if (auto* arr = tbl["events"].as_array()) {
+            for (auto& elem : *arr) {
+                if (auto* t = elem.as_table()) {
+                    SimSaveData::SavedEvent e;
+                    e.name    = (*t)["name"]     .value_or(std::string{});
+                    e.eventET = (*t)["event_et"] .value_or(0.0);
+                    e.ann10min = (*t)["ann10"]   .value_or(false);
+                    e.ann5min  = (*t)["ann5"]    .value_or(false);
+                    e.ann1min  = (*t)["ann1"]    .value_or(false);
+                    e.ann0     = (*t)["ann0"]    .value_or(false);
+                    data.events.push_back(e);
+                }
+            }
+        }
 
         std::cout << "[SimSave] Loaded from " << path << "\n";
         return true;
