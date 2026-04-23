@@ -45,7 +45,8 @@ void OBCEventQueue::cancelByName(const std::string& name)
 }
 
 // ---------------------------------------------------------------------------
-void OBCEventQueue::tick(double currentET, double& simSpeedTarget)
+void OBCEventQueue::tick(double currentET, double& simSpeedTarget,
+                         double& simSecondsPerRealSecond)
 {
     constexpr double k10min = 600.0;
     constexpr double k5min  = 300.0;
@@ -55,13 +56,21 @@ void OBCEventQueue::tick(double currentET, double& simSpeedTarget)
     for (auto& ev : m_events) {
         const double dt = ev.eventET - currentET;  // positive = future
 
-        // ---- Warp caps (only clamp DOWN, never raise) ----
-        if (dt > 0.0 && dt <= k5min)
-            simSpeedTarget = std::min(simSpeedTarget, 100.0);
-        if (dt > 0.0 && dt <= k1min)
-            simSpeedTarget = std::min(simSpeedTarget, 10.0);
-        if (dt > 0.0 && dt <= k30s)
-            simSpeedTarget = std::min(simSpeedTarget, 1.0);
+        // ---- Warp caps (clamp DOWN both target and current speed) ----
+        // Clamping simSecondsPerRealSecond immediately prevents large time steps
+        // from flying past the threshold before the smooth interpolation responds.
+        if (dt > 0.0 && dt <= k5min) {
+            simSpeedTarget          = std::min(simSpeedTarget,          100.0);
+            simSecondsPerRealSecond = std::min(simSecondsPerRealSecond, 100.0);
+        }
+        if (dt > 0.0 && dt <= k1min) {
+            simSpeedTarget          = std::min(simSpeedTarget,           10.0);
+            simSecondsPerRealSecond = std::min(simSecondsPerRealSecond,  10.0);
+        }
+        if (dt > 0.0 && dt <= k30s) {
+            simSpeedTarget          = std::min(simSpeedTarget,            1.0);
+            simSecondsPerRealSecond = std::min(simSecondsPerRealSecond,   1.0);
+        }
 
         // ---- Silent fast-forward for events already in the past on load ----
         // If all announcement flags are unset but the event time has already

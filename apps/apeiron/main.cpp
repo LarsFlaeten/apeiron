@@ -1191,9 +1191,23 @@ int main(int argc, char* argv[])
             }
             windowState.scrollDelta = 0.0;
 
+            // Tick OBC event queue BEFORE the time advance, using the
+            // pre-advance (previous-frame) ET.  This lets the queue see events
+            // that are within the current frame's step window and clamp the
+            // warp speed before we fly past them.  Both simSpeedTarget and
+            // simSecondsPerRealSecond are clamped immediately so the cap
+            // takes effect on *this* frame's advance, not just the next one.
+            {
+                auto preAdvanceEt = et + astro::TimeDelta(simElapsed);
+                obcEventQueue.tick(preAdvanceEt.getETValue(),
+                                   simSpeedTarget, simSecondsPerRealSecond);
+            }
+
             // Smooth time acceleration: converge in log-space toward target.
             // Time constant ~0.15 s real time — fast enough to feel responsive,
             // slow enough to avoid the one-frame orbital skip on t/T presses.
+            // Note: simSecondsPerRealSecond may already have been hard-clamped
+            // above; the interpolation then runs from the clamped value.
             {
                 const double logCurr = std::log(simSecondsPerRealSecond);
                 const double logTarg = std::log(simSpeedTarget);
@@ -1204,10 +1218,6 @@ int main(int argc, char* argv[])
 
             simElapsed += frameDt * simSecondsPerRealSecond;
             auto currentEt = et + astro::TimeDelta(simElapsed);
-
-            // Tick OBC event queue — may cap simSpeedTarget (takes effect on
-            // the *next* frame's smooth warp interpolation, one-frame lag is fine).
-            obcEventQueue.tick(currentEt.getETValue(), simSpeedTarget);
 
             // ---- Per-frame gravity update ----------------------------------------
             // Fetch geocentric positions of all gravity bodies from SPICE and rebuild

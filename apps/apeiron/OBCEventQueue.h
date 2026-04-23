@@ -47,10 +47,13 @@ public:
     // Cancel by name (no-op if not found).
     void cancelByName(const std::string& name);
 
-    // Called once per frame from main.cpp, after currentEt is computed.
-    //   currentET      — simulation SPICE ET this frame
-    //   simSpeedTarget — IN/OUT: may be reduced to enforce warp caps
-    void tick(double currentET, double& simSpeedTarget);
+    // Called once per frame from main.cpp, BEFORE the sim-time advance.
+    //   currentET              — pre-advance SPICE ET (previous frame's state)
+    //   simSpeedTarget         — IN/OUT: clamped to enforce warp caps (next frame target)
+    //   simSecondsPerRealSecond— IN/OUT: clamped immediately (current frame speed)
+    // Both speed vars are clamped so the cap takes effect before the advance
+    // runs, preventing large time steps from flying past event thresholds.
+    void tick(double currentET, double& simSpeedTarget, double& simSecondsPerRealSecond);
 
     // Read-only access for SimSave serialisation.
     const std::vector<ScheduledEvent>& events() const { return m_events; }
