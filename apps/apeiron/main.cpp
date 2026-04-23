@@ -50,6 +50,7 @@
 #include "VoiceAnnouncer.h"
 #include "OBCEventQueue.h"
 #include "MFDContext.h"
+#include "OBCMFD.h"
 #include "apeiron/spacecraft/Autopilot.h"
 #include "apeiron/spacecraft/ManifestLoader.h"
 #include "apeiron/spacecraft/OrbitLoader.h"
@@ -1110,6 +1111,7 @@ int main(int argc, char* argv[])
         transferMFD.setEpoch(et);
 
         MapMFD mapMFD;
+        OBCMFD obcMFD;
 
         MFDMenu    mfdMenu;
         mfdMenu.addApp(&orbitalMFD,  "ORB");
@@ -1117,6 +1119,7 @@ int main(int argc, char* argv[])
         mfdMenu.addApp(&camMFD,      "CAM");
         mfdMenu.addApp(&transferMFD, "XFER");
         mfdMenu.addApp(&mapMFD,      "MAP");
+        mfdMenu.addApp(&obcMFD,      "OBC");
 
         MFDPanel mfdFullPanel;
         mfdFullPanel.app     = &orbitalMFD;
@@ -2257,6 +2260,7 @@ int main(int argc, char* argv[])
                 orbitalMFD.update(mfdCtx);
                 mapMFD.update(mfdCtx);
                 transferMFD.update(mfdCtx);   // calls tickMcc + tickBplane internally
+                obcMFD.update(mfdCtx);
 
                 // 4. Resolve pending TGT input.
                 {

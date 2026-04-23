@@ -63,6 +63,18 @@ void OBCEventQueue::tick(double currentET, double& simSpeedTarget)
         if (dt > 0.0 && dt <= k30s)
             simSpeedTarget = std::min(simSpeedTarget, 1.0);
 
+        // ---- Silent fast-forward for events already in the past on load ----
+        // If all announcement flags are unset but the event time has already
+        // passed, we skipped this event (e.g. plan confirmed after departure,
+        // or save loaded with stale event).  Mark silently so it purges cleanly.
+        if (dt < 0.0 && !ev.announced10min) {
+            ev.announced10min = true;
+            ev.announced5min  = true;
+            ev.announced1min  = true;
+            ev.announced0     = true;
+            continue;   // let the purge below remove it
+        }
+
         // ---- Voice callouts (fire once each) ----
         if (!ev.announced10min && dt <= k10min && dt > 0.0) {
             obc::speak(ev.name + ", T minus 10 minutes");

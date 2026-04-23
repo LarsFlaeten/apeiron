@@ -281,10 +281,17 @@ void TransferMFD::onRight(int slot)
             if (m_detail.valid) {
                 m_page = 1;
                 // Post mission milestones to the OBC event queue.
+                // TMI is only posted when departure time is still in the future
+                // (avoids re-scheduling a done burn when re-confirming a plan
+                // loaded from a pre-queue save).
                 if (m_eventQueue) {
-                    m_eventQueue->schedule("TMI",   m_detail.depET);
-                    m_eventQueue->schedule("MOI",   m_detail.arrET);
+                    if (m_detail.depET > m_currentET)
+                        m_eventQueue->schedule("TMI",   m_detail.depET);
+                    // TCM-1: early trajectory correction at T+7 days.
+                    m_eventQueue->schedule("TCM-1", m_detail.depET + 7.0 * kDay);
+                    // MCC-1: mid-course Lambert correction at 50% TOF.
                     m_eventQueue->schedule("MCC-1", m_detail.depET + m_detail.tofSec * 0.5);
+                    m_eventQueue->schedule("MOI",   m_detail.arrET);
                 }
             }
         }

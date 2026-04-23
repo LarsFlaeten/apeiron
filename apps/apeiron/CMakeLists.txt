@@ -48,6 +48,7 @@ add_executable(apeiron
     VoiceAnnouncer.cpp
     SimSave.cpp
     OBCEventQueue.cpp
+    OBCMFD.cpp
 )
 
 add_dependencies(apeiron apeiron_shaders)
