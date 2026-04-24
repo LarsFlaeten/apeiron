@@ -1287,24 +1287,21 @@ int main(int argc, char* argv[])
                     }
                 }
 
-                // Rebuild attractors on all spacecraft with the correct tidal
-                // reference position so the indirect correction cancels the
-                // dominant body's acceleration (not always Earth's).
-                // If the dominant body is Earth the reference is (0,0,0) as before.
+                // Rebuild attractors on all spacecraft.
+                // The integrator always runs in Earth-centred ECI, so the tidal
+                // (indirect) correction must always cancel Earth's acceleration
+                // toward each body — i.e. tidalRefPos is always (0,0,0) (Earth).
+                // The dominant-body tracking above is for display/autopilot only
+                // and must NOT influence the physics tidal reference.
                 {
-                    glm::dvec3 domPos(0.0);
-                    for (const auto& gb : gravBodies)
-                        if (gb.name == dominantBodyName) { domPos = gb.posECI; break; }
-
                     for (auto& sc : spacecraft) {
                         sc->clearAttractors();
                         for (const auto& gb : gravBodies) {
-                            const bool isDominant = (gb.name == dominantBodyName);
                             astro::Attractor att;
                             att.p           = gb.posECI;
                             att.GM          = gb.gm;
-                            att.tidal       = !isDominant;
-                            att.tidalRefPos = isDominant ? glm::dvec3(0.0) : domPos;
+                            att.tidal       = (gb.name != "EARTH");
+                            att.tidalRefPos = glm::dvec3(0.0);  // always Earth = ECI origin
                             sc->addAttractor(att);
                         }
                     }

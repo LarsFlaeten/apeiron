@@ -1386,6 +1386,14 @@ void TransferMFD::tickMcc()
     m_mccDv = glm::dvec3(0.0);
     if (!m_detail.valid) return;
 
+    // The MCC correction is computed with a heliocentric two-body model.
+    // Inside Earth's sphere of influence (~929,000 km) the geocentric
+    // velocity dominates and the heliocentric velocity vector looks nothing
+    // like the asymptotic departure velocity — the Lambert result would be
+    // completely wrong (17+ km/s artifacts).  Suppress until clear of SOI.
+    constexpr double kEarthSOI = 929000.0;  // km — Earth SOI radius
+    if (glm::length(m_shipR) < kEarthSOI) return;
+
     const double tofRemaining = m_detail.arrET - m_currentET;
     if (tofRemaining <= kDay) return;
 
@@ -1507,7 +1515,12 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     double dvMCC    = 0.0;
     OrbitDiagram::Arc mccArc;
 
-    if (tofRemaining > kDay) {   // at least 1 day remaining
+    // Suppress MCC inside Earth's SOI: near periapsis the geocentric velocity
+    // dominates and the heliocentric state is not representative of the departure.
+    constexpr double kEarthSOI_render = 929000.0;  // km
+    const bool insideEarthSOI = (glm::length(m_shipR) < kEarthSOI_render);
+
+    if (!insideEarthSOI && tofRemaining > kDay) {   // at least 1 day remaining
         mccValid = spacecraft::solveLambert(muSun, shipR, m_detail.arrPos,
                                             tofRemaining, true,
                                             vMCC_dep, vMCC_arr);
@@ -1728,7 +1741,8 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         if (dvMCC < 0.001)
             addLine(kGreen,  " ON NOMINAL TRAJECTORY");
         else
-            addLine(kDim,    " arr dV %.3f km/s (new)", glm::length(vMCC_arr - marsNow.v));
+            // V-inf at arrival: use planned Mars velocity at arrival time, not current time.
+            addLine(kDim,    " arr dV %.3f km/s (new)", glm::length(vMCC_arr - m_detail.vArrBody));
     }
 
     // -- B-plane targeting ---------------------------------------------------
