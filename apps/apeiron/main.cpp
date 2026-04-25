@@ -2591,7 +2591,7 @@ int main(int argc, char* argv[])
                     fwd = glm::normalize(glm::vec3(yawMat * glm::vec4(fwd, 0.0f)));
                     glm::vec3 right = glm::normalize(glm::cross(up, fwd));
                     glm::mat4 pitchMat = glm::rotate(glm::mat4(1.0f),
-                                                     glm::radians(slewPitchDeg), right);
+                                                     -glm::radians(slewPitchDeg), right);
                     fwd = glm::normalize(glm::vec3(pitchMat * glm::vec4(fwd, 0.0f)));
                     up  = glm::normalize(glm::vec3(pitchMat * glm::vec4(up,  0.0f)));
                 }
