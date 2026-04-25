@@ -2511,7 +2511,8 @@ int main(int argc, char* argv[])
             // vpRotOut (optional): rotation-only VP for star rendering (no translation).
             auto buildCamVP = [&](const std::string& nodeName, float fovDeg,
                                   glm::mat4& vpOut, glm::vec3& camPosOut,
-                                  glm::mat4* vpRotOut = nullptr) {
+                                  glm::mat4* vpRotOut = nullptr,
+                                  float slewYawDeg = 0.0f, float slewPitchDeg = 0.0f) {
                 if (!orionGltf.isLoaded() || nodeName.empty()) return;
                 auto& sc  = *spacecraft[playerIdx];
                 glm::vec3 rp = scene.origin().toRenderSpace(earthWorld + sc.position());
@@ -2524,6 +2525,18 @@ int main(int argc, char* argv[])
                 glm::vec3 pos = rp + glm::vec3(camWorld[3]) * 1e-3f;
                 glm::vec3 fwd = glm::normalize(glm::vec3(camWorld[0]));
                 glm::vec3 up  = glm::normalize(glm::vec3(camWorld[1]));
+                // Apply slew offsets: yaw rotates around the camera's up axis,
+                // pitch rotates around the camera's right axis.
+                if (slewYawDeg != 0.0f || slewPitchDeg != 0.0f) {
+                    glm::mat4 yawMat = glm::rotate(glm::mat4(1.0f),
+                                                   glm::radians(slewYawDeg), up);
+                    fwd = glm::normalize(glm::vec3(yawMat * glm::vec4(fwd, 0.0f)));
+                    glm::vec3 right = glm::normalize(glm::cross(up, fwd));
+                    glm::mat4 pitchMat = glm::rotate(glm::mat4(1.0f),
+                                                     glm::radians(slewPitchDeg), right);
+                    fwd = glm::normalize(glm::vec3(pitchMat * glm::vec4(fwd, 0.0f)));
+                    up  = glm::normalize(glm::vec3(pitchMat * glm::vec4(up,  0.0f)));
+                }
                 camPosOut = pos;
                 // near: 0.1 m (1e-4 km) for close spacecraft views.
                 // far: 1e9 km — must match C_FAR in the planet/mesh shaders which use
@@ -2545,7 +2558,8 @@ int main(int argc, char* argv[])
             glm::mat4 dockVP     = glm::mat4(1.0f);
             glm::mat4 dockVPRot  = glm::mat4(1.0f);
             glm::vec3 dockCamPos = glm::vec3(0.0f);
-            buildCamVP(camMFD.activeCamNode(),        70.0f,                  offVP,  offCamPos,  &offVPRot);
+            buildCamVP(camMFD.activeCamNode(), camMFD.fovDeg(), offVP, offCamPos, &offVPRot,
+                       camMFD.slewYaw(), camMFD.slewPitch());
             buildCamVP(dockingMFD.preferredCamNode(), dockingMFD.fovDeg(),    dockVP, dockCamPos, &dockVPRot);
 
             if (!renderer.acquireFrame()) continue;
