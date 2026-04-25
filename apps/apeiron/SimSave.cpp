@@ -97,6 +97,8 @@ bool saveSimState(const std::string& path, const SimSaveData& data)
         toml::table sim;
         sim.insert("elapsed_s",    data.simElapsed);
         sim.insert("speed_target", data.simSpeedTarget);
+        if (!data.refBodyName.empty())
+            sim.insert("ref_body", data.refBodyName);
         root.insert("sim", std::move(sim));
 
         // ---- [[spacecraft]] ----
@@ -155,6 +157,7 @@ bool loadSimState(const std::string& path, SimSaveData& data)
         // ---- [sim] ----
         data.simElapsed     = tbl["sim"]["elapsed_s"]   .value_or(0.0);
         data.simSpeedTarget = tbl["sim"]["speed_target"].value_or(1.0);
+        data.refBodyName    = tbl["sim"]["ref_body"]    .value_or(std::string{});
 
         // ---- [[spacecraft]] ----
         data.spacecraft.clear();

@@ -341,6 +341,41 @@ int main(int argc, char* argv[])
                 gravBodies.push_back({ name, id, gm, 0.0, glm::dvec3(0.0) });
             }
         }
+        // Compute Hill-sphere (SOI) radii for all non-Sun bodies.
+        // r_SOI = a * (GM_body / GM_sun)^(2/5)
+        // where a is approximated as the body's current heliocentric distance
+        // (we call SPICE once here at startup; good enough for static SOI radii).
+        {
+            double gmSun = 0.0;
+            for (const auto& gb : gravBodies)
+                if (gb.name == "SUN") { gmSun = gb.gm; break; }
+            if (gmSun > 0.0) {
+                static const astro::ReferenceFrame kEclip =
+                    astro::ReferenceFrame::createEclipJ2000();
+                const astro::EphemerisTime t0(0.0);  // J2000 epoch — good enough for SOI
+                for (auto& gb : gravBodies) {
+                    if (gb.name == "SUN" || gb.name == "EARTH") continue;
+                    try {
+                        astro::PosState s;
+                        astro::Spice().getRelativeGeometricState(
+                            static_cast<int>(gb.naifId), 10, t0, s, kEclip);
+                        double a = std::sqrt(s.r.x*s.r.x + s.r.y*s.r.y + s.r.z*s.r.z);
+                        gb.soiKm = a * std::pow(gb.gm / gmSun, 2.0 / 5.0);
+                    } catch (const astro::SpiceException&) {}
+                }
+                // Earth SOI (~924 000 km) — hard-code since Earth is always at ECI origin.
+                for (auto& gb : gravBodies) {
+                    if (gb.name != "EARTH") continue;
+                    try {
+                        astro::PosState s;
+                        astro::Spice().getRelativeGeometricState(399, 10, t0, s, kEclip);
+                        double a = std::sqrt(s.r.x*s.r.x + s.r.y*s.r.y + s.r.z*s.r.z);
+                        gb.soiKm = a * std::pow(gb.gm / gmSun, 2.0 / 5.0);
+                    } catch (const astro::SpiceException&) {}
+                    break;
+                }
+            }
+        }
         // Track which body currently dominates gravity for the player spacecraft.
         // Start assuming Earth.
         std::string dominantBodyName = "EARTH";
@@ -1247,20 +1282,23 @@ int main(int argc, char* argv[])
                     }
                 }
 
-                // Dominant body: highest GM / r² at player position.
-                // Computed BEFORE setting attractors so the tidal reference
-                // position can track whichever body we're currently orbiting.
+                // Dominant body: the body whose SOI the player is currently inside.
+                // For each non-Sun body with a known SOI radius, check if the
+                // ship is inside it.  If inside multiple (rare, e.g. near a moon),
+                // prefer the smallest SOI (closest body).  If outside all, use Sun.
+                // SOI membership is the physically correct criterion for which
+                // body's gravity dominates the spacecraft's trajectory.
                 {
                     glm::dvec3 playerPos = player.position();
-                    double     bestAccel = 0.0;
-                    std::string bestName = dominantBodyName;
+                    std::string bestName = "SUN";
+                    double      bestSoi  = 1e18;  // pick smallest SOI if nested
                     for (const auto& gb : gravBodies) {
-                        glm::dvec3 rel  = gb.posECI - playerPos;
-                        double     r2   = glm::dot(rel, rel);
-                        double     accel = (r2 > 1.0) ? gb.gm / r2 : 0.0;
-                        if (accel > bestAccel) {
-                            bestAccel = accel;
-                            bestName  = gb.name;
+                        if (gb.name == "SUN" || gb.soiKm <= 0.0) continue;
+                        glm::dvec3 rel = gb.posECI - playerPos;
+                        double r = glm::length(rel);
+                        if (r < gb.soiKm && gb.soiKm < bestSoi) {
+                            bestSoi  = gb.soiKm;
+                            bestName = gb.name;
                         }
                     }
 
@@ -2016,6 +2054,7 @@ int main(int argc, char* argv[])
                     SimSaveData sd;
                     sd.simElapsed     = simElapsed;
                     sd.simSpeedTarget = simSpeedTarget;
+                    sd.refBodyName    = refBody.name;
                     for (const auto& sc : spacecraft) {
                         SimSaveData::ScState st;
                         st.position        = sc->position();
@@ -2067,6 +2106,25 @@ int main(int argc, char* argv[])
                                 restored.push_back(ev);
                             }
                             obcEventQueue.restoreEvents(std::move(restored));
+                        }
+                        // Restore the saved reference body so the OrbitalMFD shows
+                        // the same body the user had selected at save time.
+                        if (!sd.refBodyName.empty()) {
+                            SpiceInt rid; SpiceBoolean rfound;
+                            bodn2c_c(sd.refBodyName.c_str(), &rid, &rfound);
+                            if (rfound) {
+                                try {
+                                    double      rgm = 0.0;
+                                    astro::Vec3 rradii;
+                                    astro::Spice().getPlanetaryConstants(
+                                        static_cast<int>(rid), "GM", rgm);
+                                    astro::Spice().getPlanetaryConstants(
+                                        static_cast<int>(rid), "RADII", rradii);
+                                    refBody = { sd.refBodyName, rgm, rradii.x, rid };
+                                    dominantBodyName = sd.refBodyName;
+                                    orbitalMFD.setContext(refBody.name.c_str(), "");
+                                } catch (const astro::SpiceException&) {}
+                            }
                         }
                         scenarioStatusMsg = "Loaded.";
                     } else {

@@ -28,8 +28,9 @@
 
 struct SimSaveData
 {
-    double simElapsed     = 0.0;  // seconds since scenario epoch
-    double simSpeedTarget = 1.0;
+    double      simElapsed     = 0.0;  // seconds since scenario epoch
+    double      simSpeedTarget = 1.0;
+    std::string refBodyName;           // NAIF name of the selected reference body (e.g. "MARS")
 
     struct ScState {
         glm::dvec3 position;       // km   (ECI geocentric ECLIPJ2000)
