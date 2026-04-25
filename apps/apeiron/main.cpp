@@ -1200,6 +1200,7 @@ int main(int argc, char* argv[])
             {
                 auto preAdvanceEt = et + astro::TimeDelta(simElapsed);
                 obcEventQueue.tick(preAdvanceEt.getETValue(),
+                                   static_cast<double>(frameDt),
                                    simSpeedTarget, simSecondsPerRealSecond);
             }
 
@@ -1315,10 +1316,15 @@ int main(int argc, char* argv[])
             bool mainEngineOn = false;
             glm::dvec3 shipForce(0.0);   // body-frame thrust force (N), hoisted for nav console
             // Active burn-direction for MCC+ autopilot and HUD marker.
-            // BPL (B-plane Pe targeting) takes priority over Lambert MCC.
+            // BPL (B-plane Pe targeting) takes priority over Lambert MCC only when the
+            // ship is on a genuine close approach — Pe < 50,000 km above the arrival body
+            // surface.  Far from Mars the virtual B-plane periapsis can be millions of km
+            // and the BPL vector is meaningless; in that case use the Lambert MCC.
             const glm::dvec3 activeNavDv = [&]() -> glm::dvec3 {
-                glm::dvec3 bpl = transferMFD.getBplaneDv();
-                return (glm::length(bpl) > 1e-9) ? bpl : transferMFD.getMccDv();
+                glm::dvec3 bpl   = transferMFD.getBplaneDv();
+                double     peNow = transferMFD.getBplanePeCurrentKm();
+                const bool bplUsable = (glm::length(bpl) > 1e-9) && (peNow < 50000.0);
+                return bplUsable ? bpl : transferMFD.getMccDv();
             }();
             {
                 glm::dvec3 shipTorque(0.0);
