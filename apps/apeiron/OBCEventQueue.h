@@ -49,11 +49,20 @@ public:
 
     // Called once per frame from main.cpp, BEFORE the sim-time advance.
     //   currentET              — pre-advance SPICE ET (previous frame's state)
-    //   simSpeedTarget         — IN/OUT: clamped to enforce warp caps (next frame target)
+    //   frameDtReal            — real-time frame duration (seconds), used to compute
+    //                            approach caps that prevent skipping thresholds in
+    //                            a single large time step at high warp.
+    //   simSpeedTarget         — IN/OUT: clamped to enforce warp caps
     //   simSecondsPerRealSecond— IN/OUT: clamped immediately (current frame speed)
-    // Both speed vars are clamped so the cap takes effect before the advance
-    // runs, preventing large time steps from flying past event thresholds.
-    void tick(double currentET, double& simSpeedTarget, double& simSecondsPerRealSecond);
+    //
+    // Two-layer defence:
+    //   1. Threshold caps   — hard limits once inside T-5min / T-1min / T-30s windows.
+    //   2. Approach caps    — reduce max warp so the NEXT frame's step lands at most
+    //                         at the threshold boundary, never past it.  Prevents
+    //                         high-warp frames (e.g. 28 min/frame at ×100 000) from
+    //                         jumping over the entire deceleration ramp in one step.
+    void tick(double currentET, double frameDtReal,
+              double& simSpeedTarget, double& simSecondsPerRealSecond);
 
     // Read-only access for SimSave serialisation.
     const std::vector<ScheduledEvent>& events() const { return m_events; }

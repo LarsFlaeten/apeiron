@@ -45,8 +45,8 @@ void OBCEventQueue::cancelByName(const std::string& name)
 }
 
 // ---------------------------------------------------------------------------
-void OBCEventQueue::tick(double currentET, double& simSpeedTarget,
-                         double& simSecondsPerRealSecond)
+void OBCEventQueue::tick(double currentET, double frameDtReal,
+                         double& simSpeedTarget, double& simSecondsPerRealSecond)
 {
     constexpr double k10min = 600.0;
     constexpr double k5min  = 300.0;
@@ -56,7 +56,28 @@ void OBCEventQueue::tick(double currentET, double& simSpeedTarget,
     for (auto& ev : m_events) {
         const double dt = ev.eventET - currentET;  // positive = future
 
-        // ---- Warp caps (clamp DOWN both target and current speed) ----
+        // ---- Approach caps -----------------------------------------------
+        // At high warp a single frame can advance many minutes of sim time,
+        // skipping every deceleration threshold in one step.  For each
+        // threshold T, if dt > T we cap speed so the next frame's step is
+        // at most (dt − T) seconds — i.e. we land at the boundary, not past
+        // it.  The threshold caps below then take over from that point.
+        if (dt > 0.0 && frameDtReal > 1e-6) {
+            // Approach to the 5-min cap boundary (most critical at high warp).
+            if (dt > k5min) {
+                const double maxSpeed = (dt - k5min) / frameDtReal;
+                simSpeedTarget          = std::min(simSpeedTarget,          maxSpeed);
+                simSecondsPerRealSecond = std::min(simSecondsPerRealSecond, maxSpeed);
+            }
+            // Approach to the 1-min cap boundary (relevant from ×100).
+            if (dt > k1min) {
+                const double maxSpeed = (dt - k1min) / frameDtReal;
+                simSpeedTarget          = std::min(simSpeedTarget,          maxSpeed);
+                simSecondsPerRealSecond = std::min(simSecondsPerRealSecond, maxSpeed);
+            }
+        }
+
+        // ---- Threshold caps (clamp DOWN both target and current speed) ----
         // Clamping simSecondsPerRealSecond immediately prevents large time steps
         // from flying past the threshold before the smooth interpolation responds.
         if (dt > 0.0 && dt <= k5min) {
