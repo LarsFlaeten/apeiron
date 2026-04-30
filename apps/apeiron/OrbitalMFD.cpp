@@ -56,8 +56,9 @@ static void fmtTime(double totalSeconds, char* buf, std::size_t sz, bool allowNe
 // ---------------------------------------------------------------------------
 void OrbitalMFD::setContext(const char* refName, const char* frameName)
 {
-    m_refName   = refName;
-    m_frameName = frameName;
+    m_refName    = refName;
+    m_frameName  = frameName;
+    m_smoothInit = false;   // reset EMA so old body's values don't bleed in
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +362,59 @@ void OrbitalMFD::update(const astro::PosState&     state,
     if (e < kFreezeEcc && a > 0.0)
         m_frozenSmaKm = a;
 
+    // --- EMA display smoothing ---
+    // α=0.15 → ~10-frame (167 ms at 60 fps) settling time.
+    // Only the "derived" elements that are noisy due to numerical integration
+    // residuals are smoothed.  Alt, Vel, true anomaly, and time countdowns
+    // are passed through raw so they remain real-time.
+    static constexpr double kAlpha = 0.15;
+
+    if (!m_smoothInit) {
+        m_sApoAltKm   = m_apoAltKm;
+        m_sPerAltKm   = m_perAltKm;
+        m_sEccen      = m_eccen;
+        m_sAngMomKm2s = m_angMomKm2s;
+        m_sSmaKm      = m_smaKm;
+        m_sIncDeg     = m_incDeg;
+        m_sRaanDeg    = m_raanDeg;
+        m_sArgpeDeg   = m_argpeDeg;
+        m_sPeriodMin  = m_periodMin;
+        m_smoothInit  = true;
+    } else {
+        auto ema = [](double raw, double prev) {
+            return kAlpha * raw + (1.0 - kAlpha) * prev;
+        };
+        // Angle EMA: unwrap through the 0/360 seam before blending.
+        auto emaAngle = [](double raw, double prev) -> double {
+            double diff = raw - prev;
+            if (diff >  180.0) diff -= 360.0;
+            if (diff < -180.0) diff += 360.0;
+            double r = prev + kAlpha * diff;
+            if (r <    0.0) r += 360.0;
+            if (r >= 360.0) r -= 360.0;
+            return r;
+        };
+
+        // Apoapsis: only smooth while staying in the same orbit regime.
+        if (m_apoAltKm >= 0.0 && m_sApoAltKm >= 0.0)
+            m_sApoAltKm = ema(m_apoAltKm, m_sApoAltKm);
+        else
+            m_sApoAltKm = m_apoAltKm;  // pass through on hyperbolic transition
+
+        m_sPerAltKm   = ema(m_perAltKm,   m_sPerAltKm);
+        m_sEccen      = ema(m_eccen,      m_sEccen);
+        m_sAngMomKm2s = ema(m_angMomKm2s, m_sAngMomKm2s);
+        m_sSmaKm      = ema(m_smaKm,      m_sSmaKm);
+        m_sIncDeg     = ema(m_incDeg,     m_sIncDeg);
+        m_sRaanDeg    = emaAngle(m_raanDeg,  m_sRaanDeg);
+        m_sArgpeDeg   = emaAngle(m_argpeDeg, m_sArgpeDeg);
+
+        if (m_periodMin > 0.0 && m_sPeriodMin > 0.0)
+            m_sPeriodMin = ema(m_periodMin, m_sPeriodMin);
+        else
+            m_sPeriodMin = m_periodMin;
+    }
+
     // --- 3D orbit geometry in the current frame ---
     // Always computed so the diagram can draw even circular orbits.
     if (h > 1.0e-10) {
@@ -394,14 +448,14 @@ void OrbitalMFD::update(const astro::PosState&     state,
 // ---------------------------------------------------------------------------
 void OrbitalMFD::renderDiagram(ImDrawList* dl, ImVec2 diagOrigin, float diagSize)
 {
-    if (m_smaKm == 0.0) return;
+    if (m_sSmaKm == 0.0) return;
 
     // Reconstruct position from true anomaly or shipDir.
-    const double e    = m_eccen;
+    const double e    = m_sEccen;
     const bool   isHyp = m_isHyperbolic;
     const double slr  = isHyp
-        ? std::abs(m_smaKm) * (e * e - 1.0)
-        : m_smaKm           * (1.0 - e * e);
+        ? std::abs(m_sSmaKm) * (e * e - 1.0)
+        : m_sSmaKm           * (1.0 - e * e);
 
     const double rCur = m_trueValid
         ? slr / (1.0 + e * std::cos(m_trueDeg * kDeg2Rad))
@@ -625,8 +679,8 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // Ship rows
     if (useAU) {
         double r_AU   = (m_altKm + m_bodyRadiusKm) / kAUkm;
-        double apo_AU = (m_apoAltKm >= 0.0) ? (m_apoAltKm + m_bodyRadiusKm) / kAUkm : -1.0;
-        double per_AU = (m_perAltKm  + m_bodyRadiusKm) / kAUkm;
+        double apo_AU = (m_sApoAltKm >= 0.0) ? (m_sApoAltKm + m_bodyRadiusKm) / kAUkm : -1.0;
+        double per_AU = (m_sPerAltKm  + m_bodyRadiusKm) / kAUkm;
         row   ("r",    "%.4f",  r_AU,   " AU");
         row   ("Vel",  "%.3f",  m_velKms, " km/s");
         if (apo_AU >= 0.0) row("Aph", "%.4f", apo_AU, " AU");
@@ -641,13 +695,13 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             rowStr("t-PE", tPeHypBuf);
             row("v\xe2\x88\x9e", "%.3f", m_hypVinfKms, " km/s", kColEscape);
         }
-        row   ("Inc",   "%.2f\xc2\xb0", m_incDeg);
-        row   ("RAAN",  "%.2f\xc2\xb0", m_raanDeg);
-        row   ("Ecc",   "%.5f",   m_eccen);
-        row   ("ArgPe", "%.2f\xc2\xb0", m_argpeDeg);
+        row   ("Inc",   "%.2f\xc2\xb0", m_sIncDeg);
+        row   ("RAAN",  "%.2f\xc2\xb0", m_sRaanDeg);
+        row   ("Ecc",   "%.5f",   m_sEccen);
+        row   ("ArgPe", "%.2f\xc2\xb0", m_sArgpeDeg);
         rowStr("h", "");  // placeholder to align with km mode
-        if (m_periodMin > 0.0) {
-            double periodDays = m_periodMin / 1440.0;
+        if (m_sPeriodMin > 0.0) {
+            double periodDays = m_sPeriodMin / 1440.0;
             if (periodDays < 3650.0)
                 row("T", "%.1f", periodDays, " d");
             else
@@ -656,13 +710,13 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             rowStr("T", "---");
         }
     } else {
-        row   ("Alt",   "%.1f",   m_altKm,     " km");
-        row   ("Vel",   "%.3f",   m_velKms,    " km/s");
-        if (m_apoAltKm >= 0.0)
-            row("Apo",  "%.1f",   m_apoAltKm,  " km");
+        row   ("Alt",   "%.1f",   m_altKm,      " km");
+        row   ("Vel",   "%.3f",   m_velKms,     " km/s");
+        if (m_sApoAltKm >= 0.0)
+            row("Apo",  "%.1f",   m_sApoAltKm,  " km");
         else
             rowStr("Apo", "\xe2\x88\x9e", kColEscape);
-        row   ("Per",   "%.1f",   m_perAltKm,  " km");
+        row   ("Per",   "%.1f",   m_sPerAltKm,  " km");
         if (!m_isHyperbolic) {
             rowStr("t-AP", tApBuf);
             rowStr("t-PE", tPeBuf);
@@ -672,13 +726,13 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             rowStr("t-PE", tPeHypBuf);
             row("v\xe2\x88\x9e", "%.3f", m_hypVinfKms, " km/s", kColEscape);
         }
-        row   ("Inc",   "%.2f\xc2\xb0", m_incDeg);
-        row   ("RAAN",  "%.2f\xc2\xb0", m_raanDeg);
-        row   ("Ecc",   "%.5f",   m_eccen);
-        row   ("ArgPe", "%.2f\xc2\xb0", m_argpeDeg);
-        row   ("h",     "%.0f",   m_angMomKm2s, " km\xc2\xb2/s");
-        if (m_periodMin > 0.0)
-            row("T",    "%.2f",   m_periodMin,  " min");
+        row   ("Inc",   "%.2f\xc2\xb0", m_sIncDeg);
+        row   ("RAAN",  "%.2f\xc2\xb0", m_sRaanDeg);
+        row   ("Ecc",   "%.5f",   m_sEccen);
+        row   ("ArgPe", "%.2f\xc2\xb0", m_sArgpeDeg);
+        row   ("h",     "%.0f",   m_sAngMomKm2s, " km\xc2\xb2/s");
+        if (m_sPeriodMin > 0.0)
+            row("T",    "%.2f",   m_sPeriodMin,  " min");
         else
             rowStr("T", "---");
     }

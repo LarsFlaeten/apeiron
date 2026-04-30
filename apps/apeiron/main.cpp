@@ -1563,13 +1563,65 @@ int main(int argc, char* argv[])
             // Step size grows at high time accel to keep steps/frame ≤ kMaxStepsPerFrame.
             // No render interpolation: from a first-person bow camera at orbital altitude
             // one physics step (< 100 m) subtends < 0.001° — completely invisible.
+            //
+            // Attractor position freshness: the outer SPICE query runs once per frame
+            // at currentEt (end-of-frame) which is fine for distant bodies (Sun,
+            // Earth, etc.) — a 1600 s step moves them < 0.03 % of their ECI distance.
+            // But for a close-orbit dominant body (e.g. Mars at 5 000 km), a 16 s
+            // sub-step moves the planet ~400 km — nearly 8 % of the orbit radius —
+            // which makes the gravity direction badly wrong.  Fix: re-query the
+            // dominant non-Earth body's position at each sub-step's midpoint and
+            // rebuild all attractors before the integration step.
             {
                 constexpr int kMaxStepsPerFrame = 100;
                 const double  simDt = static_cast<double>(frameDt) * simSecondsPerRealSecond;
                 const double  step  = std::max(kPhysStep, simDt / kMaxStepsPerFrame);
 
+                // Helper: rebuild attractors on every spacecraft from current gb.posECI.
+                auto rebuildAttractors = [&]() {
+                    for (auto& sc : spacecraft) {
+                        sc->clearAttractors();
+                        for (const auto& gb : gravBodies) {
+                            astro::Attractor att;
+                            att.p           = gb.posECI;
+                            att.GM          = gb.gm;
+                            att.tidal       = (gb.name != "EARTH");
+                            att.tidalRefPos = glm::dvec3(0.0);
+                            sc->addAttractor(att);
+                        }
+                    }
+                };
+
+                // Per-sub-step attractor refresh is only needed when orbiting a close
+                // body (not Earth — always at origin; not Sun — distances >> orbit radius).
+                const bool needsSubstepRefresh =
+                    (dominantBodyName != "SUN" && dominantBodyName != "EARTH");
+
+                static const astro::ReferenceFrame kEclipPhys =
+                    astro::ReferenceFrame::createEclipJ2000();
+
                 physAccum += simDt;
                 while (physAccum >= step) {
+                    if (needsSubstepRefresh) {
+                        // Query dominant body at this sub-step's midpoint.
+                        // physAccum still includes this step, so current ship sim-time
+                        // = simElapsed − physAccum; sub-step midpoint is + step/2.
+                        const double midElapsed = simElapsed - physAccum + step * 0.5;
+                        const auto   subEt      = et + astro::TimeDelta(midElapsed);
+                        for (auto& gb : gravBodies) {
+                            if (gb.name != dominantBodyName) continue;
+                            try {
+                                astro::PosState s;
+                                astro::Spice().getRelativeGeometricState(
+                                    static_cast<int>(gb.naifId), 399,
+                                    subEt, s, kEclipPhys);
+                                gb.posECI = glm::dvec3(s.r.x, s.r.y, s.r.z);
+                            } catch (...) {}
+                            break;
+                        }
+                        rebuildAttractors();
+                    }
+
                     // Pre-step: apply spring-damper forces before integration.
                     dockingConstraint.update(step);
                     for (auto& sc : spacecraft)
@@ -1579,6 +1631,24 @@ int main(int argc, char* argv[])
                     // Orion tracks ISS's new position (avoids ~77 m orbital-velocity lag).
                     dockingConstraint.enforcePostStep();
                     physAccum -= step;
+                }
+
+                // After sub-steps, restore the dominant body's posECI to the
+                // display-time value (currentEt) so the orbit display and SOI
+                // detection use a consistent end-of-frame position.
+                if (needsSubstepRefresh) {
+                    for (auto& gb : gravBodies) {
+                        if (gb.name != dominantBodyName) continue;
+                        try {
+                            astro::PosState s;
+                            astro::Spice().getRelativeGeometricState(
+                                static_cast<int>(gb.naifId), 399,
+                                currentEt, s, kEclipPhys);
+                            gb.posECI = glm::dvec3(s.r.x, s.r.y, s.r.z);
+                        } catch (...) {}
+                        break;
+                    }
+                    rebuildAttractors();
                 }
             }
 

@@ -132,6 +132,19 @@ private:
     double m_frozenSmaKm  = 0.0;
     static constexpr double kFreezeEcc = 0.90;
 
+    // EMA-smoothed display values (α ≈ 0.15 per frame).
+    // Raw values go into m_xxxKm etc.; these are what render() reads.
+    bool   m_smoothInit   = false;
+    double m_sApoAltKm    = 0.0;
+    double m_sPerAltKm    = 0.0;
+    double m_sEccen       = 0.0;
+    double m_sAngMomKm2s  = 0.0;
+    double m_sSmaKm       = 0.0;
+    double m_sIncDeg      = 0.0;
+    double m_sRaanDeg     = 0.0;
+    double m_sArgpeDeg    = 0.0;
+    double m_sPeriodMin   = 0.0;
+
     // --- 3D orbit geometry in the current frame (updated by update()) ---
     // periDir: unit vector toward periapsis
     // normDir: unit orbit normal (= h/|h|)
