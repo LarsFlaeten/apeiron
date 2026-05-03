@@ -181,7 +181,7 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
         if (m_timedBurnActive) {
             if (m_burnTimer > 0.0) {
                 m_burnTimer -= dt;
-                glm::dvec3 tau = maxTorqueNm * m_burnTorqueDir;
+                glm::dvec3 tau = rcsAuthorityNm * m_burnTorqueDir;
                 w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
                 return w;
             }
@@ -195,7 +195,7 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
 
         if (omegaMag > timedBurnThreshold) {
             inLargeSlew = true;
-            glm::dvec3 tau = -(maxTorqueNm / omegaMag) * omega_body;
+            glm::dvec3 tau = -(rcsAuthorityNm / omegaMag) * omega_body;
             w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
             return w;
         }
@@ -206,10 +206,10 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
         double     I_eff    = od2.x * inertiaDiag.x
                             + od2.y * inertiaDiag.y
                             + od2.z * inertiaDiag.z;
-        m_burnTimer       = I_eff * omegaMag / rcsAuthorityNm;
+        m_burnTimer       = 0.75 * I_eff * omegaMag / rcsAuthorityNm;
         m_burnTorqueDir   = -omegaDir;
         m_timedBurnActive = true;
-        glm::dvec3 tau    = maxTorqueNm * m_burnTorqueDir;
+        glm::dvec3 tau    = rcsAuthorityNm * m_burnTorqueDir;
         w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
         m_burnTimer -= dt;
         return w;
