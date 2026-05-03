@@ -2696,7 +2696,20 @@ int main(int argc, char* argv[])
             {
                 const int fi = renderer.currentFrameIndex();
 
-                // CamMFD offscreen
+                // Determine which offscreen passes are actually needed this frame.
+                // Dev and ShipInspect views show no MFD panels — skip both passes.
+                auto appOnScreen = [&](MFDApp* app) -> bool {
+                    if (viewMode == ViewMode::MfdFull)   return mfdFullPanel.app  == app;
+                    if (viewMode == ViewMode::MfdFull2)  return mfdFullPanel2.app == app;
+                    if (viewMode == ViewMode::Nav)
+                        return mfdLeftPanel.app == app || mfdRightPanel.app == app;
+                    return false;
+                };
+                const bool needCamPass     = appOnScreen(&camMFD);
+                const bool needDockingPass = appOnScreen(&dockingMFD);
+
+                // CamMFD offscreen — only when the CAM panel is on screen.
+                if (needCamPass) {
                 offscreenCam.begin(renderer.currentCmd(), fi);
 
                 // Stars (drawn first — depth write disabled, stars at infinity).
@@ -2745,8 +2758,10 @@ int main(int argc, char* argv[])
                                  offVP, offIss, offSunDir, offCamPos);
                 offscreenCam.end(renderer.currentCmd());
                 camMFD.setTexture(offscreenCam.imguiTexture(fi));
+                } // needCamPass
 
-                // DockingMFD offscreen
+                // DockingMFD offscreen — only when the DOCK panel is on screen.
+                if (needDockingPass) {
                 dockingOffscreenCam.begin(renderer.currentCmd(), fi);
 
                 starField.draw(renderer.currentCmd(), dockVPRot);
@@ -2790,6 +2805,7 @@ int main(int argc, char* argv[])
                                  dockVP, offIss, offSunDir, dockCamPos);
                 dockingOffscreenCam.end(renderer.currentCmd());
                 dockingMFD.setTexture(dockingOffscreenCam.imguiTexture(fi));
+                } // needDockingPass
             }
 
             renderer.beginHDRPass();
