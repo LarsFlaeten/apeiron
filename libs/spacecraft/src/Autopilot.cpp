@@ -173,45 +173,41 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
     }
 
     // =========================================================
-    // Killrot
+    // Killrot — proportional rate damper, saturated at rcsAuthorityNm.
+    //
+    // kD = 0.5 * I_eff / dt targets 50% reduction in omega per frame in the
+    // unsaturated regime, giving monotonic geometric convergence to zero.
+    // When |omega| is large the demand saturates at rcsAuthorityNm (bang-bang).
+    // No timed burns, no oscillation from discrete-time overshoot.
     // =========================================================
     if (mode == AutopilotMode::Killrot) {
-        const double omegaMag = glm::length(omega_body);
+        m_timedBurnActive = false;
+        m_burnTimer       = 0.0;
 
-        if (m_timedBurnActive) {
-            if (m_burnTimer > 0.0) {
-                m_burnTimer -= dt;
-                glm::dvec3 tau = rcsAuthorityNm * m_burnTorqueDir;
-                w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
-                return w;
-            }
-            m_timedBurnActive = false;
-        }
+        const double omegaMag = glm::length(omega_body);
 
         if (omegaMag < settleClampThreshold) {
             if (omegaMag > deadband) settleClamp = true;
             return w;
         }
 
-        if (omegaMag > timedBurnThreshold) {
-            inLargeSlew = true;
-            glm::dvec3 tau = -(rcsAuthorityNm / omegaMag) * omega_body;
-            w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
-            return w;
-        }
+        inLargeSlew = (omegaMag > timedBurnThreshold);
 
-        // Timed burn
-        glm::dvec3 omegaDir = omega_body / omegaMag;
-        glm::dvec3 od2      = omegaDir * omegaDir;
-        double     I_eff    = od2.x * inertiaDiag.x
-                            + od2.y * inertiaDiag.y
-                            + od2.z * inertiaDiag.z;
-        m_burnTimer       = 0.75 * I_eff * omegaMag / rcsAuthorityNm;
-        m_burnTorqueDir   = -omegaDir;
-        m_timedBurnActive = true;
-        glm::dvec3 tau    = rcsAuthorityNm * m_burnTorqueDir;
+        // Effective inertia along current spin axis.
+        const glm::dvec3 omegaDir = omega_body / omegaMag;
+        const glm::dvec3 od2      = omegaDir * omegaDir;
+        const double I_eff = od2.x * inertiaDiag.x
+                           + od2.y * inertiaDiag.y
+                           + od2.z * inertiaDiag.z;
+
+        // Proportional: halve omega each frame; saturate for large rates.
+        const double kD   = 0.5 * std::max(I_eff, 1.0) / std::max(dt, 1e-4);
+        glm::dvec3   tau  = -kD * omega_body;
+        const double tMag = glm::length(tau);
+        if (tMag > rcsAuthorityNm)
+            tau *= rcsAuthorityNm / tMag;
+
         w[3] = tau.x; w[4] = tau.y; w[5] = tau.z;
-        m_burnTimer -= dt;
         return w;
     }
 
