@@ -64,14 +64,16 @@ void OBCEventQueue::tick(double currentET, double frameDtReal,
         // it.  The threshold caps below then take over from that point.
         if (dt > 0.0 && frameDtReal > 1e-6) {
             // Approach to the 5-min cap boundary (most critical at high warp).
+            // Floor at 100 so we never clamp below the threshold cap that fires next frame.
             if (dt > k5min) {
-                const double maxSpeed = (dt - k5min) / frameDtReal;
+                const double maxSpeed = std::max((dt - k5min) / frameDtReal, 100.0);
                 simSpeedTarget          = std::min(simSpeedTarget,          maxSpeed);
                 simSecondsPerRealSecond = std::min(simSecondsPerRealSecond, maxSpeed);
             }
             // Approach to the 1-min cap boundary (relevant from ×100).
+            // Floor at 10 so we never clamp below the threshold cap that fires next frame.
             if (dt > k1min) {
-                const double maxSpeed = (dt - k1min) / frameDtReal;
+                const double maxSpeed = std::max((dt - k1min) / frameDtReal, 10.0);
                 simSpeedTarget          = std::min(simSpeedTarget,          maxSpeed);
                 simSecondsPerRealSecond = std::min(simSecondsPerRealSecond, maxSpeed);
             }
