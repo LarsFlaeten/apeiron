@@ -17,6 +17,22 @@ static const astro::ReferenceFrame kEclipJ2000 =
 static constexpr double kDay = 86400.0;
 
 // ---------------------------------------------------------------------------
+// Planet table for the body-select page.
+// ---------------------------------------------------------------------------
+struct PlanetEntry { int naifId; const char* name; };
+static const PlanetEntry kPlanets[] = {
+    { 199, "MERCURY" },
+    { 299, "VENUS"   },
+    { 399, "EARTH"   },
+    { 499, "MARS"    },
+    { 599, "JUPITER" },
+    { 699, "SATURN"  },
+    { 799, "URANUS"  },
+    { 899, "NEPTUNE" },
+};
+static constexpr int kNPlanets = static_cast<int>(std::size(kPlanets));
+
+// ---------------------------------------------------------------------------
 // Format a signed time delta (seconds) as "T+1d", "T-3d", or "T+HH:MM" when
 // inside the final 24 hours.
 static void fmtTplus(double deltaSec, char* buf, int sz)
@@ -56,6 +72,109 @@ ImU32 TransferMFD::dvColor(float t)
 }
 
 // ---------------------------------------------------------------------------
+int TransferMFD::findPlanetIdx(int naifId)
+{
+    for (int i = 0; i < kNPlanets; ++i)
+        if (kPlanets[i].naifId == naifId) return i;
+    return -1;
+}
+
+void TransferMFD::queryDepBodyConstants()
+{
+    const int depId    = m_params.departureBody;
+    const int planetId = (depId < 10) ? depId * 100 + 99 : depId;
+
+    m_depBodyRadius = 6378.0;
+    try {
+        astro::Vec3 radii;
+        astro::Spice().getPlanetaryConstants(planetId, "RADII", radii);
+        m_depBodyRadius = radii.x;
+    } catch (...) {
+        try {
+            astro::Vec3 radii;
+            astro::Spice().getPlanetaryConstants(depId, "RADII", radii);
+            m_depBodyRadius = radii.x;
+        } catch (...) {}
+    }
+
+    m_muDep = 398600.4418;
+    try { astro::Spice().getPlanetaryConstants(planetId, "GM", m_muDep); }
+    catch (...) {
+        try { astro::Spice().getPlanetaryConstants(depId, "GM", m_muDep); }
+        catch (...) {}
+    }
+
+    // SOI = r_body * (mu_dep / mu_central)^0.4
+    m_depSOI = 929000.0;
+    try {
+        double muCentral = m_params.muCentral;
+        if (muCentral <= 0.0)
+            astro::Spice().getPlanetaryConstants(m_params.centralBody, "GM", muCentral);
+        if (muCentral > 0.0 && m_muDep > 0.0) {
+            astro::PosState depState;
+            astro::Spice().getRelativeGeometricState(
+                depId, m_params.centralBody,
+                astro::EphemerisTime(m_currentET), depState, kEclipJ2000);
+            double rDep = glm::length(glm::dvec3(depState.r.x, depState.r.y, depState.r.z));
+            if (rDep > 1e6)
+                m_depSOI = rDep * std::pow(m_muDep / muCentral, 0.4);
+        }
+    } catch (...) {}
+}
+
+void TransferMFD::updateDefaultTof()
+{
+    // Approximate Hohmann transfer TOF: half the period of the transfer ellipse.
+    // Use current heliocentric positions as proxies for SMA.
+    try {
+        double muCentral = m_params.muCentral;
+        if (muCentral <= 0.0)
+            astro::Spice().getPlanetaryConstants(m_params.centralBody, "GM", muCentral);
+        if (muCentral <= 0.0) return;
+
+        astro::PosState depState, arrState;
+        const astro::EphemerisTime et(m_currentET > 0.0 ? m_currentET : 0.0);
+        astro::Spice().getRelativeGeometricState(
+            m_params.departureBody, m_params.centralBody, et, depState, kEclipJ2000);
+        astro::Spice().getRelativeGeometricState(
+            m_params.arrivalBody, m_params.centralBody, et, arrState, kEclipJ2000);
+
+        double rDep = glm::length(glm::dvec3(depState.r.x, depState.r.y, depState.r.z));
+        double rArr = glm::length(glm::dvec3(arrState.r.x, arrState.r.y, arrState.r.z));
+        double aXfer = (rDep + rArr) * 0.5;
+        double tHohmann = M_PI * std::sqrt(aXfer * aXfer * aXfer / muCentral);  // seconds
+
+        // Window: 0.5× to 2× Hohmann time, minimum 30 days.
+        m_params.tofMin = std::max(tHohmann * 0.5, 30.0 * kDay);
+        m_params.tofMax = std::max(tHohmann * 2.0, m_params.tofMin + 60.0 * kDay);
+    } catch (...) {}
+}
+
+void TransferMFD::selectDeparture(int idx)
+{
+    if (idx < 0 || idx >= kNPlanets) return;
+    m_depPlanetIdx         = idx;
+    m_params.departureBody = kPlanets[idx].naifId;
+    m_params.muCentral     = 0.0;
+    m_depBodyName          = kPlanets[idx].name;
+    queryDepBodyConstants();
+    updateDefaultTof();
+    m_hasData = false;
+    m_detail  = {};
+}
+
+void TransferMFD::selectArrival(int idx)
+{
+    if (idx < 0 || idx >= kNPlanets) return;
+    m_arrPlanetIdx        = idx;
+    m_params.arrivalBody  = kPlanets[idx].naifId;
+    m_arrBodyName         = kPlanets[idx].name;
+    updateDefaultTof();
+    m_hasData = false;
+    m_detail  = {};
+}
+
+// ---------------------------------------------------------------------------
 TransferPlanSnapshot TransferMFD::getPlan() const
 {
     TransferPlanSnapshot snap;
@@ -72,7 +191,14 @@ void TransferMFD::restorePlan(const TransferPlanSnapshot& snap)
     if (!snap.valid) return;
     m_params  = snap.params;
     m_parkIdx = snap.parkIdx;
-    // compute() resets m_selDep/m_selTof to -1 — save them first.
+
+    // Restore planet indices from NAIF IDs.
+    int di = findPlanetIdx(m_params.departureBody);
+    int ai = findPlanetIdx(m_params.arrivalBody);
+    if (di >= 0) { m_depPlanetIdx = di; m_depBodyName = kPlanets[di].name; }
+    if (ai >= 0) { m_arrPlanetIdx = ai; m_arrBodyName = kPlanets[ai].name; }
+    queryDepBodyConstants();
+
     const int selDep = snap.selDep;
     const int selTof = snap.selTof;
     compute();
@@ -85,21 +211,21 @@ void TransferMFD::restorePlan(const TransferPlanSnapshot& snap)
 // ---------------------------------------------------------------------------
 void TransferMFD::setEpoch(const astro::EphemerisTime& et)
 {
-    const double now = et.getETValue();
+    m_currentET = et.getETValue();
 
-    // Earth (399) → Mars barycenter (4), heliocentric (Sun = 10).
-    m_params.departureBody = 399;
-    m_params.arrivalBody   = 4;
-    m_params.centralBody   = 10;
-    m_params.muCentral     = 0.0;   // queried from SPICE on compute
+    m_params.departureBody = kPlanets[m_depPlanetIdx].naifId;  // 399 (Earth)
+    m_params.arrivalBody   = kPlanets[m_arrPlanetIdx].naifId;  // 499 (Mars)
+    m_params.centralBody   = 10;   // Sun
+    m_params.muCentral     = 0.0;
 
-    // Default window: departure over 2 years starting now.
-    m_params.t0     = now;
-    m_params.t1     = now + 2.0 * 365.25 * kDay;
+    m_depBodyName = kPlanets[m_depPlanetIdx].name;
+    m_arrBodyName = kPlanets[m_arrPlanetIdx].name;
+    queryDepBodyConstants();
 
-    // TOF range: 100–400 days.
-    m_params.tofMin = 100.0 * kDay;
-    m_params.tofMax = 400.0 * kDay;
+    m_params.t0 = m_currentET;
+    m_params.t1 = m_currentET + 2.0 * 365.25 * kDay;
+
+    updateDefaultTof();
 
     m_params.nDep = 80;
     m_params.nTof = 60;
@@ -135,6 +261,16 @@ void TransferMFD::compute()
 // ---------------------------------------------------------------------------
 const char* TransferMFD::leftLabel(int slot) const
 {
+    if (m_page == 4) {
+        switch (slot) {
+        case 0: return "DEP<";
+        case 1: return "DEP>";
+        case 2: return "ARR<";
+        case 3: return "ARR>";
+        case 4: return "OK";
+        default: return "";
+        }
+    }
     if (m_page == 3) {
         if (slot == 4) return "BACK";
         if (slot == 3) return "PE";
@@ -162,6 +298,7 @@ const char* TransferMFD::leftLabel(int slot) const
 
 const char* TransferMFD::rightLabel(int slot) const
 {
+    if (m_page == 4) return "";
     if (m_page == 3) return "";
     if (m_page == 2) {
         if (slot == 4) return "CST";
@@ -172,10 +309,10 @@ const char* TransferMFD::rightLabel(int slot) const
         return "";
     }
     switch (slot) {
-    case 0: return "WIN<";
-    case 1: return "WIN>";
-    case 2: return "RNG<";
-    case 3: return "RNG>";
+    case 0: return "BDY";
+    case 1: return "WIN<";
+    case 2: return "WIN>";
+    case 3: return "RNG<";
     case 4: return (m_selDep >= 0 && m_selTof >= 0 && m_hasData) ? "INFO" : "";
     default: return "";
     }
@@ -183,6 +320,18 @@ const char* TransferMFD::rightLabel(int slot) const
 
 void TransferMFD::onLeft(int slot)
 {
+    if (m_page == 4) {
+        const int nP = kNPlanets;
+        switch (slot) {
+        case 0: selectDeparture((m_depPlanetIdx + nP - 1) % nP); break;
+        case 1: selectDeparture((m_depPlanetIdx + 1)      % nP); break;
+        case 2: selectArrival  ((m_arrPlanetIdx + nP - 1) % nP); break;
+        case 3: selectArrival  ((m_arrPlanetIdx + 1)      % nP); break;
+        case 4: m_page = 0; break;
+        default: break;
+        }
+        return;
+    }
     if (m_page == 3) {
         if (slot == 4) m_page = 2;
         if (slot == 3) m_peAltIdx = (m_peAltIdx + 1)
@@ -232,6 +381,7 @@ void TransferMFD::onLeft(int slot)
 
 void TransferMFD::onRight(int slot)
 {
+    if (m_page == 4) return;
     if (m_page == 3) return;
     if (m_page == 2) {
         if (slot == 4) m_page = 3;
@@ -241,33 +391,26 @@ void TransferMFD::onRight(int slot)
         if (slot == 4) m_page = 2;
         return;
     }
+    if (slot == 0) { m_page = 4; return; }  // BDY
+
     const double depMid = (m_params.t0 + m_params.t1) * 0.5;
     const double tofMid = (m_params.tofMin + m_params.tofMax) * 0.5;
     double depHalf = (m_params.t1 - m_params.t0) * 0.5;
     double tofHalf = (m_params.tofMax - m_params.tofMin) * 0.5;
 
     switch (slot) {
-    case 0:
+    case 1:
         depHalf = std::max(depHalf * 0.5, 30.0 * kDay);
         m_params.t0 = depMid - depHalf;
         m_params.t1 = depMid + depHalf;
         break;
-    case 1:
+    case 2:
         depHalf *= 2.0;
         m_params.t0 = depMid - depHalf;
         m_params.t1 = depMid + depHalf;
         break;
-    case 2:
-        tofHalf = std::max(tofHalf * 0.5, 15.0 * kDay);
-        m_params.tofMin = tofMid - tofHalf;
-        m_params.tofMax = tofMid + tofHalf;
-        if (m_params.tofMin < kDay) {
-            m_params.tofMax -= m_params.tofMin - kDay;
-            m_params.tofMin  = kDay;
-        }
-        break;
     case 3:
-        tofHalf *= 2.0;
+        tofHalf = std::max(tofHalf * 0.5, 15.0 * kDay);
         m_params.tofMin = tofMid - tofHalf;
         m_params.tofMax = tofMid + tofHalf;
         if (m_params.tofMin < kDay) {
@@ -280,16 +423,10 @@ void TransferMFD::onRight(int slot)
             resolveSelected();
             if (m_detail.valid) {
                 m_page = 1;
-                // Post mission milestones to the OBC event queue.
-                // TMI is only posted when departure time is still in the future
-                // (avoids re-scheduling a done burn when re-confirming a plan
-                // loaded from a pre-queue save).
                 if (m_eventQueue) {
                     if (m_detail.depET > m_currentET)
                         m_eventQueue->schedule("TMI",   m_detail.depET);
-                    // TCM-1: early trajectory correction at T+7 days.
                     m_eventQueue->schedule("TCM-1", m_detail.depET + 7.0 * kDay);
-                    // MCC-1: mid-course Lambert correction at 50% TOF.
                     m_eventQueue->schedule("MCC-1", m_detail.depET + m_detail.tofSec * 0.5);
                     m_eventQueue->schedule("MOI",   m_detail.arrET);
                 }
@@ -347,10 +484,114 @@ void TransferMFD::resolveSelected()
 // ---------------------------------------------------------------------------
 void TransferMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 {
-    if (m_page == 3) { renderCoasting (dl, origin, size); return; }
-    if (m_page == 2) { renderDeparture(dl, origin, size); return; }
-    if (m_page == 1) { renderDetail   (dl, origin, size); return; }
+    if (m_page == 4) { renderBodySelect(dl, origin, size); return; }
+    if (m_page == 3) { renderCoasting  (dl, origin, size); return; }
+    if (m_page == 2) { renderDeparture (dl, origin, size); return; }
+    if (m_page == 1) { renderDetail    (dl, origin, size); return; }
     renderPorkchop(dl, origin, size);
+}
+
+// ---------------------------------------------------------------------------
+// Page 4: body selection.
+// Shows heliocentric orbits of all planets; highlights DEP (blue) and ARR (red).
+// Buttons cycle through planets independently for each role.
+// ---------------------------------------------------------------------------
+void TransferMFD::renderBodySelect(ImDrawList* dl, ImVec2 origin, ImVec2 size)
+{
+    const ImU32 kGreen  = IM_COL32(  0, 210,  75, 210);
+    const ImU32 kDim    = IM_COL32(  0, 140,  50, 140);
+    const ImU32 kDepCol = IM_COL32( 60, 140, 255, 255);   // blue  — departure
+    const ImU32 kArrCol = IM_COL32(220,  80,  50, 255);   // red   — arrival
+    const ImU32 kOrbit  = IM_COL32(80,  80,  80, 160);    // dim   — other planets
+
+    double muSun = 0.0;
+    try { astro::Spice().getPlanetaryConstants(m_params.centralBody, "GM", muSun); }
+    catch (...) {}
+    if (muSun <= 0.0) muSun = 1.32712440018e11;
+
+    // ---- Orbit diagram: all planets ----
+    OrbitDiagram diag;
+
+    for (int i = 0; i < kNPlanets; ++i) {
+        try {
+            astro::PosState ps;
+            astro::Spice().getRelativeGeometricState(
+                kPlanets[i].naifId, m_params.centralBody,
+                astro::EphemerisTime(m_currentET), ps, kEclipJ2000);
+            glm::dvec3 r(ps.r.x, ps.r.y, ps.r.z);
+            glm::dvec3 v(ps.v.x, ps.v.y, ps.v.z);
+
+            ImU32 col;
+            bool isDepIdx = (i == m_depPlanetIdx);
+            bool isArrIdx = (i == m_arrPlanetIdx);
+            if (isDepIdx && isArrIdx)
+                col = IM_COL32(180, 100, 200, 220);   // same body: purple
+            else if (isDepIdx)
+                col = IM_COL32( 60, 140, 255, 180);
+            else if (isArrIdx)
+                col = IM_COL32(220,  80,  50, 180);
+            else
+                col = kOrbit;
+
+            diag.addOrbit(r, v, muSun, col, "", false, false);
+
+            // Planet marker
+            ImU32 mCol = isDepIdx ? kDepCol : (isArrIdx ? kArrCol : IM_COL32(120,120,120,200));
+            // Use first 3 chars of name as label
+            char label[4];
+            std::snprintf(label, sizeof(label), "%.3s", kPlanets[i].name);
+            diag.addMarker(r, mCol, label);
+        } catch (...) {}
+    }
+
+    OrbitDiagram::CentralBody sun;
+    sun.rimColour  = IM_COL32(255, 210, 60, 200);
+    sun.axisColour = IM_COL32(255, 210, 60, 80);
+    sun.drawAxes   = false;
+    diag.setCentralBody(sun);
+
+    diag.render(dl, origin, size, &m_bodySelViewRot);
+
+    // ---- Text overlay ----
+    const float pad   = 4.0f;
+    const float lineH = 11.0f;
+    const float bx    = origin.x + pad;
+    float        by   = origin.y + pad;
+
+    auto txt = [&](ImU32 col, const char* fmt, ...) {
+        char buf[80];
+        va_list ap; va_start(ap, fmt);
+        std::vsnprintf(buf, sizeof(buf), fmt, ap);
+        va_end(ap);
+        ImVec2 tsz = ImGui::CalcTextSize(buf);
+        dl->AddRectFilled({bx - 1, by - 1},
+                          {bx + tsz.x + 2, by + tsz.y + 1},
+                          IM_COL32(0, 0, 0, 160), 2.0f);
+        dl->AddText({bx, by}, col, buf);
+        by += lineH;
+    };
+
+    txt(kGreen, "BODY SELECT  [OK to confirm]");
+    by += pad;
+    txt(kDepCol, "DEP: %s  [DEP< DEP>]", m_depBodyName.c_str());
+    txt(kArrCol, "ARR: %s  [ARR< ARR>]", m_arrBodyName.c_str());
+    by += pad;
+
+    // Show Hohmann transfer time estimate
+    try {
+        astro::PosState depS, arrS;
+        astro::Spice().getRelativeGeometricState(
+            m_params.departureBody, m_params.centralBody,
+            astro::EphemerisTime(m_currentET), depS, kEclipJ2000);
+        astro::Spice().getRelativeGeometricState(
+            m_params.arrivalBody, m_params.centralBody,
+            astro::EphemerisTime(m_currentET), arrS, kEclipJ2000);
+        double rDep = glm::length(glm::dvec3(depS.r.x, depS.r.y, depS.r.z));
+        double rArr = glm::length(glm::dvec3(arrS.r.x, arrS.r.y, arrS.r.z));
+        double aXfer = (rDep + rArr) * 0.5;
+        double tHoh = M_PI * std::sqrt(aXfer * aXfer * aXfer / muSun) / kDay;
+        txt(kDim, "Hohmann TOF ~%.0f days", tHoh);
+    } catch (...) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -386,7 +627,10 @@ void TransferMFD::renderPorkchop(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
     // ---- No data yet ----
     if (!m_hasData) {
-        const char* msg1 = "XFER: Earth -> Mars";
+        char msg1buf[64];
+        std::snprintf(msg1buf, sizeof(msg1buf), "XFER: %s -> %s",
+                      m_depBodyName.c_str(), m_arrBodyName.c_str());
+        const char* msg1 = msg1buf;
         const char* msg2 = m_error.empty() ? "Press COMP to compute" : m_error.c_str();
         ImU32       col2 = m_error.empty() ? kDim : IM_COL32(255, 80, 80, 220);
         ImVec2 s1 = ImGui::CalcTextSize(msg1);
@@ -668,15 +912,11 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     glm::dvec3 vInf    = m_detail.vDep - m_detail.vDepBody;
     double     vInfMag = glm::length(vInf);
 
-    // Earth GM for TMI burn.
-    double muEarth = 0.0;
-    try { astro::Spice().getPlanetaryConstants(399, "GM", muEarth); }
-    catch (...) { muEarth = 398600.4418; }
-
-    const double rPark   = kParkAlts[m_parkIdx];
-    const double altKm   = rPark - 6378.0;
-    const double vCirc   = std::sqrt(muEarth / rPark);         // circular speed
-    const double vPeri   = std::sqrt(m_detail.c3 + 2.0 * muEarth / rPark);  // hyperbolic periapsis speed
+    const double muDep   = m_muDep;
+    const double rPark   = m_depBodyRadius + kParkAlts[m_parkIdx];
+    const double altKm   = kParkAlts[m_parkIdx];
+    const double vCirc   = std::sqrt(muDep / rPark);
+    const double vPeri   = std::sqrt(m_detail.c3 + 2.0 * muDep / rPark);
     const double dvTMI   = vPeri - vCirc;                      // TMI burn ΔV
 
     // Inclination of v∞ above ecliptic = angle between v∞ and ecliptic plane.
@@ -771,12 +1011,12 @@ void TransferMFD::renderDetail(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
     OrbitDiagram diag;
     diag.addOrbit(m_detail.depPos, m_detail.vDepBody, mu,
-                  IM_COL32(60, 140, 255, 90), "", true, false);   // Earth orbit
+                  IM_COL32(60, 140, 255, 90), "", true, false);
     diag.addOrbit(m_detail.arrPos, m_detail.vArrBody, mu,
-                  IM_COL32(200, 80, 50, 90),  "", true, false);   // Mars orbit
+                  IM_COL32(200, 80, 50, 90),  "", true, false);
     diag.addArc(transferArc);
-    diag.addMarker(m_detail.depPos, IM_COL32( 60,140,255,255), "E");
-    diag.addMarker(m_detail.arrPos, IM_COL32(200, 80, 50,255), "M");
+    diag.addMarker(m_detail.depPos, IM_COL32( 60,140,255,255), m_depBodyName.substr(0,1).c_str());
+    diag.addMarker(m_detail.arrPos, IM_COL32(200, 80, 50,255), m_arrBodyName.substr(0,1).c_str());
     if (vInfMag > 1e-6)
         diag.addArrow(m_detail.depPos, vInf / vInfMag, 14.0f, kOrange);
 
@@ -824,8 +1064,8 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // -----------------------------------------------------------------------
     // Orbital geometry — current parking orbit
     // -----------------------------------------------------------------------
-    const double mu   = m_muEarth;
-    const double kRE  = 6378.0;
+    const double mu   = m_muDep;
+    const double kRE  = m_depBodyRadius;
 
     glm::dvec3 h    = glm::cross(m_shipR, m_shipV);
     double     hMag = glm::length(h);
@@ -953,7 +1193,7 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // The previous formula (atan2(-vp,vq) = φ_target−90°) aligned the VELOCITY
     // with V∞ instead of the asymptote — correct only for infinite C3, off by
     // ~60° for C3 ≈ 9 km²/s².
-    const double rPark = kParkAlts[m_parkIdx];
+    const double rPark = m_depBodyRadius + kParkAlts[m_parkIdx];
     const double e_hyp  = 1.0 + static_cast<double>(m_detail.c3) * rPark / mu;
     const double nu_inf = std::acos(-1.0 / e_hyp);   // asymptote true anomaly [rad]
 
@@ -1075,13 +1315,12 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         if (vInfProjMag > 1e-9)
             diag.addArrow({0.0, 0.0, 0.0}, vInfHat, 22.0f, kOrange);
 
-        // Earth
-        OrbitDiagram::CentralBody earth;
-        earth.radiusKm   = kRE;
-        earth.rimColour  = IM_COL32(60, 140, 255, 200);
-        earth.axisColour = IM_COL32(60, 140, 255, 100);
-        earth.drawAxes   = false;
-        diag.setCentralBody(earth);
+        OrbitDiagram::CentralBody depBody;
+        depBody.radiusKm   = kRE;
+        depBody.rimColour  = IM_COL32(60, 140, 255, 200);
+        depBody.axisColour = IM_COL32(60, 140, 255, 100);
+        depBody.drawAxes   = false;
+        diag.setCentralBody(depBody);
 
         diag.render(dl, origin, size, &m_depViewRot);
     }
@@ -1145,9 +1384,8 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     double vLEO   = std::sqrt(mu / rShip);
     double dvPCdirect = 2.0 * vLEO * sinHalfDi;
 
-    // Orion thrust/mass
-    const double thrustN  = 25700.0;
-    const double massKg   = 26500.0;
+    const double thrustN  = m_mainThrustN;
+    const double massKg   = m_shipMass;
     const double accel    = thrustN / massKg;   // m/s²
 
     // Bi-elliptic candidates: GEO, HEO, Lunar distance
@@ -1206,7 +1444,7 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
     // Burn + TMI
     add(kCyan,   "BURN  TA %.1f  Alt %.0f km", burnTADeg, altBurn);
-    add(kDim,    "TMI  alt %.0f km  [ALT]", rPark - kRE);
+    add(kDim,    "TMI  alt %.0f km  [ALT]", kParkAlts[m_parkIdx]);
     add(kYellow, " dV-TMI %.3f km/s  (Vp %.3f  Vc %.3f)", dvTMI, vPeri, vCirc);
     {
         char bufBurn[12], bufStart[12], bufToBurn[12];
@@ -1391,15 +1629,14 @@ void TransferMFD::tickMcc()
     // velocity dominates and the heliocentric velocity vector looks nothing
     // like the asymptotic departure velocity — the Lambert result would be
     // completely wrong (17+ km/s artifacts).  Suppress until clear of SOI.
-    constexpr double kEarthSOI = 929000.0;  // km — Earth SOI radius
-    if (glm::length(m_shipR) < kEarthSOI) return;
+    if (glm::length(m_shipR) < m_depSOI) return;
 
     const double tofRemaining = m_detail.arrET - m_currentET;
     if (tofRemaining <= kDay) return;
 
     double muSun = m_params.muCentral;
     if (muSun <= 0.0) {
-        try { astro::Spice().getPlanetaryConstants(10, "GM", muSun); }
+        try { astro::Spice().getPlanetaryConstants(m_params.centralBody, "GM", muSun); }
         catch (...) {}
     }
     if (muSun <= 0.0) muSun = 1.32712440018e11;
@@ -1430,7 +1667,7 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // -----------------------------------------------------------------------
     double muSun = m_params.muCentral;
     if (muSun <= 0.0) {
-        try { astro::Spice().getPlanetaryConstants(10, "GM", muSun); }
+        try { astro::Spice().getPlanetaryConstants(m_params.centralBody, "GM", muSun); }
         catch (...) {}
     }
     if (muSun <= 0.0) muSun = 1.32712440018e11;  // fallback km³/s²
@@ -1443,14 +1680,15 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     const glm::dvec3 shipV = m_shipHelioV;
 
     // -----------------------------------------------------------------------
-    // Current positions of Earth and Mars from SPICE
+    // Current positions of departure and arrival bodies from SPICE
     // -----------------------------------------------------------------------
-    astro::PosState earthNow, marsNow;
+    const astro::EphemerisTime etNow(m_currentET);
+    astro::PosState depNow, arrNow;
     try {
-        astro::Spice().getRelativeGeometricState(399, 10,
-            astro::EphemerisTime(m_currentET), earthNow, kEclipJ2000);
-        astro::Spice().getRelativeGeometricState(4, 10,
-            astro::EphemerisTime(m_currentET), marsNow, kEclipJ2000);
+        astro::Spice().getRelativeGeometricState(
+            m_params.departureBody, m_params.centralBody, etNow, depNow, kEclipJ2000);
+        astro::Spice().getRelativeGeometricState(
+            m_params.arrivalBody,   m_params.centralBody, etNow, arrNow, kEclipJ2000);
     } catch (...) {
         dl->AddText({ origin.x + 4.0f, origin.y + 4.0f }, kDim,
                     "SPICE query failed");
@@ -1515,10 +1753,7 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     double dvMCC    = 0.0;
     OrbitDiagram::Arc mccArc;
 
-    // Suppress MCC inside Earth's SOI: near periapsis the geocentric velocity
-    // dominates and the heliocentric state is not representative of the departure.
-    constexpr double kEarthSOI_render = 929000.0;  // km
-    const bool insideEarthSOI = (glm::length(m_shipR) < kEarthSOI_render);
+    const bool insideEarthSOI = (glm::length(m_shipR) < m_depSOI);
 
     if (!insideEarthSOI && tofRemaining > kDay) {   // at least 1 day remaining
         mccValid = spacecraft::solveLambert(muSun, shipR, m_detail.arrPos,
@@ -1546,20 +1781,18 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     int elapsedDays  = static_cast<int>(elapsed  / kDay);
     int remainDays   = static_cast<int>(tofRemaining / kDay);
 
-    double helioSpeed   = glm::length(shipV);              // km/s
-    double distToMars   = glm::length(marsNow.r - shipR);  // km
-    double distToEarth  = glm::length(earthNow.r - shipR); // km
+    double helioSpeed  = glm::length(shipV);
+    double distToArr   = glm::length(arrNow.r - shipR);  // km to arrival body
+    double distToDep   = glm::length(depNow.r - shipR);  // km to departure body
 
     // -----------------------------------------------------------------------
     // Orbit diagram (heliocentric, Sun at centre)
     // -----------------------------------------------------------------------
     OrbitDiagram diag;
 
-    // Earth orbit (grey-blue, drawn from Earth's current position)
-    diag.addOrbit(earthNow.r, earthNow.v, muSun,
+    diag.addOrbit(depNow.r, depNow.v, muSun,
                   IM_COL32(60, 140, 255, 80), "", false, false);
-    // Mars orbit (reddish)
-    diag.addOrbit(marsNow.r, marsNow.v, muSun,
+    diag.addOrbit(arrNow.r, arrNow.v, muSun,
                   IM_COL32(200, 80, 50, 80), "", false, false);
 
     // Planned Lambert arc
@@ -1573,10 +1806,9 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     diag.addMarker(m_detail.depPos, IM_COL32(60, 140, 255, 150), "D");
     diag.addMarker(m_detail.arrPos, IM_COL32(200, 80, 50, 150), "A");
 
-    // Current positions
-    diag.addMarker(earthNow.r, IM_COL32(60, 140, 255, 255), "E");
-    diag.addMarker(marsNow.r,  IM_COL32(200, 80, 50, 255), "M");
-    diag.addMarker(shipR,      kGreen, "S");
+    diag.addMarker(depNow.r, IM_COL32(60, 140, 255, 255), m_depBodyName.substr(0,1).c_str());
+    diag.addMarker(arrNow.r, IM_COL32(200, 80, 50, 255),  m_arrBodyName.substr(0,1).c_str());
+    diag.addMarker(shipR,    kGreen, "S");
 
     // Sun
     OrbitDiagram::CentralBody sun;
@@ -1723,8 +1955,9 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         double rSun = glm::length(shipR);    // km from Sun
         addLine(kCyan,  "HELIO  v %.3f km/s  r %.3f AU",
                         helioSpeed, rSun / kAU);
-        addLine(kDim,   " dE %.1f Mkm  dM %.1f Mkm",
-                        distToEarth / 1.0e6, distToMars / 1.0e6);
+        addLine(kDim,   " d%s %.1f Mkm  d%s %.1f Mkm",
+                        m_depBodyName.substr(0,1).c_str(), distToDep / 1.0e6,
+                        m_arrBodyName.substr(0,1).c_str(), distToArr / 1.0e6);
     }
     sep();
 
@@ -1880,7 +2113,7 @@ void TransferMFD::update(const MFDContext& ctx)
 {
     m_eventQueue = ctx.eventQueue;
 
-    updateShipState(ctx.shipGeoR, ctx.shipGeoV, m_muEarth, ctx.currentEt.getETValue());
+    updateShipState(ctx.shipGeoR, ctx.shipGeoV, ctx.currentEt.getETValue());
     updateBurnParams(ctx.mainThrustN, ctx.shipMassKg);
     updateHelioState(ctx.shipHelioR, ctx.shipHelioV);
 
