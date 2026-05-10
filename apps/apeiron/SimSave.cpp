@@ -122,12 +122,14 @@ bool saveSimState(const std::string& path, const SimSaveData& data)
             toml::array evArr;
             for (const auto& e : data.events) {
                 toml::table t;
-                t.insert("name",     e.name);
-                t.insert("event_et", e.eventET);
-                t.insert("ann10",    e.ann10min);
-                t.insert("ann5",     e.ann5min);
-                t.insert("ann1",     e.ann1min);
-                t.insert("ann0",     e.ann0);
+                t.insert("name",         e.name);
+                t.insert("event_et",     e.eventET);
+                t.insert("ann10",        e.ann10min);
+                t.insert("ann5",         e.ann5min);
+                t.insert("ann1",         e.ann1min);
+                t.insert("ann10s",       e.ann10s);
+                t.insert("ann0",         e.ann0);
+                t.insert("countdown10s", e.countdown10s);
                 evArr.push_back(std::move(t));
             }
             root.insert("events", std::move(evArr));
@@ -187,10 +189,12 @@ bool loadSimState(const std::string& path, SimSaveData& data)
                     SimSaveData::SavedEvent e;
                     e.name    = (*t)["name"]     .value_or(std::string{});
                     e.eventET = (*t)["event_et"] .value_or(0.0);
-                    e.ann10min = (*t)["ann10"]   .value_or(false);
-                    e.ann5min  = (*t)["ann5"]    .value_or(false);
-                    e.ann1min  = (*t)["ann1"]    .value_or(false);
-                    e.ann0     = (*t)["ann0"]    .value_or(false);
+                    e.ann10min     = (*t)["ann10"]        .value_or(false);
+                    e.ann5min      = (*t)["ann5"]         .value_or(false);
+                    e.ann1min      = (*t)["ann1"]         .value_or(false);
+                    e.ann10s       = (*t)["ann10s"]       .value_or(false);
+                    e.ann0         = (*t)["ann0"]         .value_or(false);
+                    e.countdown10s = (*t)["countdown10s"] .value_or(false);
                     data.events.push_back(e);
                 }
             }

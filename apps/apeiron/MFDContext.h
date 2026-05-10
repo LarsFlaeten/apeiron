@@ -2,6 +2,8 @@
 
 #include "OBCEventQueue.h"
 
+namespace spacecraft { class Autopilot; }
+
 #include <astro/State.h>
 #include <astro/Time.h>
 
@@ -57,8 +59,8 @@ struct MFDContext {
     double shipMassKg  = 1.0; // total spacecraft mass (kg)
 
     // ---- Event queue (non-owning) -------------------------------------------
-    // Non-null during normal frame ticks; MFDs may call
-    //   ctx.eventQueue->schedule("TMI", depET)
-    // to post named mission events.
     OBCEventQueue* eventQueue = nullptr;
+
+    // ---- Autopilot (non-owning) — for burn arm/disarm from MFDs -------------
+    spacecraft::Autopilot* autopilot = nullptr;
 };

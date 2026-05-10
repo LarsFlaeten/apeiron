@@ -1,5 +1,8 @@
 #include "TransferMFD.h"
 #include "OrbitDiagram.h"
+#include "BurnController.h"
+
+#include "apeiron/spacecraft/Autopilot.h"
 
 #include <astro/SpiceCore.h>
 #include <astro/ReferenceFrame.h>
@@ -175,6 +178,73 @@ void TransferMFD::selectArrival(int idx)
 }
 
 // ---------------------------------------------------------------------------
+// computeIgnitionET — next burn-TA passage time for the current plan / orbit.
+//
+// Mirrors the Kepler time-to-burn calculation in renderDeparture so the ARM
+// action and the display always agree.  Returns 0.0 on failure.
+// ---------------------------------------------------------------------------
+double TransferMFD::computeIgnitionET() const
+{
+    if (!m_detail.valid) return 0.0;
+
+    const double mu    = m_muDep;
+    const double rPark = m_depBodyRadius + kParkAlts[m_parkIdx];
+
+    glm::dvec3 h    = glm::cross(m_shipR, m_shipV);
+    double     hMag = glm::length(h);
+    if (hMag < 1e-6) return 0.0;
+
+    glm::dvec3 hHat    = h / hMag;
+    double     p_orb   = hMag * hMag / mu;
+    glm::dvec3 ev      = glm::cross(m_shipV, h) / mu - glm::normalize(m_shipR);
+    double     ecc     = glm::length(ev);
+    if (ecc >= 1.0) return 0.0;  // not in a closed parking orbit
+    glm::dvec3 periDir = (ecc > 1e-6) ? glm::normalize(ev) : glm::normalize(m_shipR);
+    glm::dvec3 qDir    = glm::cross(hHat, periDir);
+    double     sma     = p_orb / (1.0 - ecc * ecc);
+    if (sma <= 0.0) return 0.0;
+
+    // V∞ and burn TA
+    glm::dvec3 vInf    = m_detail.vDep - m_detail.vDepBody;
+    double     vInfMag = glm::length(vInf);
+    if (vInfMag < 1e-6) return 0.0;
+
+    const double e_hyp  = 1.0 + static_cast<double>(m_detail.c3) * rPark / mu;
+    const double nu_inf = std::acos(-1.0 / e_hyp);
+    glm::dvec3 vInfProj = vInf - glm::dot(vInf, hHat) * hHat;
+    if (glm::length(vInfProj) < 1e-9) return 0.0;
+
+    double phi_target = std::atan2(glm::dot(vInfProj, qDir),
+                                   glm::dot(vInfProj, periDir));
+    double burnTA = phi_target - nu_inf;
+    while (burnTA >  M_PI) burnTA -= 2.0 * M_PI;
+    while (burnTA < -M_PI) burnTA += 2.0 * M_PI;
+
+    // Current TA
+    glm::dvec3 rHat  = glm::normalize(m_shipR);
+    double ta_now = std::atan2(glm::dot(rHat, qDir), glm::dot(rHat, periDir));
+
+    // Kepler: time from ta_now to burnTA
+    auto meanAnom = [&](double ta) -> double {
+        double tanH = std::tan(ta * 0.5) * std::sqrt((1.0 - ecc) / (1.0 + ecc));
+        double E    = 2.0 * std::atan(tanH);
+        return E - ecc * std::sin(E);
+    };
+    double orbPeriod = 2.0 * M_PI * std::sqrt(sma * sma * sma / mu);
+    double dM = meanAnom(burnTA) - meanAnom(ta_now);
+    if (dM <= 0.0) dM += 2.0 * M_PI;
+    double timeToBurnPoint = dM / (2.0 * M_PI) * orbPeriod;
+
+    // Burn duration (centred on burn TA — ignition = midpoint - half duration)
+    const double accelMs2    = (m_shipMass > 1.0) ? m_mainThrustN / m_shipMass : 0.97;
+    const double vCirc       = std::sqrt(mu / rPark);
+    const double vPeri       = std::sqrt(static_cast<double>(m_detail.c3) + 2.0 * mu / rPark);
+    const double burnDuration = (vPeri - vCirc) * 1000.0 / accelMs2;
+
+    return m_currentET + timeToBurnPoint - burnDuration * 0.5;
+}
+
+// ---------------------------------------------------------------------------
 TransferPlanSnapshot TransferMFD::getPlan() const
 {
     TransferPlanSnapshot snap;
@@ -279,6 +349,15 @@ const char* TransferMFD::leftLabel(int slot) const
     if (m_page == 2) {
         if (slot == 4) return "BACK";
         if (slot == 3) return "ALT";
+        if (slot == 2) {
+            switch (m_burnCtrl.phase()) {
+            case BurnPhase::Armed:
+            case BurnPhase::PreIgnition:
+            case BurnPhase::Executing: return "DSARM";
+            case BurnPhase::Complete:  return "";
+            default: return (m_detail.valid && glm::length(m_shipR) > 100.0) ? "ARM" : "";
+            }
+        }
         return "";
     }
     if (m_page == 1) {
@@ -339,9 +418,38 @@ void TransferMFD::onLeft(int slot)
         return;
     }
     if (m_page == 2) {
-        if (slot == 4) m_page = 1;
-        if (slot == 3) m_parkIdx = (m_parkIdx + 1)
-                                   % static_cast<int>(std::size(kParkAlts));
+        if (slot == 4) { m_page = 1; return; }
+        if (slot == 3) {
+            m_parkIdx = (m_parkIdx + 1)
+                        % static_cast<int>(std::size(kParkAlts));
+            return;
+        }
+        if (slot == 2) {
+            const auto ph = m_burnCtrl.phase();
+            if (ph == BurnPhase::Armed || ph == BurnPhase::Executing) {
+                m_burnCtrl.disarm();
+            } else if (m_detail.valid && glm::length(m_shipR) > 100.0) {
+                const double ignET = computeIgnitionET();
+                if (ignET > m_currentET) {
+                    const double mu    = m_muDep;
+                    const double rPark = m_depBodyRadius + kParkAlts[m_parkIdx];
+                    const double accel = (m_shipMass > 1.0)
+                                        ? m_mainThrustN / m_shipMass : 0.97;
+                    const double vCirc = std::sqrt(mu / rPark);
+                    const double vPeri = std::sqrt(
+                        static_cast<double>(m_detail.c3) + 2.0 * mu / rPark);
+                    BurnPlan plan;
+                    plan.name        = "TMI";
+                    plan.ignitionET  = ignET;
+                    plan.c3Required  = m_detail.c3;
+                    plan.depBodyMu   = m_muDep;
+                    plan.dvMagnitude = vPeri - vCirc;
+                    plan.burnDuration= plan.dvMagnitude * 1000.0 / accel;
+                    m_burnCtrl.arm(plan, m_autopilot, m_eventQueue);
+                }
+            }
+            return;
+        }
         return;
     }
     if (m_page == 1) {
@@ -1351,6 +1459,41 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     };
     auto sep = [&]() { add(0, ""); };  // blank spacer
 
+    // ---- Burn controller status (top of overlay) ----
+    {
+        const ImU32 kArmed  = IM_COL32(255, 220,   0, 240);
+        const ImU32 kExec   = IM_COL32(255,  80,  80, 240);
+        const ImU32 kDone   = IM_COL32(  0, 210,  75, 240);
+        switch (m_burnCtrl.phase()) {
+        case BurnPhase::Armed: {
+            double tti = m_burnCtrl.timeToIgnition(m_currentET);
+            char hmsBuf[16];
+            fmtHMS(tti, hmsBuf, sizeof(hmsBuf));
+            add(kArmed, "ARMED  IGN T-%s  [DSARM]", hmsBuf);
+            sep();
+            break;
+        }
+        case BurnPhase::PreIgnition: {
+            double tti = m_burnCtrl.timeToIgnition(m_currentET);
+            char hmsBuf[16];
+            if (tti >= 0.0) fmtHMS(tti, hmsBuf, sizeof(hmsBuf));
+            else std::snprintf(hmsBuf, sizeof(hmsBuf), "HOLD");
+            add(kArmed, "PRE-IGN  T-%s  PROGRADE CHECK  [DSARM]", hmsBuf);
+            sep();
+            break;
+        }
+        case BurnPhase::Executing:
+            add(kExec, "EXECUTING BURN  [DSARM]");
+            sep();
+            break;
+        case BurnPhase::Complete:
+            add(kDone, "BURN COMPLETE (autopilot)");
+            sep();
+            break;
+        default: break;
+        }
+    }
+
     // Header — dates and V∞
     {
         std::string nowStr = astro::EphemerisTime(m_currentET).toISOUTCString(0);
@@ -2129,6 +2272,7 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 void TransferMFD::update(const MFDContext& ctx)
 {
     m_eventQueue = ctx.eventQueue;
+    m_autopilot  = ctx.autopilot;
 
     // Compute departure-body-centric state from heliocentric.
     // For Earth (399) the dedicated geocentric field is more precise;
@@ -2159,6 +2303,8 @@ void TransferMFD::update(const MFDContext& ctx)
 
     tickMcc();
     tickBplane();
+
+    m_burnCtrl.tick(m_currentET, m_shipR, m_shipV);
 
     // Re-schedule MCC event if the solution moved by more than 60 s.
     if (m_eventQueue && m_detail.valid) {

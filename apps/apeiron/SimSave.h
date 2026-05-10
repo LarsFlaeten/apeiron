@@ -49,7 +49,9 @@ struct SimSaveData
         bool        ann10min     = false;
         bool        ann5min      = false;
         bool        ann1min      = false;
+        bool        ann10s       = false;
         bool        ann0         = false;
+        bool        countdown10s = false;
     };
     std::vector<SavedEvent> events;
 };

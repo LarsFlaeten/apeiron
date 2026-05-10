@@ -1239,6 +1239,16 @@ int main(int argc, char* argv[])
                                    simSpeedTarget, simSecondsPerRealSecond);
             }
 
+            // Cap time accel during an automated burn to 10× so the attitude
+            // controller remains stable and C3 cutoff is not overshot badly.
+            {
+                const double burnCap = transferMFD.maxSimSpeed();
+                if (burnCap > 0.0) {
+                    simSpeedTarget          = std::min(simSpeedTarget,          burnCap);
+                    simSecondsPerRealSecond = std::min(simSecondsPerRealSecond, burnCap);
+                }
+            }
+
             // Smooth time acceleration: converge in log-space toward target.
             // Time constant ~0.15 s real time — fast enough to feel responsive,
             // slow enough to avoid the one-frame orbital skip on t/T presses.
@@ -1385,7 +1395,8 @@ int main(int argc, char* argv[])
                         // Main engine (SPACE) — tracked separately so allocation
                         // always uses the full matrix when the main engine is firing.
                         const bool mainEngineKey =
-                            glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+                            glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS
+                            || transferMFD.requestMainEngine();
                         if (mainEngineKey) {
                             desired[0] += mainEngineThrust;
                             mainEngineOn = true;
@@ -1535,7 +1546,8 @@ int main(int argc, char* argv[])
                         shipTorque = glm::dvec3(T);
                     } else {
                         // ---- Scalar fallback (no manifest) ----
-                        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+                        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS
+                            || transferMFD.requestMainEngine()) {
                             shipForce.x += mainEngineThrust;
                             mainEngineOn = true;
                         }
@@ -2136,12 +2148,14 @@ int main(int argc, char* argv[])
                     sd.plan = transferMFD.getPlan();
                     for (const auto& ev : obcEventQueue.events()) {
                         SimSaveData::SavedEvent se;
-                        se.name    = ev.name;
-                        se.eventET = ev.eventET;
-                        se.ann10min = ev.announced10min;
-                        se.ann5min  = ev.announced5min;
-                        se.ann1min  = ev.announced1min;
-                        se.ann0     = ev.announced0;
+                        se.name        = ev.name;
+                        se.eventET     = ev.eventET;
+                        se.ann10min    = ev.announced10min;
+                        se.ann5min     = ev.announced5min;
+                        se.ann1min     = ev.announced1min;
+                        se.ann10s      = ev.announced10s;
+                        se.ann0        = ev.announced0;
+                        se.countdown10s= ev.countdown10s;
                         sd.events.push_back(se);
                     }
                     scenarioStatusMsg = saveSimState(kSavePath, sd) ? "Saved." : "Save failed!";
@@ -2172,7 +2186,9 @@ int main(int argc, char* argv[])
                                 ev.announced10min = se.ann10min;
                                 ev.announced5min  = se.ann5min;
                                 ev.announced1min  = se.ann1min;
+                                ev.announced10s   = se.ann10s;
                                 ev.announced0     = se.ann0;
+                                ev.countdown10s   = se.countdown10s;
                                 restored.push_back(ev);
                             }
                             obcEventQueue.restoreEvents(std::move(restored));
@@ -2320,6 +2336,7 @@ int main(int argc, char* argv[])
                 mfdCtx.mainThrustN     = mainEngineThrust;
                 mfdCtx.shipMassKg      = shipMass;
                 mfdCtx.eventQueue      = &obcEventQueue;
+                mfdCtx.autopilot       = &autopilot;
 
                 // Ship state relative to reference body.
                 {

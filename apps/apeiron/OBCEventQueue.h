@@ -30,7 +30,12 @@ struct ScheduledEvent {
     bool announced10min = false;
     bool announced5min  = false;
     bool announced1min  = false;
+    bool announced10s   = false;   // only fires when countdown10s == true
     bool announced0     = false;
+
+    // When true, an extra T-10 s voice callout fires (speakImmediate).
+    // Useful for time-critical events like IGN and MECO.
+    bool countdown10s   = false;
 };
 
 class OBCEventQueue {
@@ -39,7 +44,10 @@ public:
     // If an event with the same name already exists it is replaced in-place
     // (announcement flags are reset), preventing duplicate callouts if a
     // plan is reconfirmed.
-    uint64_t schedule(const std::string& name, double eventET);
+    // Set countdown10s = true to get an extra T-10 s voice callout in addition
+    // to the standard T-10 min / T-5 min / T-1 min / T-0 set.
+    uint64_t schedule(const std::string& name, double eventET,
+                      bool countdown10s = false);
 
     // Cancel by id (no-op if not found).
     void cancel(uint64_t id);

@@ -2,6 +2,7 @@
 
 #include "MFD.h"
 #include "MFDContext.h"
+#include "BurnController.h"
 
 #include "apeiron/spacecraft/Porkchop.h"
 #include "apeiron/spacecraft/Lambert.h"
@@ -102,6 +103,13 @@ public:
     double     getBplanePeCurrentKm() const { return m_bplanePeCurrentKm; }
     glm::dvec3 getMccDv() const { return m_mccDv; }
 
+    // Returns true when the burn autopilot wants the main engine firing.
+    // OR this with the SPACEBAR key in main.cpp.
+    bool   requestMainEngine() const { return m_burnCtrl.requestMainEngine(); }
+
+    // Returns a positive time-accel cap (10×) during burn execution, or 0.
+    double maxSimSpeed()       const { return m_burnCtrl.maxSimSpeed(); }
+
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
     const char* leftLabel (int slot) const override;
@@ -118,6 +126,11 @@ private:
 
     void resolveSelected();
     static ImU32 dvColor(float t);
+
+    // Computes the ignition ET for the next burn-TA passage given the current
+    // ship state and selected transfer plan.  Returns 0.0 on failure (degenerate
+    // orbit, no plan, etc.).
+    double computeIgnitionET() const;
 
     // Queries SPICE for departure body radius, GM, and SOI radius.
     // Uses m_params.departureBody / centralBody and m_currentET.
@@ -202,8 +215,11 @@ private:
 
     glm::dvec3 m_mccDv { 0.0 };
 
-    OBCEventQueue* m_eventQueue = nullptr;
-    double m_lastMccET = 0.0;
+    OBCEventQueue*         m_eventQueue = nullptr;
+    spacecraft::Autopilot* m_autopilot  = nullptr;
+    double                 m_lastMccET  = 0.0;
+
+    BurnController m_burnCtrl;
 
     // B-plane targeting.
     static constexpr double kPeTargetAlts[] = { 200.0, 500.0, 1000.0, 2000.0, 5000.0 };

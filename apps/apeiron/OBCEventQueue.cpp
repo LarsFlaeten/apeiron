@@ -5,23 +5,27 @@
 #include <cmath>
 
 // ---------------------------------------------------------------------------
-uint64_t OBCEventQueue::schedule(const std::string& name, double eventET)
+uint64_t OBCEventQueue::schedule(const std::string& name, double eventET,
+                                  bool countdown10s)
 {
     // Replace existing event with the same name.
     for (auto& ev : m_events) {
         if (ev.name == name) {
             ev.eventET        = eventET;
+            ev.countdown10s   = countdown10s;
             ev.announced10min = false;
             ev.announced5min  = false;
             ev.announced1min  = false;
+            ev.announced10s   = false;
             ev.announced0     = false;
             return ev.id;
         }
     }
     ScheduledEvent ev;
-    ev.id      = m_nextId++;
-    ev.name    = name;
-    ev.eventET = eventET;
+    ev.id           = m_nextId++;
+    ev.name         = name;
+    ev.eventET      = eventET;
+    ev.countdown10s = countdown10s;
     m_events.push_back(ev);
     return ev.id;
 }
@@ -95,14 +99,14 @@ void OBCEventQueue::tick(double currentET, double frameDtReal,
             simSecondsPerRealSecond = std::min(simSecondsPerRealSecond,   1.0);
         }
 
+        constexpr double k10s = 10.0;
+
         // ---- Silent fast-forward for events already in the past on load ----
-        // If all announcement flags are unset but the event time has already
-        // passed, we skipped this event (e.g. plan confirmed after departure,
-        // or save loaded with stale event).  Mark silently so it purges cleanly.
         if (dt < 0.0 && !ev.announced10min) {
             ev.announced10min = true;
             ev.announced5min  = true;
             ev.announced1min  = true;
+            ev.announced10s   = true;
             ev.announced0     = true;
             continue;   // let the purge below remove it
         }
@@ -119,6 +123,12 @@ void OBCEventQueue::tick(double currentET, double frameDtReal,
         if (!ev.announced1min && dt <= k1min && dt > 0.0) {
             obc::warn(ev.name + ", T minus 1 minute.");
             ev.announced1min = true;
+        }
+        // T-10 s callout — only for events that opted in (IGN, MECO).
+        // Uses speakImmediate so it cuts through any queued speech.
+        if (ev.countdown10s && !ev.announced10s && dt <= k10s && dt > 0.0) {
+            obc::speakImmediate(ev.name + ", T minus 10.");
+            ev.announced10s = true;
         }
         if (!ev.announced0 && dt <= 0.0 && dt > -30.0) {
             obc::speakImmediate(ev.name + ".");

@@ -48,6 +48,7 @@ add_executable(apeiron
     VoiceAnnouncer.cpp
     SimSave.cpp
     OBCEventQueue.cpp
+    BurnController.cpp
     OBCMFD.cpp
 )
 
