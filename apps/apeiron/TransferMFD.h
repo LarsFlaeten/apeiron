@@ -39,12 +39,12 @@ struct TransferPlanSnapshot {
 //   Left  1: DEP>   shift departure window fwd   30 days
 //   Left  2: TOF<   shift TOF range down          30 days
 //   Left  3: TOF>   shift TOF range up             30 days
-//   Left  4: COMP   recompute the grid
-//   Right 0: BDY    open body-select page
+//   Left  4: BDY    open body-select page
+//   Right 0: COMP   recompute (or INFO when a cell is selected)
 //   Right 1: WIN<   halve departure window span
 //   Right 2: WIN>   double departure window span
 //   Right 3: RNG<   halve TOF range span
-//   Right 4: INFO   open detail page (when cell selected)
+//   Right 4: RNG>   double TOF range span
 //
 // Page 4 buttons:
 //   Left  0: DEP<   cycle departure body backward

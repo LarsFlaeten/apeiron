@@ -291,7 +291,7 @@ const char* TransferMFD::leftLabel(int slot) const
     case 1: return "DEP>";
     case 2: return "TOF<";
     case 3: return "TOF>";
-    case 4: return "COMP";
+    case 4: return "BDY";
     default: return "";
     }
 }
@@ -309,11 +309,11 @@ const char* TransferMFD::rightLabel(int slot) const
         return "";
     }
     switch (slot) {
-    case 0: return "BDY";
+    case 0: return (m_selDep >= 0 && m_selTof >= 0 && m_hasData) ? "INFO" : "COMP";
     case 1: return "WIN<";
     case 2: return "WIN>";
     case 3: return "RNG<";
-    case 4: return (m_selDep >= 0 && m_selTof >= 0 && m_hasData) ? "INFO" : "";
+    case 4: return "RNG>";
     default: return "";
     }
 }
@@ -373,7 +373,7 @@ void TransferMFD::onLeft(int slot)
         m_params.tofMax += shift;
         break;
     case 4:
-        compute();
+        m_page = 4;   // BDY — open body-select page
         break;
     default: break;
     }
@@ -391,14 +391,29 @@ void TransferMFD::onRight(int slot)
         if (slot == 4) m_page = 2;
         return;
     }
-    if (slot == 0) { m_page = 4; return; }  // BDY
-
     const double depMid = (m_params.t0 + m_params.t1) * 0.5;
     const double tofMid = (m_params.tofMin + m_params.tofMax) * 0.5;
     double depHalf = (m_params.t1 - m_params.t0) * 0.5;
     double tofHalf = (m_params.tofMax - m_params.tofMin) * 0.5;
 
     switch (slot) {
+    case 0:  // COMP or INFO — compute grid, or open detail page if cell selected
+        if (m_selDep >= 0 && m_selTof >= 0 && m_hasData) {
+            resolveSelected();
+            if (m_detail.valid) {
+                m_page = 1;
+                if (m_eventQueue) {
+                    if (m_detail.depET > m_currentET)
+                        m_eventQueue->schedule("TMI",   m_detail.depET);
+                    m_eventQueue->schedule("TCM-1", m_detail.depET + 7.0 * kDay);
+                    m_eventQueue->schedule("MCC-1", m_detail.depET + m_detail.tofSec * 0.5);
+                    m_eventQueue->schedule("MOI",   m_detail.arrET);
+                }
+            }
+        } else {
+            compute();
+        }
+        break;
     case 1:
         depHalf = std::max(depHalf * 0.5, 30.0 * kDay);
         m_params.t0 = depMid - depHalf;
@@ -418,19 +433,13 @@ void TransferMFD::onRight(int slot)
             m_params.tofMin  = kDay;
         }
         break;
-    case 4:  // INFO — open detail page for selected cell
-        if (m_selDep >= 0 && m_selTof >= 0 && m_hasData) {
-            resolveSelected();
-            if (m_detail.valid) {
-                m_page = 1;
-                if (m_eventQueue) {
-                    if (m_detail.depET > m_currentET)
-                        m_eventQueue->schedule("TMI",   m_detail.depET);
-                    m_eventQueue->schedule("TCM-1", m_detail.depET + 7.0 * kDay);
-                    m_eventQueue->schedule("MCC-1", m_detail.depET + m_detail.tofSec * 0.5);
-                    m_eventQueue->schedule("MOI",   m_detail.arrET);
-                }
-            }
+    case 4:  // RNG> — double TOF range
+        tofHalf *= 2.0;
+        m_params.tofMin = tofMid - tofHalf;
+        m_params.tofMax = tofMid + tofHalf;
+        if (m_params.tofMin < kDay) {
+            m_params.tofMax -= m_params.tofMin - kDay;
+            m_params.tofMin  = kDay;
         }
         break;
     default: break;
@@ -1388,13 +1397,22 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     const double massKg   = m_shipMass;
     const double accel    = thrustN / massKg;   // m/s²
 
-    // Bi-elliptic candidates: GEO, HEO, Lunar distance
-    struct BiElliptic { const char* label; double r_a; };
-    static const BiElliptic kCands[] = {
-        { "GEO  42k km", 42164.0  },
-        { "HEO 100k km", 100000.0 },
-        { "Lun 384k km", 384400.0 },
-    };
+    // Bi-elliptic candidates: 10×, 25×, 60× departure body radius.
+    // Scales naturally with the departure body (GEO~42k, HEO~100k, Lunar~380k for Earth;
+    // comparable ratios for Mars or other bodies).
+    const double r_body = m_depBodyRadius;
+    struct BiElliptic { char label[20]; double r_a; };
+    BiElliptic kCands[3];
+    {
+        double factors[] = { 10.0, 25.0, 60.0 };
+        for (int ci = 0; ci < 3; ++ci) {
+            double ra = r_body * factors[ci];
+            int altK  = static_cast<int>((ra - r_body) / 1000.0 + 0.5);
+            std::snprintf(kCands[ci].label, sizeof(kCands[ci].label),
+                          "%dk km", altK);
+            kCands[ci].r_a = ra;
+        }
+    }
 
     // Target plane
     ImU32 tgtCol = (planeErr < 0.5) ? kGreen : (planeErr < 5.0) ? kOrange : kRed;
@@ -1673,8 +1691,7 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     if (muSun <= 0.0) muSun = 1.32712440018e11;  // fallback km³/s²
 
     // -----------------------------------------------------------------------
-    // Heliocentric ship state — computed from Earth heliocentric + geocentric.
-    // m_shipHelioR/V is fed by main.cpp via updateHelioState().
+    // Heliocentric ship state — fed by main.cpp via updateHelioState().
     // -----------------------------------------------------------------------
     const glm::dvec3 shipR = m_shipHelioR;
     const glm::dvec3 shipV = m_shipHelioV;
@@ -1753,9 +1770,9 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     double dvMCC    = 0.0;
     OrbitDiagram::Arc mccArc;
 
-    const bool insideEarthSOI = (glm::length(m_shipR) < m_depSOI);
+    const bool insideDepSOI = (glm::length(m_shipR) < m_depSOI);
 
-    if (!insideEarthSOI && tofRemaining > kDay) {   // at least 1 day remaining
+    if (!insideDepSOI && tofRemaining > kDay) {   // at least 1 day remaining
         mccValid = spacecraft::solveLambert(muSun, shipR, m_detail.arrPos,
                                             tofRemaining, true,
                                             vMCC_dep, vMCC_arr);
@@ -2113,7 +2130,30 @@ void TransferMFD::update(const MFDContext& ctx)
 {
     m_eventQueue = ctx.eventQueue;
 
-    updateShipState(ctx.shipGeoR, ctx.shipGeoV, ctx.currentEt.getETValue());
+    // Compute departure-body-centric state from heliocentric.
+    // For Earth (399) the dedicated geocentric field is more precise;
+    // for any other departure body subtract the body's heliocentric position.
+    glm::dvec3 shipR, shipV;
+    if (m_params.departureBody == 399) {
+        shipR = ctx.shipGeoR;
+        shipV = ctx.shipGeoV;
+    } else {
+        try {
+            astro::PosState depState;
+            astro::Spice().getRelativeGeometricState(
+                m_params.departureBody, m_params.centralBody,
+                ctx.currentEt, depState, kEclipJ2000);
+            glm::dvec3 rDep(depState.r.x, depState.r.y, depState.r.z);
+            glm::dvec3 vDep(depState.v.x, depState.v.y, depState.v.z);
+            shipR = ctx.shipHelioR - rDep;
+            shipV = ctx.shipHelioV - vDep;
+        } catch (...) {
+            shipR = ctx.shipGeoR;
+            shipV = ctx.shipGeoV;
+        }
+    }
+
+    updateShipState(shipR, shipV, ctx.currentEt.getETValue());
     updateBurnParams(ctx.mainThrustN, ctx.shipMassKg);
     updateHelioState(ctx.shipHelioR, ctx.shipHelioV);
 
