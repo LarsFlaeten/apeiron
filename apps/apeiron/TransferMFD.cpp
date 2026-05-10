@@ -512,10 +512,34 @@ void TransferMFD::onRight(int slot)
                 m_page = 1;
                 if (m_eventQueue) {
                     if (m_detail.depET > m_currentET)
-                        m_eventQueue->schedule("TMI",   m_detail.depET);
-                    m_eventQueue->schedule("TCM-1", m_detail.depET + 7.0 * kDay);
-                    m_eventQueue->schedule("MCC-1", m_detail.depET + m_detail.tofSec * 0.5);
-                    m_eventQueue->schedule("MOI",   m_detail.arrET);
+                        m_eventQueue->schedule("TMI", m_detail.depET);
+
+                    // Standard trajectory correction waypoints.
+                    // Skip any that are in the past or within 6 h of the previous one;
+                    // this handles short-TOF transfers where late waypoints predate early ones.
+                    struct MccWpt { const char* name; double et; };
+                    const double arrET = m_detail.arrET;
+                    const double depET = m_detail.depET;
+                    const double tof   = m_detail.tofSec;
+                    const MccWpt wpts[] = {
+                        { "MCC-1", depET  +  7.0 * kDay },  // early post-departure
+                        { "MCC-2", depET  + tof  * 0.5  },  // mid-course
+                        { "MCC-3", arrET - 30.0 * kDay  },  // arrival −30 d
+                        { "MCC-4", arrET -  7.0 * kDay  },  // arrival −7 d
+                        { "MCC-5", arrET -  1.0 * kDay  },  // arrival −24 h
+                    };
+                    constexpr double kMinSep = 6.0 * 3600.0;
+                    double prevET = depET;
+                    for (const auto& w : wpts) {
+                        if (w.et > m_currentET
+                            && w.et > prevET  + kMinSep
+                            && w.et < arrET   - kMinSep) {
+                            m_eventQueue->schedule(w.name, w.et);
+                            prevET = w.et;
+                        }
+                    }
+
+                    m_eventQueue->schedule("MOI", arrET);
                 }
             }
         } else {
