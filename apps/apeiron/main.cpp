@@ -1034,8 +1034,9 @@ int main(int argc, char* argv[])
                     *s->simSpeed = std::max(1.0,   *s->simSpeed / 10.0);  // T = slower
                 else {
                     *s->simSpeed = std::min(1.0e6, *s->simSpeed * 10.0);  // t = faster
-                    // Disengage autopilot on time acceleration — physics is skipping frames.
-                    s->autopilot->mode = spacecraft::AutopilotMode::Off;
+                    // Disengage autopilot above 10× — controllers become unstable at larger dt.
+                    if (*s->simSpeed > 10.0)
+                        s->autopilot->mode = spacecraft::AutopilotMode::Off;
                 }
             }
             else if (key == GLFW_KEY_ENTER &&
@@ -1377,14 +1378,14 @@ int main(int argc, char* argv[])
             {
                 glm::dvec3 shipTorque(0.0);
 
-                // Disengage autopilot whenever time is accelerated — covers the T key,
-                // the slider, and any save-load that restores a fast warp.
-                if (simSpeedTarget > 1.0)
+                // Disengage autopilot above 10× — controllers are unstable at larger dt.
+                // At ≤10× prograde hold and burn autopilot remain usable.
+                if (simSpeedTarget > 10.0)
                     autopilot.mode = spacecraft::AutopilotMode::Off;
 
                 if ((viewMode == ViewMode::Nav || viewMode == ViewMode::MfdFull ||
                      viewMode == ViewMode::MfdFull2 || viewMode == ViewMode::ShipInspect)
-                    && simSpeedTarget <= 1.0
+                    && simSpeedTarget <= 10.0
                     && !ImGui::GetIO().WantCaptureKeyboard) {
 
                     if (!orionModel.thrusters.empty()) {
