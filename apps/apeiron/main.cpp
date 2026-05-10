@@ -1365,14 +1365,17 @@ int main(int argc, char* argv[])
             bool mainEngineOn = false;
             glm::dvec3 shipForce(0.0);   // body-frame thrust force (N), hoisted for nav console
             // Active burn-direction for MCC+ autopilot and HUD marker.
-            // BPL (B-plane Pe targeting) takes priority over Lambert MCC only when the
-            // ship is on a genuine close approach — Pe < 50,000 km above the arrival body
-            // surface.  Far from Mars the virtual B-plane periapsis can be millions of km
-            // and the BPL vector is meaningless; in that case use the Lambert MCC.
+            // Active nav ΔV: Lambert MCC while in transit; B-plane Pe targeting in
+            // final approach.  Switch to B-plane exclusively above 97% TOF progress
+            // (or whenever Pe < 50,000 km) so shift-G stays locked on the approach
+            // correction without a jarring mid-course jump.
             const glm::dvec3 activeNavDv = [&]() -> glm::dvec3 {
-                glm::dvec3 bpl   = transferMFD.getBplaneDv();
-                double     peNow = transferMFD.getBplanePeCurrentKm();
-                const bool bplUsable = (glm::length(bpl) > 1e-9) && (peNow < 50000.0);
+                glm::dvec3 bpl        = transferMFD.getBplaneDv();
+                double     peNow      = transferMFD.getBplanePeCurrentKm();
+                double     progress   = transferMFD.getTransferProgress();
+                const bool lateApproach = (progress >= 0.97);
+                const bool bplUsable  = (glm::length(bpl) > 1e-9)
+                                        && (peNow < 50000.0 || lateApproach);
                 return bplUsable ? bpl : transferMFD.getMccDv();
             }();
             {

@@ -22,12 +22,15 @@ enum class BurnPhase {
 // Created by TransferMFD and handed to BurnController::arm().
 // ---------------------------------------------------------------------------
 struct BurnPlan {
-    std::string name;             // "TMI" — used as OBC event name suffix
-    double      ignitionET   = 0.0;  // absolute ET for engine start
-    double      c3Required   = 0.0;  // km²/s²  — cutoff when c3Now >= this
-    double      depBodyMu    = 0.0;  // km³/s²  — for live C3 = v²-2μ/r
-    double      dvMagnitude  = 0.0;  // km/s    (display / guard only)
-    double      burnDuration = 0.0;  // seconds (display / guard only)
+    std::string name;             // "TMI" / "MOI" — used as OBC event name suffix
+    double      ignitionET    = 0.0;  // absolute ET for engine start
+    double      c3Required    = 0.0;  // km²/s²  — cutoff threshold (see retrogradeBurn)
+    double      depBodyMu     = 0.0;  // km³/s²  — for live energy = v²-2μ/r
+    double      dvMagnitude   = 0.0;  // km/s    (display / guard only)
+    double      burnDuration  = 0.0;  // seconds (display / guard only)
+    // If true: attitude = Retrograde; engine stops when energy drops BELOW c3Required.
+    // If false (TMI): attitude = Prograde; engine stops when energy rises ABOVE c3Required.
+    bool        retrogradeBurn = false;
 };
 
 // ---------------------------------------------------------------------------

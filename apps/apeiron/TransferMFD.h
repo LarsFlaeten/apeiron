@@ -11,6 +11,7 @@
 #include <astro/State.h>
 
 #include <glm/glm.hpp>
+#include <limits>
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -99,16 +100,31 @@ public:
     // Recomputes B-plane targeting correction on hyperbolic approach to arrival body.
     void tickBplane();
 
+    // Computes time-to-Pe, MOI burn duration/ignition ET from cached B-plane state.
+    void tickApproach();
+
     glm::dvec3 getBplaneDv() const { return m_bplaneDv; }
     double     getBplanePeCurrentKm() const { return m_bplanePeCurrentKm; }
     glm::dvec3 getMccDv() const { return m_mccDv; }
 
-    // Returns true when the burn autopilot wants the main engine firing.
+    // Transfer progress [0, 1]; returns -1 if no plan is loaded.
+    double getTransferProgress() const {
+        if (!m_detail.valid || m_detail.tofSec <= 0.0) return -1.0;
+        return (m_currentET - m_detail.depET) / m_detail.tofSec;
+    }
+
+    // Returns true when either burn autopilot wants the main engine firing.
     // OR this with the SPACEBAR key in main.cpp.
-    bool   requestMainEngine() const { return m_burnCtrl.requestMainEngine(); }
+    bool   requestMainEngine() const {
+        return m_burnCtrl.requestMainEngine() || m_moiBurnCtrl.requestMainEngine();
+    }
 
     // Returns a positive time-accel cap (10×) during burn execution, or 0.
-    double maxSimSpeed()       const { return m_burnCtrl.maxSimSpeed(); }
+    double maxSimSpeed() const {
+        const double a = m_burnCtrl.maxSimSpeed();
+        const double b = m_moiBurnCtrl.maxSimSpeed();
+        return (a > 0.0) ? a : b;
+    }
 
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
 
@@ -219,7 +235,20 @@ private:
     spacecraft::Autopilot* m_autopilot  = nullptr;
     double                 m_lastMccET  = 0.0;
 
-    BurnController m_burnCtrl;
+    BurnController m_burnCtrl;     // departure (TMI) burn
+    BurnController m_moiBurnCtrl;  // arrival (MOI) burn
+
+    // Arrival-body-centric ship state — cached in tickBplane(), used by tickApproach().
+    glm::dvec3 m_shipArrR { 0.0 };
+    glm::dvec3 m_shipArrV { 0.0 };
+    double     m_muArr         = 0.0;   // arrival body μ, km³/s²
+    double     m_arrBodyRadius = 0.0;   // arrival body equatorial radius, km
+
+    // Approach / MOI planning — cached in tickApproach(), used by renderCoasting() and ARM.
+    double m_tToPeHyp   = std::numeric_limits<double>::quiet_NaN(); // seconds to Pe (NaN if unknown)
+    double m_moiIgnET   = 0.0;   // absolute ET for MOI ignition (0 = not computable)
+    double m_moiDvCirc  = 0.0;   // circularisation ΔV at Pe, km/s
+    double m_moiBurnDur = 0.0;   // estimated burn duration, seconds
 
     // B-plane targeting.
     static constexpr double kPeTargetAlts[] = { 200.0, 500.0, 1000.0, 2000.0, 5000.0 };

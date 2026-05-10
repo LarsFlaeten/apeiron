@@ -344,6 +344,18 @@ const char* TransferMFD::leftLabel(int slot) const
     if (m_page == 3) {
         if (slot == 4) return "BACK";
         if (slot == 3) return "PE";
+        if (slot == 2) {
+            switch (m_moiBurnCtrl.phase()) {
+            case BurnPhase::Armed:
+            case BurnPhase::PreIgnition:
+            case BurnPhase::Executing: return "DSARM";
+            case BurnPhase::Complete:  return "";
+            default:
+                return (!m_capturedAtArrival && m_bplaneValid
+                        && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0)
+                    ? "ARM" : "";
+            }
+        }
         return "";
     }
     if (m_page == 2) {
@@ -412,9 +424,33 @@ void TransferMFD::onLeft(int slot)
         return;
     }
     if (m_page == 3) {
-        if (slot == 4) m_page = 2;
-        if (slot == 3) m_peAltIdx = (m_peAltIdx + 1)
-                                    % static_cast<int>(std::size(kPeTargetAlts));
+        if (slot == 4) { m_page = 2; return; }
+        if (slot == 3) {
+            m_peAltIdx = (m_peAltIdx + 1) % static_cast<int>(std::size(kPeTargetAlts));
+            return;
+        }
+        if (slot == 2) {
+            const auto ph = m_moiBurnCtrl.phase();
+            if (ph == BurnPhase::Armed || ph == BurnPhase::PreIgnition
+                || ph == BurnPhase::Executing) {
+                m_moiBurnCtrl.disarm();
+            } else if (!m_capturedAtArrival && m_bplaneValid
+                       && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0) {
+                BurnPlan plan;
+                plan.name           = "MOI";
+                plan.ignitionET     = m_moiIgnET;
+                // Target orbital energy for a circular orbit at the chosen Pe altitude.
+                // MECO fires when  v² - 2μ/r  drops to  -μ/rPe  (negative, captured).
+                const double rPeTgt = m_arrBodyRadius + kPeTargetAlts[m_peAltIdx];
+                plan.c3Required     = -m_muArr / rPeTgt;
+                plan.depBodyMu      = m_muArr;
+                plan.dvMagnitude    = m_moiDvCirc;
+                plan.burnDuration   = m_moiBurnDur;
+                plan.retrogradeBurn = true;
+                m_moiBurnCtrl.arm(plan, m_autopilot, m_eventQueue);
+            }
+            return;
+        }
         return;
     }
     if (m_page == 2) {
@@ -1701,6 +1737,10 @@ void TransferMFD::tickBplane()
     m_bplaneValid       = false;
     m_bplanePeCurrentKm = 0.0;
     m_capturedAtArrival = false;
+    m_shipArrR          = glm::dvec3(0.0);
+    m_shipArrV          = glm::dvec3(0.0);
+    m_muArr             = 0.0;
+    m_arrBodyRadius     = 0.0;
 
     if (!m_detail.valid) return;
 
@@ -1744,9 +1784,13 @@ void TransferMFD::tickBplane()
             astro::EphemerisTime(m_currentET), arrState, kEclipJ2000bp);
     } catch (...) { return; }
 
-    // Body-relative ship state.
+    // Body-relative ship state — cache for tickApproach() and m_moiBurnCtrl.tick().
     glm::dvec3 r = m_shipHelioR - glm::dvec3(arrState.r.x, arrState.r.y, arrState.r.z);
     glm::dvec3 v = m_shipHelioV - glm::dvec3(arrState.v.x, arrState.v.y, arrState.v.z);
+    m_shipArrR      = r;
+    m_shipArrV      = v;
+    m_muArr         = muArr;
+    m_arrBodyRadius = arrRadius;
 
     double rMag = glm::length(r);
     if (rMag < 100.0) return;   // too close to body centre (inside body)
@@ -1802,6 +1846,77 @@ void TransferMFD::tickBplane()
 
     m_bplaneDv    = dvSign * dvMag * dvDir;  // km/s, ECLIPJ2000 inertial direction
     m_bplaneValid = true;
+}
+
+// ---------------------------------------------------------------------------
+// tickApproach — computes time-to-Pe and MOI burn parameters from cached
+// arrival-body state.  Called from update() after tickBplane().
+// Results cached in m_tToPeHyp / m_moiIgnET / m_moiDvCirc / m_moiBurnDur.
+// ---------------------------------------------------------------------------
+void TransferMFD::tickApproach()
+{
+    m_tToPeHyp   = std::numeric_limits<double>::quiet_NaN();
+    m_moiIgnET   = 0.0;
+    m_moiDvCirc  = 0.0;
+    m_moiBurnDur = 0.0;
+
+    if (!m_bplaneValid || m_muArr <= 0.0 || m_arrBodyRadius <= 0.0) return;
+
+    const double rMag = glm::length(m_shipArrR);
+    if (rMag < 100.0) return;
+
+    const double v2     = glm::dot(m_shipArrV, m_shipArrV);
+    const double vInfSq = v2 - 2.0 * m_muArr / rMag;
+    const double rv     = glm::dot(m_shipArrR, m_shipArrV);
+    const glm::dvec3 eVec = ((v2 - m_muArr / rMag) * m_shipArrR - rv * m_shipArrV) / m_muArr;
+    const double ecc = glm::length(eVec);
+
+    if (vInfSq > 0.0 && ecc > 1.0) {
+        // Hyperbolic approach: time to periapsis via hyperbolic anomaly.
+        const double energy = 0.5 * v2 - m_muArr / rMag;
+        const double absA   = m_muArr / (2.0 * std::abs(energy));
+        const double cosNu  = std::clamp(glm::dot(eVec / ecc, m_shipArrR / rMag), -1.0, 1.0);
+        double nu = std::acos(cosNu);
+        if (rv < 0.0) nu = -nu;
+        const double k    = std::sqrt((ecc - 1.0) / (ecc + 1.0));
+        const double argF = k * std::tan(nu * 0.5);
+        if (std::isfinite(argF) && std::abs(argF) < 1.0 - 1e-9) {
+            const double F = 2.0 * std::atanh(argF);
+            if (std::isfinite(F) && absA > 1.0) {
+                const double M_h = ecc * std::sinh(F) - F;
+                const double n   = std::sqrt(m_muArr / (absA * absA * absA));
+                m_tToPeHyp = -(M_h / n);
+            }
+        }
+    } else if (m_capturedAtArrival && ecc > 0.0 && ecc < 1.0) {
+        // Captured in elliptic orbit: time to next periapsis via Kepler.
+        const double energy = 0.5 * v2 - m_muArr / rMag;
+        const double sma    = -m_muArr / (2.0 * energy);
+        if (sma > 0.0) {
+            const double cosNu = std::clamp(glm::dot(eVec / ecc, m_shipArrR / rMag), -1.0, 1.0);
+            double nu = std::acos(cosNu);
+            if (rv < 0.0) nu = -nu;
+            const double tanH    = std::tan(nu * 0.5) * std::sqrt((1.0 - ecc) / (1.0 + ecc));
+            const double E       = 2.0 * std::atan(tanH);
+            const double M       = E - ecc * std::sin(E);
+            const double n       = std::sqrt(m_muArr / (sma * sma * sma));
+            const double T       = 2.0 * M_PI / n;
+            const double tFromPe = M / n;
+            m_tToPeHyp = (tFromPe >= 0.0) ? -(T - tFromPe) : -tFromPe;
+        }
+    }
+
+    // MOI burn parameters — only meaningful on hyperbolic approach.
+    if (std::isfinite(m_tToPeHyp) && !m_capturedAtArrival && vInfSq > 0.0) {
+        const double rPeTgt    = m_arrBodyRadius + kPeTargetAlts[m_peAltIdx];
+        const double vAtPe     = std::sqrt(vInfSq + 2.0 * m_muArr / rPeTgt);
+        const double vCircAtPe = std::sqrt(m_muArr / rPeTgt);
+        m_moiDvCirc  = std::max(0.0, vAtPe - vCircAtPe);
+        const double accel = (m_shipMass > 1.0) ? m_mainThrustN / m_shipMass : 0.97;
+        m_moiBurnDur = m_moiDvCirc * 1000.0 / accel;
+        const double tIgn = m_tToPeHyp - m_moiBurnDur * 0.5;
+        m_moiIgnET = (tIgn > 0.0) ? m_currentET + tIgn : 0.0;
+    }
 }
 
 void TransferMFD::tickMcc()
@@ -2003,77 +2118,8 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
     diag.render(dl, origin, size, &m_coastViewRot);
 
-    // -----------------------------------------------------------------------
-    // Hyperbolic time-to-periapsis — computed once, used in both the progress
-    // bar (replaces Lambert countdown when on approach) and the MOI section.
-    // NaN when not on a hyperbolic approach.
-    // -----------------------------------------------------------------------
-    double tToPeHyp = std::numeric_limits<double>::quiet_NaN();
-    if (m_bplaneValid) {
-        const int arrNaif = m_params.arrivalBody;
-        double muArr = 0.0;
-        {
-            int pid = (arrNaif < 10) ? arrNaif * 100 + 99 : arrNaif;
-            try { astro::Spice().getPlanetaryConstants(pid,     "GM", muArr); } catch (...) {}
-            if (muArr <= 0.0)
-                try { astro::Spice().getPlanetaryConstants(arrNaif, "GM", muArr); } catch (...) {}
-        }
-        if (muArr > 0.0) {
-            astro::PosState arrState;
-            try {
-                astro::Spice().getRelativeGeometricState(arrNaif, m_params.centralBody,
-                    astro::EphemerisTime(m_currentET), arrState, kEclipJ2000);
-                const glm::dvec3 rRel = m_shipHelioR
-                    - glm::dvec3(arrState.r.x, arrState.r.y, arrState.r.z);
-                const glm::dvec3 vRel = m_shipHelioV
-                    - glm::dvec3(arrState.v.x, arrState.v.y, arrState.v.z);
-                const double rMag   = glm::length(rRel);
-                const double v2     = glm::dot(vRel, vRel);
-                const double vInfSq = v2 - 2.0 * muArr / rMag;
-                const double rv = glm::dot(rRel, vRel);
-                const glm::dvec3 eVec = ((v2 - muArr / rMag) * rRel - rv * vRel) / muArr;
-                const double ecc = glm::length(eVec);
-                if (vInfSq > 0.0 && rMag > 100.0 && ecc > 1.0) {
-                    // Hyperbolic approach: time to periapsis via hyperbolic anomaly.
-                    const double energy = 0.5 * v2 - muArr / rMag;
-                    const double absA   = muArr / (2.0 * std::abs(energy));
-                    const double cosNu  = std::clamp(
-                        glm::dot(eVec / ecc, rRel / rMag), -1.0, 1.0);
-                    double nu = std::acos(cosNu);
-                    if (rv < 0.0) nu = -nu;
-                    const double k    = std::sqrt((ecc - 1.0) / (ecc + 1.0));
-                    const double argF = k * std::tan(nu * 0.5);
-                    if (std::isfinite(argF) && std::abs(argF) < 1.0 - 1e-9) {
-                        const double F   = 2.0 * std::atanh(argF);
-                        if (std::isfinite(F) && absA > 1.0) {
-                            const double M_h = ecc * std::sinh(F) - F;
-                            const double n   = std::sqrt(muArr / (absA * absA * absA));
-                            tToPeHyp = -(M_h / n);
-                        }
-                    }
-                } else if (m_capturedAtArrival && rMag > 100.0 && ecc > 0.0 && ecc < 1.0) {
-                    // Captured in elliptic orbit: time to next periapsis via Kepler.
-                    const double energy = 0.5 * v2 - muArr / rMag;
-                    const double sma    = -muArr / (2.0 * energy);
-                    if (sma > 0.0) {
-                        const double cosNu = std::clamp(
-                            glm::dot(eVec / ecc, rRel / rMag), -1.0, 1.0);
-                        double nu = std::acos(cosNu);
-                        if (rv < 0.0) nu = -nu;
-                        const double tanH = std::tan(nu * 0.5)
-                                          * std::sqrt((1.0 - ecc) / (1.0 + ecc));
-                        const double E       = 2.0 * std::atan(tanH);
-                        const double M       = E - ecc * std::sin(E);
-                        const double n       = std::sqrt(muArr / (sma * sma * sma));
-                        const double T       = 2.0 * M_PI / n;
-                        const double tFromPe = M / n;  // negative = approaching, positive = past
-                        // Time to next periapsis (positive = countdown, negative = just passed)
-                        tToPeHyp = (tFromPe >= 0.0) ? -(T - tFromPe) : -tFromPe;
-                    }
-                }
-            } catch (...) {}
-        }
-    }
+    // tToPeHyp is kept current by tickApproach() (called from update() each frame).
+    const double tToPeHyp = m_tToPeHyp;
 
     // -----------------------------------------------------------------------
     // Text overlay
@@ -2190,66 +2236,8 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             addLine(kGreen, "CAPTURED  (elliptic orbit)");
         }
 
-        // -- Time to Pe, MOI/circ burn, and T-ignition ---------
-        // tToPeHyp holds the pre-computed time-to-Pe (valid for both hyperbolic
-        // approach and elliptic orbit).  Circularisation ΔV uses v∞ for
-        // hyperbolic, vis-viva for elliptic.
-        if (std::isfinite(tToPeHyp)) [&]() {
-            const int arrNaif = m_params.arrivalBody;
-            double muArr = 0.0, arrRadius = 0.0;
-            {
-                int pid = (arrNaif < 10) ? arrNaif * 100 + 99 : arrNaif;
-                try { astro::Spice().getPlanetaryConstants(pid,     "GM", muArr); } catch (...) {}
-                if (muArr <= 0.0)
-                    try { astro::Spice().getPlanetaryConstants(arrNaif, "GM", muArr); } catch (...) {}
-                if (muArr <= 0.0) return;
-                astro::Vec3 radii;
-                try { astro::Spice().getPlanetaryConstants(pid, "RADII", radii);
-                      arrRadius = radii.x; } catch (...) {}
-                if (arrRadius <= 0.0)
-                    try { astro::Vec3 r2;
-                          astro::Spice().getPlanetaryConstants(arrNaif, "RADII", r2);
-                          arrRadius = r2.x; } catch (...) {}
-                if (arrRadius <= 0.0) return;
-            }
-
-            // Body-relative state.
-            astro::PosState arrState;
-            try {
-                astro::Spice().getRelativeGeometricState(arrNaif, m_params.centralBody,
-                    astro::EphemerisTime(m_currentET), arrState, kEclipJ2000);
-            } catch (...) { return; }
-            const glm::dvec3 rRel = m_shipHelioR
-                - glm::dvec3(arrState.r.x, arrState.r.y, arrState.r.z);
-            const glm::dvec3 vRel = m_shipHelioV
-                - glm::dvec3(arrState.v.x, arrState.v.y, arrState.v.z);
-            const double rMag   = glm::length(rRel);
-            if (rMag < 100.0) return;
-            const double v2     = glm::dot(vRel, vRel);
-            const double vInfSq = v2 - 2.0 * muArr / rMag;
-
-            // Target Pe radius (target altitude for hyperbolic, current Pe for elliptic).
-            const double rPeTgt = m_capturedAtArrival
-                ? (arrRadius + m_bplanePeCurrentKm)       // actual Pe of current elliptic orbit
-                : (arrRadius + kPeTargetAlts[m_peAltIdx]); // target for MOI
-
-            // Circularisation ΔV:
-            //   Hyperbolic: v at Pe = sqrt(v∞² + 2μ/rPe)
-            //   Elliptic:   v at Pe = sqrt(v² - 2μ/r + 2μ/rPe)  (vis-viva energy transfer)
-            const double vAtPe = m_capturedAtArrival
-                ? std::sqrt(std::max(0.0, v2 - 2.0 * muArr / rMag + 2.0 * muArr / rPeTgt))
-                : std::sqrt(vInfSq + 2.0 * muArr / rPeTgt);
-            if (!m_capturedAtArrival && vInfSq <= 0.0) return;
-
-            const double vCircAtPe = std::sqrt(muArr / rPeTgt);
-            const double dvCirc    = std::max(0.0, vAtPe - vCircAtPe);
-
-            // Burn timing.
-            const double accelMs2 = (m_shipMass > 1.0)
-                                  ? m_mainThrustN / m_shipMass : 0.97;
-            const double burnDur  = dvCirc * 1000.0 / accelMs2;
-            const double tIgn     = tToPeHyp - burnDur * 0.5;
-
+        // -- Time to Pe and MOI burn planning (values from tickApproach) -------
+        if (std::isfinite(tToPeHyp)) {
             auto fmtSgn = [](double s, char* b, int sz) {
                 if (!std::isfinite(s)) { std::snprintf(b, sz, "--:--:--"); return; }
                 const bool neg = s < 0.0;
@@ -2259,18 +2247,34 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                 std::snprintf(b, sz, "%s%d:%02d:%02d", neg ? "-" : "", hh, mm, t);
             };
             char bufTpe[16], bufBurn[16], bufIgn[16];
-            fmtSgn(tToPeHyp, bufTpe,  sizeof(bufTpe));
-            fmtSgn(burnDur,  bufBurn, sizeof(bufBurn));
-            fmtSgn(tIgn,     bufIgn,  sizeof(bufIgn));
+            const double tIgnRel = (m_moiIgnET > 0.0) ? m_moiIgnET - m_currentET
+                                                       : std::numeric_limits<double>::quiet_NaN();
+            fmtSgn(tToPeHyp,  bufTpe,  sizeof(bufTpe));
+            fmtSgn(m_moiBurnDur, bufBurn, sizeof(bufBurn));
+            fmtSgn(tIgnRel,    bufIgn,  sizeof(bufIgn));
 
             sep();
             const ImU32 tPeCol = (tToPeHyp > 0.0) ? kCyan : kOrange;
             addLine(tPeCol,  "T-to-Pe   %s", bufTpe);
-            const char* dvLabel = m_capturedAtArrival ? "Circ dV" : "MOI dV ";
-            addLine(kYellow, "%s   %.3f km/s  (%s)", dvLabel, dvCirc, bufBurn);
-            if (!m_capturedAtArrival)
-                addLine(kCyan, "T-ign     %s  (T-0.5burn)", bufIgn);
-        }();
+            if (!m_capturedAtArrival && m_moiDvCirc > 0.0) {
+                addLine(kYellow, "MOI dV    %.3f km/s  (%s)", m_moiDvCirc, bufBurn);
+                addLine(kCyan,   "T-ign     %s  (T-0.5burn)", bufIgn);
+
+                // MOI burn controller status.
+                const auto moiPh = m_moiBurnCtrl.phase();
+                if (moiPh == BurnPhase::Armed || moiPh == BurnPhase::PreIgnition) {
+                    const double tti = m_moiBurnCtrl.plan().ignitionET - m_currentET;
+                    char bufCd[16]; fmtSgn(tti, bufCd, sizeof(bufCd));
+                    addLine(kCyan, "MOI ARMED  T-ign %s", bufCd);
+                } else if (moiPh == BurnPhase::Executing) {
+                    addLine(kOrange, "MOI EXECUTING");
+                } else if (moiPh == BurnPhase::Complete) {
+                    addLine(kGreen,  "MOI COMPLETE");
+                }
+            } else if (m_capturedAtArrival) {
+                addLine(kGreen, "CAPTURED  (elliptic orbit)");
+            }
+        }
     }
 
     // -- Measure max width and draw backing ----------------------------------
@@ -2327,8 +2331,10 @@ void TransferMFD::update(const MFDContext& ctx)
 
     tickMcc();
     tickBplane();
+    tickApproach();
 
     m_burnCtrl.tick(m_currentET, m_shipR, m_shipV);
+    m_moiBurnCtrl.tick(m_currentET, m_shipArrR, m_shipArrV);
 
     // Re-schedule MCC event if the solution moved by more than 60 s.
     if (m_eventQueue && m_detail.valid) {

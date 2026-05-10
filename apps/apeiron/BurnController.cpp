@@ -23,9 +23,10 @@ void BurnController::arm(const BurnPlan& plan,
     if (eq)
         eq->schedule(plan.name + "-IGN", plan.ignitionET, /* countdown10s= */ true);
 
-    // Slew to prograde immediately.
+    // Slew to burn attitude immediately.
     if (ap)
-        ap->mode = spacecraft::AutopilotMode::Prograde;
+        ap->mode = plan.retrogradeBurn ? spacecraft::AutopilotMode::Retrograde
+                                       : spacecraft::AutopilotMode::Prograde;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,20 +57,25 @@ void BurnController::tick(double currentET,
 
     // -----------------------------------------------------------------------
     case BurnPhase::Armed:
-        // At T-60 s: enter PreIgnition — re-enforce prograde and arm the
+        // At T-60 s: enter PreIgnition — re-enforce burn attitude and arm the
         // attitude check so any time-accel interruption gets corrected.
         if (currentET >= m_plan.ignitionET - kPreIgnLead) {
             if (m_autopilot)
-                m_autopilot->mode = spacecraft::AutopilotMode::Prograde;
+                m_autopilot->mode = m_plan.retrogradeBurn
+                    ? spacecraft::AutopilotMode::Retrograde
+                    : spacecraft::AutopilotMode::Prograde;
             m_phase = BurnPhase::PreIgnition;
         }
         return;
 
     // -----------------------------------------------------------------------
-    case BurnPhase::PreIgnition:
-        // Continuously re-engage prograde in case the user knocked it off.
-        if (m_autopilot && m_autopilot->mode != spacecraft::AutopilotMode::Prograde)
-            m_autopilot->mode = spacecraft::AutopilotMode::Prograde;
+    case BurnPhase::PreIgnition: {
+        // Continuously re-engage burn attitude in case the user knocked it off.
+        const auto burnAtt = m_plan.retrogradeBurn
+            ? spacecraft::AutopilotMode::Retrograde
+            : spacecraft::AutopilotMode::Prograde;
+        if (m_autopilot && m_autopilot->mode != burnAtt)
+            m_autopilot->mode = burnAtt;
 
         if (currentET >= m_plan.ignitionET) {
             const bool settled = !m_autopilot || !m_autopilot->inLargeSlew;
@@ -94,6 +100,7 @@ void BurnController::tick(double currentET,
             // else: still within the abort window, waiting for attitude to settle
         }
         return;
+    }
 
     // -----------------------------------------------------------------------
     case BurnPhase::Executing: {
@@ -101,7 +108,11 @@ void BurnController::tick(double currentET,
         if (r < 1.0 || m_plan.depBodyMu <= 0.0) return;
 
         const double c3Now = glm::dot(shipV, shipV) - 2.0 * m_plan.depBodyMu / r;
-        if (c3Now >= m_plan.c3Required) {
+        // Prograde (TMI): fire until energy rises above threshold (escape).
+        // Retrograde (MOI): fire until energy drops below threshold (capture).
+        const bool cutoff = m_plan.retrogradeBurn ? (c3Now <= m_plan.c3Required)
+                                                   : (c3Now >= m_plan.c3Required);
+        if (cutoff) {
             m_phase = BurnPhase::Complete;
 
             // Cancel the estimated MECO event and call out the real one.
