@@ -2294,6 +2294,10 @@ int main(int argc, char* argv[])
                 ImGui::Begin("##SIclock", nullptr, kFlags);
                 ImGui::TextColored({1.0f, 0.85f, 0.4f, 1.0f}, "%s UTC",
                                    currentEt.toISOUTCString(0).c_str());
+                if (simSpeedTarget == 1.0)
+                    ImGui::Text("1x real-time");
+                else
+                    ImGui::Text("%.0fx  [t / T]", simSpeedTarget);
                 ImGui::End();
             }
 
