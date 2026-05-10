@@ -997,6 +997,25 @@ void TransferMFD::renderPorkchop(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         dl->AddLine({ sx, gy0 }, { sx, gy1 }, IM_COL32(255,255,255,50), 0.5f);
     }
 
+    // ---- "Today" marker — vertical line at current simulation ET ----
+    {
+        const double t0 = m_data.params.t0;
+        const double t1 = m_data.params.t1;
+        if (m_currentET >= t0 && m_currentET <= t1) {
+            const float nx = gx0 + static_cast<float>((m_currentET - t0) / (t1 - t0)) * gw;
+            dl->AddLine({ nx, gy0 }, { nx, gy1 },
+                        IM_COL32(80, 220, 255, 180), 1.0f);
+            const char* nowLabel = "NOW";
+            ImVec2 tsz = ImGui::CalcTextSize(nowLabel);
+            // Label just above the bottom of the grid so it doesn't collide with ticks.
+            dl->AddRectFilled({ nx - 1.0f, gy1 - tsz.y - 3.0f },
+                              { nx + tsz.x + 2.0f, gy1 - 1.0f },
+                              IM_COL32(0, 0, 0, 140));
+            dl->AddText({ nx + 1.0f, gy1 - tsz.y - 2.0f },
+                        IM_COL32(80, 220, 255, 220), nowLabel);
+        }
+    }
+
     // ---- Axis ticks ----
     // Departure: 5 ticks along bottom
     for (int i = 0; i <= 4; ++i) {
