@@ -383,6 +383,7 @@ const char* TransferMFD::leftLabel(int slot) const
     case 2: return "TOF<";
     case 3: return "TOF>";
     case 4: return "BDY";
+    case 5: return "RST";
     default: return "";
     }
 }
@@ -519,6 +520,16 @@ void TransferMFD::onLeft(int slot)
     case 4:
         m_page = 4;   // BDY — open body-select page
         break;
+    case 5: {         // RST — reset window to now, sensible TOF, recompute
+        setEpoch(astro::EphemerisTime(m_currentET));
+        m_selDep    = -1;
+        m_selTof    = -1;
+        m_detail    = {};
+        m_hasData   = false;
+        m_error.clear();
+        compute();
+        break;
+    }
     default: break;
     }
 }

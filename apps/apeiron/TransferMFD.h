@@ -42,6 +42,7 @@ struct TransferPlanSnapshot {
 //   Left  2: TOF<   shift TOF range down          30 days
 //   Left  3: TOF>   shift TOF range up             30 days
 //   Left  4: BDY    open body-select page
+//   Left  5: RST    reset window to now + 2yr, default TOF, recompute
 //   Right 0: COMP   recompute (or INFO when a cell is selected)
 //   Right 1: WIN<   halve departure window span
 //   Right 2: WIN>   double departure window span
