@@ -1,6 +1,7 @@
 #include "TransferMFD.h"
 #include "OrbitDiagram.h"
 #include "BurnController.h"
+#include "VoiceAnnouncer.h"
 
 #include "apeiron/spacecraft/Autopilot.h"
 
@@ -404,7 +405,8 @@ const char* TransferMFD::rightLabel(int slot) const
             case BurnPhase::Complete:  return "";
             default:
                 return (!m_capturedAtArrival && m_bplaneValid
-                        && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0)
+                        && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0
+                        && inArrivalSoi())
                     ? "ARM" : "";
             }
         }
@@ -556,7 +558,8 @@ void TransferMFD::onRight(int slot)
                 || ph == BurnPhase::Executing) {
                 m_moiBurnCtrl.disarm();
             } else if (!m_capturedAtArrival && m_bplaneValid
-                       && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0) {
+                       && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0
+                       && inArrivalSoi()) {
                 BurnPlan plan;
                 plan.name           = "MOI";
                 plan.ignitionET     = m_moiIgnET;
@@ -2004,6 +2007,22 @@ void TransferMFD::tickBplane()
     m_bplaneValid = true;
 }
 
+bool TransferMFD::inArrivalSoi() const
+{
+    if (m_muArr <= 0.0) return false;
+    // Distance from ship to arrival body (arrival-body-centric position).
+    const double distKm = glm::length(m_shipArrR);
+    if (distKm < 1.0) return false;   // not yet initialised
+
+    // SOI = a_body * (μ_body / μ_sun)^(2/5); approximate a_body as the
+    // heliocentric distance of the arrival body = |shipHelio − shipArrR|.
+    const double muSun  = (m_params.muCentral > 0.0) ? m_params.muCentral : 1.32712440018e11;
+    const double aBody  = glm::length(m_shipHelioR - m_shipArrR);
+    if (aBody < 1.0) return false;
+    const double soiKm  = aBody * std::pow(m_muArr / muSun, 0.4);
+    return distKm < soiKm;
+}
+
 // ---------------------------------------------------------------------------
 // tickApproach — computes time-to-Pe and MOI burn parameters from cached
 // arrival-body state.  Called from update() after tickBplane().
@@ -2661,6 +2680,14 @@ void TransferMFD::update(const MFDContext& ctx)
     tickMcc();
     tickBplane();
     tickApproach();
+
+    // SOI transition announcements.
+    {
+        const bool nowInSoi = inArrivalSoi();
+        if (nowInSoi && !m_wasInArrivalSoi)
+            obc::speak("Entered " + m_arrBodyName + " sphere of influence.");
+        m_wasInArrivalSoi = nowInSoi;
+    }
 
     m_burnCtrl.tick(m_currentET, m_shipR, m_shipV);
     m_moiBurnCtrl.tick(m_currentET, m_shipArrR, m_shipArrV);

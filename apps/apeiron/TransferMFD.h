@@ -174,6 +174,9 @@ private:
     void selectDeparture(int idx);
     void selectArrival  (int idx);
 
+    // Returns true when the ship is inside the arrival body's sphere of influence.
+    bool inArrivalSoi() const;
+
     // Find the planet index for a given NAIF ID (-1 if not in table).
     static int findPlanetIdx(int naifId);
 
@@ -273,6 +276,7 @@ private:
     double     m_bplanePeCurrentKm = 0.0;
     bool       m_bplaneValid       = false;
     bool       m_capturedAtArrival = false;
+    bool       m_wasInArrivalSoi   = false;  // previous-frame SOI state for transition detection
 
     // Arrival inclination targeting (page 5).
     // Preset -1.0 = FREE (only Pe targeting, no inclination change).
