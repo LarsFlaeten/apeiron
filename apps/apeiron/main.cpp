@@ -1681,17 +1681,34 @@ int main(int argc, char* argv[])
 
                     rebuildAttractors(useBodyFrame);
 
+                    // In body-centric mode the old per-sub-step SPICE queries are gone,
+                    // so sub-step count is no longer SPICE-bound.  Enforce a minimum of
+                    // kMinOrbitSteps sub-steps per Keplerian orbit to keep RKF78 energy
+                    // conservation tight at any warp factor.
+                    double physStep = step;
+                    if (useBodyFrame && refBody.mu > 0.0) {
+                        const double r0 = glm::length(spacecraft[playerIdx]->position()
+                                                      - frameR0);  // body-centric radius
+                        if (r0 > 1.0) {
+                            constexpr double kMinOrbitSteps = 50.0;
+                            const double T = 2.0 * M_PI
+                                           * std::sqrt(r0 * r0 * r0 / refBody.mu);
+                            physStep = std::min(physStep, T / kMinOrbitSteps);
+                            physStep = std::max(physStep, kPhysStep);
+                        }
+                    }
+
                     physAccum += simDt;
-                    while (physAccum >= step) {
+                    while (physAccum >= physStep) {
                         // Pre-step: apply spring-damper forces before integration.
-                        dockingConstraint.update(step);
+                        dockingConstraint.update(physStep);
                         for (auto& sc : spacecraft)
                             if (!sc->parentId())
-                                sc->update(step, currentEt);
+                                sc->update(physStep, currentEt);
                         // Post-step: enforce rigid lock AFTER parent has integrated so
                         // docked child tracks parent's new position.
                         dockingConstraint.enforcePostStep();
-                        physAccum -= step;
+                        physAccum -= physStep;
                     }
 
                     if (useBodyFrame) {
