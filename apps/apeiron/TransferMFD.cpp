@@ -1794,12 +1794,11 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 // based on the latest ship trajectory.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// tickBplane — B-plane periapsis targeting for Mars approach.
-// Computes the ΔV needed to hit kPeTargetAlts[m_peAltIdx] km periapsis.
-// Burn direction: ĥ × r̂ (in orbit plane, perpendicular to velocity) — changes
-// impact parameter b without changing orbit plane or v∞.
-// Magnitude: ΔV = v∞ × |Δb| / |r|    (linear lever-arm approximation, exact
-// for a purely tangential burn; accurate when far from Mars, good enough near it).
+// tickBplane — B-plane periapsis + inclination targeting for arrival body approach.
+// Computes the minimum-norm ΔV that moves the B-vector from its current value
+// (derived from the actual hyperbolic orbit) to the target (Pe + optional incl).
+// Uses the exact lever-arm formula δv = −v∞·dB / (r·Ŝ) where Ŝ is the actual
+// incoming asymptote direction computed from the eccentricity vector.
 // ---------------------------------------------------------------------------
 void TransferMFD::tickBplane()
 {
@@ -1913,13 +1912,25 @@ void TransferMFD::tickBplane()
     m_insertionIncDeg = std::acos(std::clamp(glm::dot(hHat, zEcl), -1.0, 1.0))
                       * 180.0 / M_PI;
 
-    // ---- B-plane basis vectors ----
-    // S_hat: planned arrival asymptote direction (Lambert vArr - vArrBody).
+    // ---- Actual incoming asymptote direction from current orbit ----
+    // Compute Ŝ from the eccentricity vector of the current hyperbola:
+    //   Ŝ = ê/e + √(1 − 1/e²) · (ĥ × ê)    (unit vector, exact)
+    // This avoids depending on the Lambert plan and works correctly regardless
+    // of how far the current trajectory has drifted from the planned one.
     glm::dvec3 sHat;
     {
-        glm::dvec3 vInfVec = m_detail.vArr - m_detail.vArrBody;
-        double vInfVecMag = glm::length(vInfVec);
-        sHat = (vInfVecMag > 1e-6) ? (vInfVec / vInfVecMag) : glm::normalize(v);
+        const double vSq2 = glm::dot(v, v);
+        const double rv2  = glm::dot(r, v);
+        const glm::dvec3 eVec2 = ((vSq2 - muArr / rMag) * r - rv2 * v) / muArr;
+        const double     ecc2  = glm::length(eVec2);
+        if (ecc2 > 1.0 + 1e-6) {
+            const glm::dvec3 eHat2 = eVec2 / ecc2;
+            const glm::dvec3 qHat2 = glm::cross(hHat, eHat2);
+            const double     sinA  = std::sqrt(std::max(0.0, 1.0 - 1.0 / (ecc2 * ecc2)));
+            sHat = eHat2 / ecc2 + sinA * qHat2;   // already unit
+        } else {
+            sHat = glm::normalize(v);              // elliptic — use velocity direction
+        }
     }
     glm::dvec3 tHat, rHatBpl;
     {
@@ -1978,11 +1989,18 @@ void TransferMFD::tickBplane()
     const glm::dvec3 dB = (btTarget - btCurrent) * tHat
                         + (brTarget - brCurrent) * rHatBpl;
 
-    // ΔV using the lever-arm formula: ΔV = −(v∞/r) · r̂_orb × ΔB
-    // Min-norm solution to r × Δv = v∞·ΔB is Δv = −(r × v∞·ΔB)/r² (note sign).
-    // Exact when ΔB ⊥ r̂ (holds asymptotically; valid far from planet).
-    const glm::dvec3 rHatOrb = r / rMag;
-    m_bplaneDv    = -(vInf / rMag) * glm::cross(rHatOrb, dB);
+    // Exact lever-arm: δB_actual = (r × δv) × Ŝ / v∞.
+    // Min-norm solution (δv ⊥ Ŝ): δv = v∞ · δB_desired / (r·Ŝ).
+    // B̂_actual = ĥ × Ŝ = −B̂_code, so δB_desired = −dB.
+    // → δv = −v∞ · dB / (r·Ŝ).
+    // r·Ŝ < 0 on the incoming leg (r anti-parallel to Ŝ), so δv is in the +dB direction.
+    const double rDotS = glm::dot(r, sHat);
+    if (rDotS >= 0.0) {
+        // Ship is past periapsis on the outbound leg — no further B-plane correction.
+        m_bplaneValid = true;
+        return;
+    }
+    m_bplaneDv    = -(vInf / rDotS) * dB;   // rDotS < 0, so scalar is positive
     m_bplaneValid = true;
 }
 
