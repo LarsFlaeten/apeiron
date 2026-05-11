@@ -2601,6 +2601,7 @@ void TransferMFD::renderArrival(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
             // Arrival body as central body
             OrbitDiagram::CentralBody cb;
+            cb.radiusKm   = m_arrBodyRadius;
             cb.rimColour  = IM_COL32(200, 80, 50, 200);
             cb.axisColour = IM_COL32(200, 80, 50, 60);
             cb.drawAxes   = false;
