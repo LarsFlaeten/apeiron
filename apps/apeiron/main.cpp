@@ -1420,6 +1420,9 @@ int main(int argc, char* argv[])
                             desired[0] += mainEngineThrust;
                             mainEngineOn = true;
                         }
+                        if (auxEngineKey) {
+                            desired[0] += auxEngineThrust;
+                        }
                         // RCS translation (WASD/QE) — always solved RCS-only so the
                         // main engine is never allocated for lateral / retrograde moves.
                         // Aggressive mode scales up desired force so the pseudoinverse
