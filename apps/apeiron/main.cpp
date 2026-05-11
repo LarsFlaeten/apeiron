@@ -1593,78 +1593,123 @@ int main(int argc, char* argv[])
                 const double  simDt = static_cast<double>(frameDt) * simSecondsPerRealSecond;
                 const double  step  = std::max(kPhysStep, simDt / kMaxStepsPerFrame);
 
-                // Helper: rebuild attractors on every spacecraft from current gb.posECI.
-                auto rebuildAttractors = [&]() {
-                    for (auto& sc : spacecraft) {
-                        sc->clearAttractors();
+                {
+                    static const astro::ReferenceFrame kEclipPhys =
+                        astro::ReferenceFrame::createEclipJ2000();
+
+                    // ---- Body-centric integration frame --------------------------------
+                    // When orbiting a non-Earth, non-Sun body (e.g. Mars), the ECI
+                    // sub-stepper accumulates energy errors because the dominant body
+                    // moves hundreds of km in ECI during a single step and its position
+                    // is frozen at the sub-step midpoint.  Earth orbit is exact because
+                    // Earth is always at the ECI origin.
+                    //
+                    // Fix: shift all spacecraft to the dominant-body-centric frame before
+                    // integration.  The dominant attractor is at (0,0,0) every sub-step —
+                    // no frozen-position error.  Tidal forces from distant bodies (Sun,
+                    // Moon) are computed correctly via att.tidal=true with tidalRefPos at
+                    // the body-frame origin.  After all sub-steps we shift back to ECI
+                    // using the dominant body's end-of-frame ECI position.
+                    bool useBodyFrame =
+                        (dominantBodyName != "SUN" && dominantBodyName != "EARTH");
+
+                    glm::dvec3 frameR0(0.0), frameV0(0.0);  // dominant body ECI at frame start
+                    glm::dvec3 frameR1(0.0), frameV1(0.0);  // dominant body ECI at frame end
+
+                    if (useBodyFrame) {
+                        const double etStartVal = currentEt.getETValue() - simDt;
+                        bool frameOk = false;
                         for (const auto& gb : gravBodies) {
-                            astro::Attractor att;
-                            att.p           = gb.posECI;
-                            att.GM          = gb.gm;
-                            att.tidal       = (gb.name != "EARTH");
-                            att.tidalRefPos = glm::dvec3(0.0);
-                            sc->addAttractor(att);
-                        }
-                    }
-                };
-
-                // Per-sub-step attractor refresh is only needed when orbiting a close
-                // body (not Earth — always at origin; not Sun — distances >> orbit radius).
-                const bool needsSubstepRefresh =
-                    (dominantBodyName != "SUN" && dominantBodyName != "EARTH");
-
-                static const astro::ReferenceFrame kEclipPhys =
-                    astro::ReferenceFrame::createEclipJ2000();
-
-                physAccum += simDt;
-                while (physAccum >= step) {
-                    if (needsSubstepRefresh) {
-                        // Query dominant body at this sub-step's midpoint.
-                        // physAccum still includes this step, so current ship sim-time
-                        // = simElapsed − physAccum; sub-step midpoint is + step/2.
-                        const double midElapsed = simElapsed - physAccum + step * 0.5;
-                        const auto   subEt      = et + astro::TimeDelta(midElapsed);
-                        for (auto& gb : gravBodies) {
                             if (gb.name != dominantBodyName) continue;
                             try {
-                                astro::PosState s;
+                                astro::PosState s0, s1;
                                 astro::Spice().getRelativeGeometricState(
                                     static_cast<int>(gb.naifId), 399,
-                                    subEt, s, kEclipPhys);
-                                gb.posECI = glm::dvec3(s.r.x, s.r.y, s.r.z);
+                                    astro::EphemerisTime(etStartVal), s0, kEclipPhys);
+                                astro::Spice().getRelativeGeometricState(
+                                    static_cast<int>(gb.naifId), 399,
+                                    currentEt, s1, kEclipPhys);
+                                frameR0  = glm::dvec3(s0.r.x, s0.r.y, s0.r.z);
+                                frameV0  = glm::dvec3(s0.v.x, s0.v.y, s0.v.z);
+                                frameR1  = glm::dvec3(s1.r.x, s1.r.y, s1.r.z);
+                                frameV1  = glm::dvec3(s1.v.x, s1.v.y, s1.v.z);
+                                frameOk  = true;
                             } catch (...) {}
                             break;
                         }
-                        rebuildAttractors();
+                        if (!frameOk) useBodyFrame = false;  // fall back to ECI on SPICE failure
                     }
 
-                    // Pre-step: apply spring-damper forces before integration.
-                    dockingConstraint.update(step);
-                    for (auto& sc : spacecraft)
-                        if (!sc->parentId())
-                            sc->update(step, currentEt);
-                    // Post-step: enforce rigid lock AFTER ISS has integrated so
-                    // Orion tracks ISS's new position (avoids ~77 m orbital-velocity lag).
-                    dockingConstraint.enforcePostStep();
-                    physAccum -= step;
-                }
-
-                // After sub-steps, restore the dominant body's posECI to the
-                // display-time value (currentEt) so the orbit display and SOI
-                // detection use a consistent end-of-frame position.
-                if (needsSubstepRefresh) {
-                    for (auto& gb : gravBodies) {
-                        if (gb.name != dominantBodyName) continue;
-                        try {
-                            astro::PosState s;
-                            astro::Spice().getRelativeGeometricState(
-                                static_cast<int>(gb.naifId), 399,
-                                currentEt, s, kEclipPhys);
-                            gb.posECI = glm::dvec3(s.r.x, s.r.y, s.r.z);
-                        } catch (...) {}
-                        break;
+                    // Transform free (non-docked) spacecraft to body-centric frame.
+                    if (useBodyFrame) {
+                        for (auto& sc : spacecraft) {
+                            if (sc->parentId()) continue;
+                            sc->setPosition(sc->position() - frameR0);
+                            sc->setVelocity(sc->velocity() - frameV0);
+                        }
                     }
-                    rebuildAttractors();
+
+                    // Helper: rebuild attractors.  When useBodyFrame=true the dominant
+                    // body sits at (0,0,0); perturbers get tidal=true so the integrator
+                    // subtracts their net acceleration on the dominant body, leaving only
+                    // the differential tidal force — correct for a body-centric frame.
+                    auto rebuildAttractors = [&](bool bodyFrame) {
+                        for (auto& sc : spacecraft) {
+                            sc->clearAttractors();
+                            for (const auto& gb : gravBodies) {
+                                astro::Attractor att;
+                                att.GM = gb.gm;
+                                if (bodyFrame) {
+                                    // Dominant body is pinned to the frame origin.
+                                    // gb.posECI is at currentEt (end of frame) but
+                                    // frameR0 is at frame start — using posECI-frameR0
+                                    // would place Mars ~400 km off-centre at 1000× warp.
+                                    const bool isDominant = (gb.name == dominantBodyName);
+                                    att.p           = isDominant ? glm::dvec3(0.0)
+                                                                 : gb.posECI - frameR0;
+                                    att.tidal       = !isDominant;
+                                    att.tidalRefPos = glm::dvec3(0.0);
+                                } else {
+                                    att.p           = gb.posECI;
+                                    att.tidal       = (gb.name != "EARTH");
+                                    att.tidalRefPos = glm::dvec3(0.0);
+                                }
+                                sc->addAttractor(att);
+                            }
+                        }
+                    };
+
+                    rebuildAttractors(useBodyFrame);
+
+                    physAccum += simDt;
+                    while (physAccum >= step) {
+                        // Pre-step: apply spring-damper forces before integration.
+                        dockingConstraint.update(step);
+                        for (auto& sc : spacecraft)
+                            if (!sc->parentId())
+                                sc->update(step, currentEt);
+                        // Post-step: enforce rigid lock AFTER parent has integrated so
+                        // docked child tracks parent's new position.
+                        dockingConstraint.enforcePostStep();
+                        physAccum -= step;
+                    }
+
+                    if (useBodyFrame) {
+                        // Transform all spacecraft (parents and docked children) back to ECI
+                        // using the dominant body's end-of-frame position.
+                        for (auto& sc : spacecraft) {
+                            sc->setPosition(sc->position() + frameR1);
+                            sc->setVelocity(sc->velocity() + frameV1);
+                        }
+                        // Update dominant body posECI to end-of-frame value so orbit
+                        // display and next-frame SOI detection use a consistent position.
+                        for (auto& gb : gravBodies) {
+                            if (gb.name != dominantBodyName) continue;
+                            gb.posECI = frameR1;
+                            break;
+                        }
+                        rebuildAttractors(false);  // restore ECI attractors
+                    }
                 }
             }
 
