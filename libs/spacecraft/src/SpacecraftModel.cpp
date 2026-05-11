@@ -158,6 +158,19 @@ void SpacecraftModel::buildEffectivenessMatrix()
             fillBColumn(B_rcs, col, thrusters[m_rcsIdx[col]], centerOfMass);
         computePseudoinverse(B_rcs, m_N_rcs, m_Bpinv_rcs);
     }
+
+    // Auxiliary-only subset.
+    m_auxIdx.clear();
+    for (int i = 0; i < m_N; ++i)
+        if (thrusters[i].type == ThrusterType::Auxiliary)
+            m_auxIdx.push_back(i);
+    m_N_aux = static_cast<int>(m_auxIdx.size());
+    if (m_N_aux > 0) {
+        std::vector<double> B_aux(6 * m_N_aux, 0.0);
+        for (int col = 0; col < m_N_aux; ++col)
+            fillBColumn(B_aux, col, thrusters[m_auxIdx[col]], centerOfMass);
+        computePseudoinverse(B_aux, m_N_aux, m_Bpinv_aux);
+    }
 }
 
 void SpacecraftModel::solveAllocation(const Wrench& desired)
@@ -187,6 +200,23 @@ void SpacecraftModel::solveAllocationRcsOnly(const Wrench& desired)
         for (int c = 0; c < 6; ++c)
             val += m_Bpinv_rcs[r + m_N_rcs * c] * desired[c];
         thrusters[m_rcsIdx[r]].throttle = static_cast<float>(std::clamp(val, 0.0, 1.0));
+    }
+}
+
+void SpacecraftModel::solveAllocationAuxOnly(const Wrench& desired)
+{
+    if (m_N == 0) return;
+
+    // Zero all throttles first.
+    for (auto& t : thrusters) t.throttle = 0.0f;
+
+    if (m_N_aux == 0) return;
+
+    for (int r = 0; r < m_N_aux; ++r) {
+        double val = 0.0;
+        for (int c = 0; c < 6; ++c)
+            val += m_Bpinv_aux[r + m_N_aux * c] * desired[c];
+        thrusters[m_auxIdx[r]].throttle = static_cast<float>(std::clamp(val, 0.0, 1.0));
     }
 }
 

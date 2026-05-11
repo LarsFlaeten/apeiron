@@ -550,6 +550,15 @@ int main(int argc, char* argv[])
         double mainEngineThrust  = (!orionModel.thrusters.empty()
                                     ? static_cast<double>(orionModel.thrusters[0].thrustN)
                                     : 25'700.0);  // N  (SPACE)
+        // Aux thrust for scalar fallback — sum of all Auxiliary thruster max values,
+        // or ~1760 N (8 × 220 N) if no manifest is loaded.
+        double auxEngineThrust   = [&]() -> double {
+            double sum = 0.0;
+            for (const auto& t : orionModel.thrusters)
+                if (t.type == spacecraft::ThrusterType::Auxiliary)
+                    sum += static_cast<double>(t.thrustN);
+            return sum > 0.0 ? sum : 1'760.0;
+        }();
         double rcsThrust         =    400.0;  // N  (WASD/QE)
         double rcsTorque         =  1'000.0;  // N·m (IJKL/UO)
         // In Docking mode WASD desired force is multiplied by this factor so the
@@ -1396,10 +1405,16 @@ int main(int argc, char* argv[])
                         // Orion model space: +X = aft, engine pointing +X.
                         spacecraft::Wrench desired{};
 
+                        // SHIFT+SPACE fires aux thrusters; plain SPACE fires main engine.
+                        const bool shiftHeld =
+                            glfwGetKey(window, GLFW_KEY_LEFT_SHIFT)  == GLFW_PRESS
+                            || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+                        const bool spaceDown = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+                        const bool auxEngineKey  = spaceDown && shiftHeld;
                         // Main engine (SPACE) — tracked separately so allocation
                         // always uses the full matrix when the main engine is firing.
                         const bool mainEngineKey =
-                            glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS
+                            (spaceDown && !shiftHeld)
                             || transferMFD.requestMainEngine();
                         if (mainEngineKey) {
                             desired[0] += mainEngineThrust;
@@ -1509,6 +1524,9 @@ int main(int argc, char* argv[])
                         //   pass 2: RCS-only for attitude correction → aux stay zero
                         //   then restore main engine throttle (pass 2 zeroed it)
                         //
+                        // Aux thrusters (SHIFT+SPACE): same two-pass logic but pass 1
+                        //   uses aux-only matrix instead of the full matrix.
+                        //
                         // Manual WASD translation: RCS-only (same reason).
                         if (mainEngineKey) {
                             // Pass 1: forward thrust via full matrix.
@@ -1540,6 +1558,29 @@ int main(int argc, char* argv[])
                             orionModel.solveAllocationRcsOnly(torqueOnly);
                             if (!orionModel.thrusters.empty())
                                 orionModel.thrusters[0].throttle = mainThrottle;
+                        } else if (auxEngineKey) {
+                            // Pass 1: forward thrust via aux-only matrix.
+                            spacecraft::Wrench thrustOnly{};
+                            thrustOnly[0] = desired[0];
+                            thrustOnly[1] = desired[1];
+                            thrustOnly[2] = desired[2];
+                            orionModel.solveAllocationAuxOnly(thrustOnly);
+
+                            // Pass 2: RCS handles attitude (aux throttles are preserved).
+                            spacecraft::Wrench torqueOnly{};
+                            torqueOnly[3] = desired[3];
+                            torqueOnly[4] = desired[4];
+                            torqueOnly[5] = desired[5];
+                            // solveAllocationRcsOnly zeroes all throttles first, so save
+                            // aux throttles, run RCS solve, then restore.
+                            std::vector<float> auxSaved;
+                            auxSaved.reserve(orionModel.thrusters.size());
+                            for (const auto& t : orionModel.thrusters)
+                                auxSaved.push_back(t.throttle);
+                            orionModel.solveAllocationRcsOnly(torqueOnly);
+                            for (std::size_t i = 0; i < orionModel.thrusters.size(); ++i)
+                                if (orionModel.thrusters[i].type == spacecraft::ThrusterType::Auxiliary)
+                                    orionModel.thrusters[i].throttle = auxSaved[i];
                         } else {
                             orionModel.solveAllocationRcsOnly(desired);
                         }
@@ -1550,7 +1591,13 @@ int main(int argc, char* argv[])
                         shipTorque = glm::dvec3(T);
                     } else {
                         // ---- Scalar fallback (no manifest) ----
-                        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS
+                        const bool shiftHeldFb =
+                            glfwGetKey(window, GLFW_KEY_LEFT_SHIFT)  == GLFW_PRESS
+                            || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+                        const bool spaceDownFb = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+                        if (spaceDownFb && shiftHeldFb) {
+                            shipForce.x += auxEngineThrust;  // SHIFT+SPACE — aux only
+                        } else if (spaceDownFb && !shiftHeldFb
                             || transferMFD.requestMainEngine()) {
                             shipForce.x += mainEngineThrust;
                             mainEngineOn = true;
