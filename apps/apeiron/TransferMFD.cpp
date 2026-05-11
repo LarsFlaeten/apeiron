@@ -36,6 +36,15 @@ static const PlanetEntry kPlanets[] = {
 static constexpr int kNPlanets = static_cast<int>(std::size(kPlanets));
 
 // ---------------------------------------------------------------------------
+// Inclination preset names (parallel to TransferMFD::kIncPresetDeg[]).
+// ---------------------------------------------------------------------------
+static const char* const kIncPresetName[] = {
+    "FREE", "PRO 0", "30", "60", "POL 90", "120", "150", "RET 180"
+};
+static constexpr int kNIncPresets =
+    static_cast<int>(std::size(kIncPresetName));
+
+// ---------------------------------------------------------------------------
 // Format a signed time delta (seconds) as "T+1d", "T-3d", or "T+HH:MM" when
 // inside the final 24 hours.
 static void fmtTplus(double deltaSec, char* buf, int sz)
@@ -331,6 +340,14 @@ void TransferMFD::compute()
 // ---------------------------------------------------------------------------
 const char* TransferMFD::leftLabel(int slot) const
 {
+    if (m_page == 5) {
+        switch (slot) {
+        case 0: return "INC<";
+        case 1: return "INC>";
+        case 4: return "BACK";
+        default: return "";
+        }
+    }
     if (m_page == 4) {
         switch (slot) {
         case 0: return "DEP<";
@@ -343,19 +360,6 @@ const char* TransferMFD::leftLabel(int slot) const
     }
     if (m_page == 3) {
         if (slot == 4) return "BACK";
-        if (slot == 3) return "PE";
-        if (slot == 2) {
-            switch (m_moiBurnCtrl.phase()) {
-            case BurnPhase::Armed:
-            case BurnPhase::PreIgnition:
-            case BurnPhase::Executing: return "DSARM";
-            case BurnPhase::Complete:  return "";
-            default:
-                return (!m_capturedAtArrival && m_bplaneValid
-                        && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0)
-                    ? "ARM" : "";
-            }
-        }
         return "";
     }
     if (m_page == 2) {
@@ -390,8 +394,27 @@ const char* TransferMFD::leftLabel(int slot) const
 
 const char* TransferMFD::rightLabel(int slot) const
 {
+    if (m_page == 5) {
+        if (slot == 3) return "PE";
+        if (slot == 4) {
+            switch (m_moiBurnCtrl.phase()) {
+            case BurnPhase::Armed:
+            case BurnPhase::PreIgnition:
+            case BurnPhase::Executing: return "DSARM";
+            case BurnPhase::Complete:  return "";
+            default:
+                return (!m_capturedAtArrival && m_bplaneValid
+                        && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0)
+                    ? "ARM" : "";
+            }
+        }
+        return "";
+    }
     if (m_page == 4) return "";
-    if (m_page == 3) return "";
+    if (m_page == 3) {
+        if (slot == 4) return "ARR";
+        return "";
+    }
     if (m_page == 2) {
         if (slot == 4) return "CST";
         return "";
@@ -412,6 +435,18 @@ const char* TransferMFD::rightLabel(int slot) const
 
 void TransferMFD::onLeft(int slot)
 {
+    if (m_page == 5) {
+        if (slot == 0) {
+            m_incPresetIdx = (m_incPresetIdx + kNIncPresets - 1) % kNIncPresets;
+            return;
+        }
+        if (slot == 1) {
+            m_incPresetIdx = (m_incPresetIdx + 1) % kNIncPresets;
+            return;
+        }
+        if (slot == 4) { m_page = 3; return; }
+        return;
+    }
     if (m_page == 4) {
         const int nP = kNPlanets;
         switch (slot) {
@@ -426,32 +461,6 @@ void TransferMFD::onLeft(int slot)
     }
     if (m_page == 3) {
         if (slot == 4) { m_page = 2; return; }
-        if (slot == 3) {
-            m_peAltIdx = (m_peAltIdx + 1) % static_cast<int>(std::size(kPeTargetAlts));
-            return;
-        }
-        if (slot == 2) {
-            const auto ph = m_moiBurnCtrl.phase();
-            if (ph == BurnPhase::Armed || ph == BurnPhase::PreIgnition
-                || ph == BurnPhase::Executing) {
-                m_moiBurnCtrl.disarm();
-            } else if (!m_capturedAtArrival && m_bplaneValid
-                       && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0) {
-                BurnPlan plan;
-                plan.name           = "MOI";
-                plan.ignitionET     = m_moiIgnET;
-                // Target orbital energy for a circular orbit at the chosen Pe altitude.
-                // MECO fires when  v² - 2μ/r  drops to  -μ/rPe  (negative, captured).
-                const double rPeTgt = m_arrBodyRadius + kPeTargetAlts[m_peAltIdx];
-                plan.c3Required     = -m_muArr / rPeTgt;
-                plan.depBodyMu      = m_muArr;
-                plan.dvMagnitude    = m_moiDvCirc;
-                plan.burnDuration   = m_moiBurnDur;
-                plan.retrogradeBurn = true;
-                m_moiBurnCtrl.arm(plan, m_autopilot, m_eventQueue);
-            }
-            return;
-        }
         return;
     }
     if (m_page == 2) {
@@ -536,8 +545,38 @@ void TransferMFD::onLeft(int slot)
 
 void TransferMFD::onRight(int slot)
 {
+    if (m_page == 5) {
+        if (slot == 3) {
+            m_peAltIdx = (m_peAltIdx + 1) % static_cast<int>(std::size(kPeTargetAlts));
+            return;
+        }
+        if (slot == 4) {
+            const auto ph = m_moiBurnCtrl.phase();
+            if (ph == BurnPhase::Armed || ph == BurnPhase::PreIgnition
+                || ph == BurnPhase::Executing) {
+                m_moiBurnCtrl.disarm();
+            } else if (!m_capturedAtArrival && m_bplaneValid
+                       && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0) {
+                BurnPlan plan;
+                plan.name           = "MOI";
+                plan.ignitionET     = m_moiIgnET;
+                const double rPeTgt = m_arrBodyRadius + kPeTargetAlts[m_peAltIdx];
+                plan.c3Required     = -m_muArr / rPeTgt;
+                plan.depBodyMu      = m_muArr;
+                plan.dvMagnitude    = m_moiDvCirc;
+                plan.burnDuration   = m_moiBurnDur;
+                plan.retrogradeBurn = true;
+                m_moiBurnCtrl.arm(plan, m_autopilot, m_eventQueue);
+            }
+            return;
+        }
+        return;
+    }
     if (m_page == 4) return;
-    if (m_page == 3) return;
+    if (m_page == 3) {
+        if (slot == 4) { m_page = 5; return; }
+        return;
+    }
     if (m_page == 2) {
         if (slot == 4) m_page = 3;
         return;
@@ -672,6 +711,7 @@ void TransferMFD::resolveSelected()
 // ---------------------------------------------------------------------------
 void TransferMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 {
+    if (m_page == 5) { renderArrival   (dl, origin, size); return; }
     if (m_page == 4) { renderBodySelect(dl, origin, size); return; }
     if (m_page == 3) { renderCoasting  (dl, origin, size); return; }
     if (m_page == 2) { renderDeparture (dl, origin, size); return; }
@@ -1771,6 +1811,7 @@ void TransferMFD::tickBplane()
     m_shipArrV          = glm::dvec3(0.0);
     m_muArr             = 0.0;
     m_arrBodyRadius     = 0.0;
+    m_insertionIncDeg   = 0.0;
 
     if (!m_detail.valid) return;
 
@@ -1861,20 +1902,86 @@ void TransferMFD::tickBplane()
     double rPe   = -alpha + std::sqrt(alpha * alpha + b * b);
     m_bplanePeCurrentKm = rPe - arrRadius;
 
-    // Target impact parameter from desired Pe altitude.
-    double rPeTarget = arrRadius + kPeTargetAlts[m_peAltIdx];
-    double bTarget   = std::sqrt(rPeTarget * rPeTarget
-                                 + 2.0 * muArr * rPeTarget / vInfSq);
+    // Target impact parameter magnitude from desired Pe altitude.
+    const double rPeTarget = arrRadius + kPeTargetAlts[m_peAltIdx];
+    const double bTarget   = std::sqrt(rPeTarget * rPeTarget
+                                       + 2.0 * muArr * rPeTarget / vInfSq);
 
-    // ΔV: burn in direction ĥ × r to change |h| (and thus b and Pe).
-    // ΔV = v∞ × |Δb| / |r|  (lever-arm formula; exact for a tangential burn).
-    double     deltaB = bTarget - b;
-    glm::dvec3 hHat   = hVec / h;
-    glm::dvec3 dvDir  = glm::normalize(glm::cross(hHat, r));  // increases |h|
-    double     dvSign = (deltaB >= 0.0) ? 1.0 : -1.0;
-    double     dvMag  = vInf * std::abs(deltaB) / rMag;
+    // ---- Current orbit normal and ecliptic inclination ----
+    const glm::dvec3 hHat = hVec / h;
+    const glm::dvec3 zEcl(0.0, 0.0, 1.0);
+    m_insertionIncDeg = std::acos(std::clamp(glm::dot(hHat, zEcl), -1.0, 1.0))
+                      * 180.0 / M_PI;
 
-    m_bplaneDv    = dvSign * dvMag * dvDir;  // km/s, ECLIPJ2000 inertial direction
+    // ---- B-plane basis vectors ----
+    // S_hat: planned arrival asymptote direction (Lambert vArr - vArrBody).
+    glm::dvec3 sHat;
+    {
+        glm::dvec3 vInfVec = m_detail.vArr - m_detail.vArrBody;
+        double vInfVecMag = glm::length(vInfVec);
+        sHat = (vInfVecMag > 1e-6) ? (vInfVec / vInfVecMag) : glm::normalize(v);
+    }
+    glm::dvec3 tHat, rHatBpl;
+    {
+        glm::dvec3 tRaw = glm::cross(sHat, zEcl);
+        if (glm::length(tRaw) < 1e-6) {
+            tHat = glm::normalize(glm::cross(sHat, glm::dvec3(1.0, 0.0, 0.0)));
+        } else {
+            tHat = glm::normalize(tRaw);
+        }
+        rHatBpl = glm::cross(sHat, tHat);  // already unit (sHat ⊥ tHat)
+    }
+
+    // ---- Current B-vector phase angle in the B-plane ----
+    // Derived from: orbit normal ĥ = -cos(φ)·R̂ + sin(φ)·T̂
+    // So φ = atan2(ĥ·T̂, -(ĥ·R̂))
+    const double phiCurrent = std::atan2(glm::dot(hHat, tHat),
+                                         -glm::dot(hHat, rHatBpl));
+
+    // ---- Target B-vector phase angle (from inclination preset) ----
+    double phiTarget;
+    if (m_incPresetIdx <= 0 || kIncPresetDeg[m_incPresetIdx] < 0.0) {
+        // FREE mode: keep current B direction, only change |B|.
+        phiTarget = phiCurrent;
+    } else {
+        // Solve: cos(inc) = (T̂·ẑ)·sin(φ) - (R̂·ẑ)·cos(φ) for φ.
+        const double incTgtRad = kIncPresetDeg[m_incPresetIdx] * M_PI / 180.0;
+        const double cosInc    = std::cos(incTgtRad);
+        const double a         = glm::dot(tHat, zEcl);
+        const double c         = glm::dot(rHatBpl, zEcl);
+        const double amp       = std::sqrt(a * a + c * c);
+        if (amp < 1e-9 || std::abs(cosInc) > amp + 1e-9) {
+            phiTarget = phiCurrent;  // inclination not achievable, keep current
+        } else {
+            const double arg  = std::clamp(cosInc / amp, -1.0, 1.0);
+            const double base = std::atan2(c, a);
+            auto wrapPi = [](double x) {
+                while (x >  M_PI) x -= 2.0 * M_PI;
+                while (x < -M_PI) x += 2.0 * M_PI;
+                return x;
+            };
+            double phi0 = wrapPi(base + std::asin(arg));
+            double phi1 = wrapPi(base + M_PI - std::asin(arg));
+            // Pick the solution closest to current φ (minimises |ΔV|).
+            double d0 = std::abs(wrapPi(phi0 - phiCurrent));
+            double d1 = std::abs(wrapPi(phi1 - phiCurrent));
+            phiTarget = (d0 <= d1) ? phi0 : phi1;
+        }
+    }
+
+    // ---- Compute target B-vector and ΔB ----
+    const double btTarget  = bTarget * std::cos(phiTarget);
+    const double brTarget  = bTarget * std::sin(phiTarget);
+    const double btCurrent = b * std::cos(phiCurrent);
+    const double brCurrent = b * std::sin(phiCurrent);
+
+    const glm::dvec3 dB = (btTarget - btCurrent) * tHat
+                        + (brTarget - brCurrent) * rHatBpl;
+
+    // ΔV using the lever-arm formula: ΔV = (v∞/r) · r̂_orb × ΔB
+    // Minimum-norm impulse; exact when r ⊥ Ŝ (valid far from planet).
+    const glm::dvec3 rHatOrb = r / rMag;
+    m_bplaneDv    = (vInf / rMag) * glm::cross(rHatOrb, dB);
     m_bplaneValid = true;
 }
 
@@ -2238,72 +2345,37 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             addLine(kDim,    " arr dV %.3f km/s (new)", glm::length(vMCC_arr - m_detail.vArrBody));
     }
 
-    // -- B-plane targeting ---------------------------------------------------
+    // -- Approach status (brief) — full detail on ARR page ------------------
     if (m_bplaneValid) {
         sep();
         const double peNow = m_bplanePeCurrentKm;
-        const double peTgt = kPeTargetAlts[m_peAltIdx];
-        const double bplDv = glm::length(m_bplaneDv);
-
-        // Pe current — colour-code: green = already safe, red = impact
-        ImU32 peNowCol = (peNow > 0.0) ? kGreen : IM_COL32(255, 60, 60, 220);
-        if (peNow > 0.0)
-            addLine(peNowCol, "Pe now  %.0f km", peNow);
+        ImU32 peCol = (peNow > 0.0) ? kGreen : IM_COL32(255, 60, 60, 220);
+        if (m_capturedAtArrival)
+            addLine(kGreen, "CAPTURED  Pe %.0f km  [ARR]", peNow);
+        else if (peNow > 0.0)
+            addLine(peCol, "Pe now  %.0f km  [ARR for details]", peNow);
         else
-            addLine(peNowCol, "Pe now  %.0f km  IMPACT", peNow);
+            addLine(peCol, "Pe now  %.0f km  IMPACT  [ARR]", peNow);
 
-        // Pe target (user-selectable via PE button)
-        addLine(kYellow,  "Pe tgt  %.0f km  [PE]", peTgt);
-
-        // B-plane correction ΔV — only meaningful while still on hyperbolic approach.
-        if (!m_capturedAtArrival) {
-            ImU32 bplCol = (bplDv < 0.001) ? kGreen :
-                           (bplDv < 0.1)   ? kYellow : kOrange;
-            addLine(bplCol, "BPL dV  %.3f km/s", bplDv);
-            if (bplDv < 0.001)
-                addLine(kGreen, " Pe ON TARGET");
-        } else {
-            addLine(kGreen, "CAPTURED  (elliptic orbit)");
+        if (std::isfinite(tToPeHyp)) {
+            const bool neg = tToPeHyp < 0.0;
+            int t = static_cast<int>(std::abs(tToPeHyp) + 0.5);
+            const int hh = t / 3600; t %= 3600;
+            const int mm = t / 60;   t %= 60;
+            char bufPe[20];
+            std::snprintf(bufPe, sizeof(bufPe), "%s%d:%02d:%02d",
+                          neg ? "-" : "", hh, mm, t);
+            addLine((tToPeHyp > 0.0) ? kCyan : kOrange,
+                    " T-to-Pe  %s", bufPe);
         }
 
-        // -- Time to Pe and MOI burn planning (values from tickApproach) -------
-        if (std::isfinite(tToPeHyp)) {
-            auto fmtSgn = [](double s, char* b, int sz) {
-                if (!std::isfinite(s)) { std::snprintf(b, sz, "--:--:--"); return; }
-                const bool neg = s < 0.0;
-                int t = static_cast<int>(std::abs(s) + 0.5);
-                const int hh = t / 3600; t %= 3600;
-                const int mm = t / 60;   t %= 60;
-                std::snprintf(b, sz, "%s%d:%02d:%02d", neg ? "-" : "", hh, mm, t);
-            };
-            char bufTpe[16], bufBurn[16], bufIgn[16];
-            const double tIgnRel = (m_moiIgnET > 0.0) ? m_moiIgnET - m_currentET
-                                                       : std::numeric_limits<double>::quiet_NaN();
-            fmtSgn(tToPeHyp,  bufTpe,  sizeof(bufTpe));
-            fmtSgn(m_moiBurnDur, bufBurn, sizeof(bufBurn));
-            fmtSgn(tIgnRel,    bufIgn,  sizeof(bufIgn));
-
-            sep();
-            const ImU32 tPeCol = (tToPeHyp > 0.0) ? kCyan : kOrange;
-            addLine(tPeCol,  "T-to-Pe   %s", bufTpe);
-            if (!m_capturedAtArrival && m_moiDvCirc > 0.0) {
-                addLine(kYellow, "MOI dV    %.3f km/s  (%s)", m_moiDvCirc, bufBurn);
-                addLine(kCyan,   "T-ign     %s  (T-0.5burn)", bufIgn);
-
-                // MOI burn controller status.
-                const auto moiPh = m_moiBurnCtrl.phase();
-                if (moiPh == BurnPhase::Armed || moiPh == BurnPhase::PreIgnition) {
-                    const double tti = m_moiBurnCtrl.plan().ignitionET - m_currentET;
-                    char bufCd[16]; fmtSgn(tti, bufCd, sizeof(bufCd));
-                    addLine(kCyan, "MOI ARMED  T-ign %s", bufCd);
-                } else if (moiPh == BurnPhase::Executing) {
-                    addLine(kOrange, "MOI EXECUTING");
-                } else if (moiPh == BurnPhase::Complete) {
-                    addLine(kGreen,  "MOI COMPLETE");
-                }
-            } else if (m_capturedAtArrival) {
-                addLine(kGreen, "CAPTURED  (elliptic orbit)");
-            }
+        const auto moiPh = m_moiBurnCtrl.phase();
+        if (moiPh == BurnPhase::Armed || moiPh == BurnPhase::PreIgnition) {
+            addLine(kCyan, " MOI ARMED");
+        } else if (moiPh == BurnPhase::Executing) {
+            addLine(kOrange, " MOI EXECUTING");
+        } else if (moiPh == BurnPhase::Complete) {
+            addLine(kGreen,  " MOI COMPLETE");
         }
     }
 
@@ -2323,6 +2395,213 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     for (auto& l : lines) {
         if (l.col) dl->AddText({ ox, oy }, l.col, l.txt);
         oy += lineH;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Page 5: arrival B-plane targeting.
+//
+// Shows the full B-vector correction (Pe + inclination), MOI burn planning,
+// and the approach hyperbola from the arrival-body-centric perspective.
+// ---------------------------------------------------------------------------
+void TransferMFD::renderArrival(ImDrawList* dl, ImVec2 origin, ImVec2 size)
+{
+    const ImU32 kGreen   = IM_COL32(  0, 210,  75, 210);
+    const ImU32 kDim     = IM_COL32(  0, 140,  50, 140);
+    const ImU32 kYellow  = IM_COL32(255, 220,   0, 230);
+    const ImU32 kCyan    = IM_COL32(  0, 200, 220, 220);
+    const ImU32 kOrange  = IM_COL32(255, 140,   0, 220);
+    const ImU32 kRed     = IM_COL32(255,  60,  60, 220);
+    const ImU32 kBacking = IM_COL32(  0,   0,   0, 175);
+
+    if (!m_detail.valid) {
+        dl->AddText({ origin.x + 4.0f, origin.y + 4.0f }, kDim,
+                    "No transfer selected");
+        return;
+    }
+
+    // ---- Formatters --------------------------------------------------------
+    auto fmtSgn = [](double s, char* b, int sz) {
+        if (!std::isfinite(s)) { std::snprintf(b, sz, "--:--:--"); return; }
+        const bool neg = s < 0.0;
+        int t = static_cast<int>(std::abs(s) + 0.5);
+        const int hh = t / 3600; t %= 3600;
+        const int mm = t / 60;   t %= 60;
+        std::snprintf(b, sz, "%s%d:%02d:%02d", neg ? "-" : "", hh, mm, t);
+    };
+
+    // ---- Lines buffer ------------------------------------------------------
+    struct Line { ImU32 col; char txt[96]; };
+    std::vector<Line> lines;
+    auto add = [&](ImU32 col, const char* fmt, ...) {
+        Line l; l.col = col;
+        va_list ap; va_start(ap, fmt);
+        std::vsnprintf(l.txt, sizeof(l.txt), fmt, ap);
+        va_end(ap);
+        lines.push_back(l);
+    };
+    auto sep = [&]() { Line l; l.col = 0; l.txt[0] = '\0'; lines.push_back(l); };
+
+    // ---- Arrival v∞ --------------------------------------------------------
+    {
+        glm::dvec3 vInfVec = m_detail.vArr - m_detail.vArrBody;
+        double     vInfMag = glm::length(vInfVec);
+        add(kDim, "ARR  %s  ->  %s",
+            m_depBodyName.c_str(), m_arrBodyName.c_str());
+        add(kCyan, "v-inf  %.3f km/s", vInfMag);
+
+        // v∞ inclination above ecliptic
+        if (vInfMag > 1e-6) {
+            double sinInc = vInfVec.z / vInfMag;
+            double incDeg = std::asin(std::clamp(sinInc, -1.0, 1.0)) * 180.0 / M_PI;
+            add(kDim, "  v-inf inc  %.1f° (ecl)", incDeg);
+        }
+    }
+    sep();
+
+    // ---- Current approach state --------------------------------------------
+    if (!m_bplaneValid) {
+        add(kDim, "B-plane not active");
+        add(kDim, " (outside SOI or no v-inf)");
+    } else {
+        const double peNow  = m_bplanePeCurrentKm;
+        const double peTgt  = kPeTargetAlts[m_peAltIdx];
+        const double bplDv  = glm::length(m_bplaneDv);
+        const double incNow = m_insertionIncDeg;
+
+        // Pe current
+        ImU32 peNowCol = (peNow > 0.0) ? kGreen : kRed;
+        if (m_capturedAtArrival)
+            add(kGreen, "Pe now  %.0f km  (captured)", peNow);
+        else if (peNow > 0.0)
+            add(peNowCol, "Pe now  %.0f km", peNow);
+        else
+            add(peNowCol, "Pe now  %.0f km  IMPACT", peNow);
+
+        // Pe target
+        add(kYellow, "Pe tgt  %.0f km  [PE]", peTgt);
+
+        sep();
+
+        // Insertion orbit inclination
+        add(kCyan,   "Inc now  %.1f°  (ecl)", incNow);
+
+        // Target inclination
+        const char* presetName = (m_incPresetIdx >= 0 && m_incPresetIdx < kNIncPresets)
+                               ? kIncPresetName[m_incPresetIdx] : "?";
+        if (m_incPresetIdx == 0) {
+            add(kDim, "Inc tgt  FREE (Pe only)  [INC]");
+        } else {
+            double tgtDeg = kIncPresetDeg[m_incPresetIdx];
+            add(kYellow, "Inc tgt  %s = %.0f°  [INC]", presetName, tgtDeg);
+        }
+
+        sep();
+
+        // B-plane ΔV
+        if (!m_capturedAtArrival) {
+            ImU32 bplCol = (bplDv < 0.001) ? kGreen :
+                           (bplDv < 0.1)   ? kYellow : kOrange;
+            add(bplCol, "BPL dV  %.3f km/s", bplDv);
+            if (bplDv < 0.001) {
+                add(kGreen, " ON TARGET");
+            } else {
+                add(kDim,  "  %.4f  %.4f  %.4f  km/s",
+                    m_bplaneDv.x, m_bplaneDv.y, m_bplaneDv.z);
+            }
+        } else {
+            add(kGreen, "CAPTURED  (elliptic orbit)");
+        }
+
+        // ---- Time-to-Pe and MOI burn ----------------------------------------
+        if (std::isfinite(m_tToPeHyp)) {
+            sep();
+            char bufTpe[16], bufBurn[16], bufIgn[16];
+            const double tIgnRel = (m_moiIgnET > 0.0)
+                                 ? m_moiIgnET - m_currentET
+                                 : std::numeric_limits<double>::quiet_NaN();
+            fmtSgn(m_tToPeHyp,   bufTpe,  sizeof(bufTpe));
+            fmtSgn(m_moiBurnDur,  bufBurn, sizeof(bufBurn));
+            fmtSgn(tIgnRel,       bufIgn,  sizeof(bufIgn));
+
+            const ImU32 tPeCol = (m_tToPeHyp > 0.0) ? kCyan : kOrange;
+            add(tPeCol,  "T-to-Pe   %s", bufTpe);
+
+            if (!m_capturedAtArrival && m_moiDvCirc > 0.0) {
+                add(kYellow, "MOI dV    %.3f km/s  (%s)", m_moiDvCirc, bufBurn);
+                add(kCyan,   "T-ign     %s  (T-0.5burn)", bufIgn);
+
+                sep();
+
+                // ARM status / button prompt
+                const auto moiPh = m_moiBurnCtrl.phase();
+                if (moiPh == BurnPhase::Armed || moiPh == BurnPhase::PreIgnition) {
+                    char bufCd[16];
+                    fmtSgn(m_moiBurnCtrl.plan().ignitionET - m_currentET,
+                           bufCd, sizeof(bufCd));
+                    add(kCyan,   "MOI ARMED  T-ign %s", bufCd);
+                    add(kDim,    " [DSARM] to cancel");
+                } else if (moiPh == BurnPhase::Executing) {
+                    add(kOrange, "MOI EXECUTING");
+                } else if (moiPh == BurnPhase::Complete) {
+                    add(kGreen,  "MOI COMPLETE");
+                } else if (m_moiIgnET > m_currentET) {
+                    add(kDim,    "[ARM] to arm MOI autopilot");
+                }
+            }
+        }
+    }
+
+    // ---- Draw text panel ---------------------------------------------------
+    const float pad   = 3.0f;
+    const float lineH = 11.0f;
+
+    float maxW = 0.0f;
+    for (auto& l : lines)
+        if (l.col) maxW = std::max(maxW, ImGui::CalcTextSize(l.txt).x);
+
+    float bx0 = origin.x + pad;
+    float by0 = origin.y + pad;
+    float bx1 = bx0 + maxW + pad * 2.0f;
+    float by1 = by0 + static_cast<float>(lines.size()) * lineH + pad;
+
+    dl->AddRectFilled({ bx0, by0 }, { bx1, by1 }, kBacking, 3.0f);
+
+    float tx = bx0 + pad, ty = by0 + pad * 0.5f;
+    for (auto& l : lines) {
+        if (l.col) dl->AddText({ tx, ty }, l.col, l.txt);
+        ty += lineH;
+    }
+
+    // ---- Orbit diagram: arrival body centric approach ----------------------
+    if (m_bplaneValid && m_muArr > 0.0 && m_arrBodyRadius > 0.0) {
+        const float diagY0  = by1 + pad * 2.0f;
+        const float diagH   = origin.y + size.y - diagY0 - pad;
+        if (diagH >= 40.0f) {
+            OrbitDiagram diag;
+
+            // Arrival body as central body
+            OrbitDiagram::CentralBody cb;
+            cb.rimColour  = IM_COL32(200, 80, 50, 200);
+            cb.axisColour = IM_COL32(200, 80, 50, 60);
+            cb.drawAxes   = false;
+            diag.setCentralBody(cb);
+
+            // Ship approach trajectory (body-centric state)
+            if (glm::length(m_shipArrR) > 100.0) {
+                OrbitDiagram::Orbit o;
+                o.r           = m_shipArrR;
+                o.v           = m_shipArrV;
+                o.mu          = m_muArr;
+                o.colour      = kCyan;
+                o.showApses   = true;
+                o.showCurrent = true;
+                diag.addOrbit(o);
+            }
+
+            diag.render(dl, { origin.x, diagY0 }, { size.x, diagH },
+                        &m_arrViewRot);
+        }
     }
 }
 

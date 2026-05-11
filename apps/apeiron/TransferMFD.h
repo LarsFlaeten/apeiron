@@ -34,7 +34,8 @@ struct TransferPlanSnapshot {
 // Page 0 — Porkchop plot  (departure date × TOF grid, colour = total ΔV)
 // Page 1 — Leg detail     (orbit diagram + transfer parameters for selected cell)
 // Page 2 — Departure      (geocentric burn planning)
-// Page 3 — Coasting       (heliocentric progress, MCC, B-plane)
+// Page 3 — Coasting       (heliocentric progress, MCC, B-plane summary)
+// Page 5 — Arrival        (B-plane full targeting: Pe + inclination, MOI ARM)
 //
 // Page 0 buttons:
 //   Left  0: DEP<   shift departure window back  30 days
@@ -49,12 +50,24 @@ struct TransferPlanSnapshot {
 //   Right 3: RNG<   halve TOF range span
 //   Right 4: RNG>   double TOF range span
 //
+// Page 3 buttons:
+//   Left  3: PE     cycle Pe altitude target
+//   Left  4: BACK
+//   Right 4: ARR    open arrival page
+//
 // Page 4 buttons:
 //   Left  0: DEP<   cycle departure body backward
 //   Left  1: DEP>   cycle departure body forward
 //   Left  2: ARR<   cycle arrival body backward
 //   Left  3: ARR>   cycle arrival body forward
 //   Left  4: OK     return to porkchop
+//
+// Page 5 buttons:
+//   Left  0: INC<   cycle target inclination preset backward
+//   Left  1: INC>   cycle target inclination preset forward
+//   Left  4: BACK
+//   Right 3: PE     cycle Pe altitude target
+//   Right 4: ARM / DSARM
 // ---------------------------------------------------------------------------
 class TransferMFD : public MFDApp {
 public:
@@ -140,6 +153,7 @@ private:
     void renderDetail     (ImDrawList* dl, ImVec2 origin, ImVec2 size);
     void renderDeparture  (ImDrawList* dl, ImVec2 origin, ImVec2 size);
     void renderCoasting   (ImDrawList* dl, ImVec2 origin, ImVec2 size);
+    void renderArrival    (ImDrawList* dl, ImVec2 origin, ImVec2 size);
 
     void resolveSelected();
     static ImU32 dvColor(float t);
@@ -186,7 +200,7 @@ private:
     // ---- Selection ----
     int  m_selDep = -1;
     int  m_selTof = -1;
-    int  m_page   = 0;   // 0=porkchop, 1=detail, 2=departure, 3=coasting, 4=bodyselect
+    int  m_page   = 0;   // 0=porkchop, 1=detail, 2=departure, 3=coasting, 4=bodyselect, 5=arrival
 
     // ---- Cached detail for selected cell ----
     struct SelDetail {
@@ -218,6 +232,7 @@ private:
     glm::dmat3 m_depViewRot     { 1.0 };
     glm::dmat3 m_coastViewRot   { 1.0 };
     glm::dmat3 m_bodySelViewRot { 1.0 };
+    glm::dmat3 m_arrViewRot     { 1.0 };
 
     // Current ship departure-body-centric state and sim time.
     glm::dvec3 m_shipR     { 0.0 };
@@ -258,4 +273,12 @@ private:
     double     m_bplanePeCurrentKm = 0.0;
     bool       m_bplaneValid       = false;
     bool       m_capturedAtArrival = false;
+
+    // Arrival inclination targeting (page 5).
+    // Preset -1.0 = FREE (only Pe targeting, no inclination change).
+    // Other values are target ecliptic inclination in degrees.
+    static constexpr double kIncPresetDeg[] =
+        { -1.0, 0.0, 30.0, 60.0, 90.0, 120.0, 150.0, 180.0 };
+    int    m_incPresetIdx    = 0;   // 0 = FREE
+    double m_insertionIncDeg = 0.0; // current predicted insertion orbit inclination (deg)
 };
