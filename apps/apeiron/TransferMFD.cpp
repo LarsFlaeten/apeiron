@@ -1978,10 +1978,11 @@ void TransferMFD::tickBplane()
     const glm::dvec3 dB = (btTarget - btCurrent) * tHat
                         + (brTarget - brCurrent) * rHatBpl;
 
-    // ΔV using the lever-arm formula: ΔV = (v∞/r) · r̂_orb × ΔB
-    // Minimum-norm impulse; exact when r ⊥ Ŝ (valid far from planet).
+    // ΔV using the lever-arm formula: ΔV = −(v∞/r) · r̂_orb × ΔB
+    // Min-norm solution to r × Δv = v∞·ΔB is Δv = −(r × v∞·ΔB)/r² (note sign).
+    // Exact when ΔB ⊥ r̂ (holds asymptotically; valid far from planet).
     const glm::dvec3 rHatOrb = r / rMag;
-    m_bplaneDv    = (vInf / rMag) * glm::cross(rHatOrb, dB);
+    m_bplaneDv    = -(vInf / rMag) * glm::cross(rHatOrb, dB);
     m_bplaneValid = true;
 }
 
