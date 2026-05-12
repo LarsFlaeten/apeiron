@@ -569,6 +569,7 @@ void TransferMFD::onRight(int slot)
                 plan.dvMagnitude    = m_moiDvCirc;
                 plan.burnDuration   = m_moiBurnDur;
                 plan.retrogradeBurn = true;
+                if (m_eventQueue) m_eventQueue->cancelByName("MOI");
                 m_moiBurnCtrl.arm(plan, m_autopilot, m_eventQueue);
             }
             return;
