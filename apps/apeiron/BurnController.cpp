@@ -30,6 +30,18 @@ void BurnController::arm(const BurnPlan& plan,
 }
 
 // ---------------------------------------------------------------------------
+void BurnController::updateIgnitionET(double newET, OBCEventQueue* eq)
+{
+    if (m_phase != BurnPhase::Armed) return;
+    const double delta = std::abs(newET - m_plan.ignitionET);
+    m_plan.ignitionET = newET;
+    if (eq && delta > 30.0) {
+        eq->cancelByName(m_plan.name + "-IGN");
+        eq->schedule(m_plan.name + "-IGN", newET, /* countdown10s= */ true);
+    }
+}
+
+// ---------------------------------------------------------------------------
 void BurnController::disarm()
 {
     if (m_evtQueue) {

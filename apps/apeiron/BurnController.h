@@ -51,6 +51,12 @@ public:
     void arm   (const BurnPlan& plan, spacecraft::Autopilot* ap, OBCEventQueue* eq);
     void disarm();
 
+    // Update the ignition ET while in Armed phase (no-op once PreIgnition begins).
+    // Keeps the burn centered on Pe as MCCs adjust the trajectory.
+    // Re-schedules the countdown event only when the shift exceeds 30 s to avoid
+    // resetting announcement flags on every frame.
+    void updateIgnitionET(double newET, OBCEventQueue* eq);
+
     // Per-frame update. shipR/V must be departure-body-centric (km / km·s⁻¹).
     void tick(double currentET, const glm::dvec3& shipR, const glm::dvec3& shipV);
 

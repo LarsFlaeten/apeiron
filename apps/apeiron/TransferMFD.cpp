@@ -2682,6 +2682,10 @@ void TransferMFD::update(const MFDContext& ctx)
     tickBplane();
     tickApproach();
 
+    // Keep MOI ignition ET live while Armed so MCCs don't desync the burn point.
+    if (m_moiIgnET > m_currentET)
+        m_moiBurnCtrl.updateIgnitionET(m_moiIgnET, m_eventQueue);
+
     // SOI transition announcements.
     {
         const bool nowInSoi = inArrivalSoi();
