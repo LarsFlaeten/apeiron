@@ -86,20 +86,20 @@ atmosphere.mie_extinction   = 9.0e-3
 atmosphere.mie_scale_h      = 8.0
 atmosphere.mie_g            = 0.70
 
-# [[bodies]]
-# naif       = "JUPITER BARYCENTER"
-# radii_naif = "JUPITER"
-# color = [1.0, 1.0, 1.0]
-# diffuse = "../textures/jupiter/8k_jupiter.jpg"
+[[bodies]]
+naif       = "JUPITER BARYCENTER"
+radii_naif = "JUPITER"
+color = [1.0, 1.0, 1.0]
+diffuse = "../textures/jupiter/8k_jupiter.jpg"
 
 # [[bodies]]
-# naif       = "SATURN BARYCENTER"
-# radii_naif = "SATURN"
-# color = [1.0, 1.0, 1.0]
-# diffuse           = "../textures/saturn/8k_saturn.jpg"
-# ring_texture      = "../textures/saturn/8k_saturn_ring_alpha.png"
-# ring_inner_radius = 1.11
-# ring_outer_radius = 2.35
+naif       = "SATURN BARYCENTER"
+radii_naif = "SATURN"
+color = [1.0, 1.0, 1.0]
+diffuse           = "../textures/saturn/8k_saturn.jpg"
+ring_texture      = "../textures/saturn/8k_saturn_ring_alpha.png"
+ring_inner_radius = 1.11
+ring_outer_radius = 2.35
 
 # [[bodies]]
 # naif       = "URANUS BARYCENTER"

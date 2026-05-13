@@ -402,7 +402,6 @@ const char* TransferMFD::rightLabel(int slot) const
             case BurnPhase::Armed:
             case BurnPhase::PreIgnition:
             case BurnPhase::Executing: return "DSARM";
-            case BurnPhase::Complete:  return "";
             default:
                 return (!m_capturedAtArrival && m_bplaneValid
                         && m_moiIgnET > m_currentET && m_moiDvCirc > 0.0
