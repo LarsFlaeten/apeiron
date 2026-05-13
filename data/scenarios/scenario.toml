@@ -92,7 +92,7 @@ radii_naif = "JUPITER"
 color = [1.0, 1.0, 1.0]
 diffuse = "../textures/jupiter/8k_jupiter.jpg"
 
-# [[bodies]]
+[[bodies]]
 naif       = "SATURN BARYCENTER"
 radii_naif = "SATURN"
 color = [1.0, 1.0, 1.0]

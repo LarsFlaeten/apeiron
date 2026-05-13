@@ -9,6 +9,8 @@ namespace spacecraft { class Autopilot; }
 
 #include <glm/glm.hpp>
 #include <string>
+#include <vector>
+#include <string>
 
 // ---------------------------------------------------------------------------
 // MFDContext — per-frame snapshot of simulator state for MFD consumption.
@@ -25,6 +27,14 @@ namespace spacecraft { class Autopilot; }
 //   mfd.update(ctx)
 // call for each MFD.
 // ---------------------------------------------------------------------------
+// One entry per solar-system body available for transfer planning.
+// Populated by main.cpp from the loaded scenario; TransferMFD reads it.
+struct BodyEntry {
+    std::string naifName;   // as loaded, e.g. "JUPITER BARYCENTER"
+    std::string shortName;  // first word, e.g. "JUPITER"
+    int         naifId = 0; // SPICE integer NAIF code
+};
+
 struct MFDContext {
     // ---- Time ---------------------------------------------------------------
     astro::EphemerisTime currentEt;    // canonical simulation ET
@@ -63,4 +73,8 @@ struct MFDContext {
 
     // ---- Autopilot (non-owning) — for burn arm/disarm from MFDs -------------
     spacecraft::Autopilot* autopilot = nullptr;
+
+    // ---- Bodies available for transfer planning (populated from scenario) ---
+    // Excludes Sun and moons; contains planets and barycenters only.
+    std::vector<BodyEntry> solarSystemBodies;
 };

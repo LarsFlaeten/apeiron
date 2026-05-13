@@ -23,18 +23,6 @@ static constexpr double kDay = 86400.0;
 // ---------------------------------------------------------------------------
 // Planet table for the body-select page.
 // ---------------------------------------------------------------------------
-struct PlanetEntry { int naifId; const char* name; };
-static const PlanetEntry kPlanets[] = {
-    { 199, "MERCURY" },
-    { 299, "VENUS"   },
-    { 399, "EARTH"   },
-    { 499, "MARS"    },
-    { 599, "JUPITER" },
-    { 699, "SATURN"  },
-    { 799, "URANUS"  },
-    { 899, "NEPTUNE" },
-};
-static constexpr int kNPlanets = static_cast<int>(std::size(kPlanets));
 
 // ---------------------------------------------------------------------------
 // Inclination preset names (parallel to TransferMFD::kIncPresetDeg[]).
@@ -85,10 +73,10 @@ ImU32 TransferMFD::dvColor(float t)
 }
 
 // ---------------------------------------------------------------------------
-int TransferMFD::findPlanetIdx(int naifId)
+int TransferMFD::findPlanetIdx(int naifId) const
 {
-    for (int i = 0; i < kNPlanets; ++i)
-        if (kPlanets[i].naifId == naifId) return i;
+    for (int i = 0; i < static_cast<int>(m_bodies.size()); ++i)
+        if (m_bodies[i].naifId == naifId) return i;
     return -1;
 }
 
@@ -165,11 +153,11 @@ void TransferMFD::updateDefaultTof()
 
 void TransferMFD::selectDeparture(int idx)
 {
-    if (idx < 0 || idx >= kNPlanets) return;
+    if (idx < 0 || idx >= static_cast<int>(m_bodies.size())) return;
     m_depPlanetIdx         = idx;
-    m_params.departureBody = kPlanets[idx].naifId;
+    m_params.departureBody = m_bodies[idx].naifId;
     m_params.muCentral     = 0.0;
-    m_depBodyName          = kPlanets[idx].name;
+    m_depBodyName          = m_bodies[idx].shortName;
     queryDepBodyConstants();
     updateDefaultTof();
     m_hasData = false;
@@ -178,10 +166,10 @@ void TransferMFD::selectDeparture(int idx)
 
 void TransferMFD::selectArrival(int idx)
 {
-    if (idx < 0 || idx >= kNPlanets) return;
+    if (idx < 0 || idx >= static_cast<int>(m_bodies.size())) return;
     m_arrPlanetIdx        = idx;
-    m_params.arrivalBody  = kPlanets[idx].naifId;
-    m_arrBodyName         = kPlanets[idx].name;
+    m_params.arrivalBody  = m_bodies[idx].naifId;
+    m_arrBodyName         = m_bodies[idx].shortName;
     updateDefaultTof();
     m_hasData = false;
     m_detail  = {};
@@ -275,8 +263,8 @@ void TransferMFD::restorePlan(const TransferPlanSnapshot& snap)
     // Restore planet indices from NAIF IDs.
     int di = findPlanetIdx(m_params.departureBody);
     int ai = findPlanetIdx(m_params.arrivalBody);
-    if (di >= 0) { m_depPlanetIdx = di; m_depBodyName = kPlanets[di].name; }
-    if (ai >= 0) { m_arrPlanetIdx = ai; m_arrBodyName = kPlanets[ai].name; }
+    if (di >= 0) { m_depPlanetIdx = di; m_depBodyName = m_bodies[di].shortName; }
+    if (ai >= 0) { m_arrPlanetIdx = ai; m_arrBodyName = m_bodies[ai].shortName; }
     queryDepBodyConstants();
 
     const int selDep = snap.selDep;
@@ -293,13 +281,13 @@ void TransferMFD::setEpoch(const astro::EphemerisTime& et)
 {
     m_currentET = et.getETValue();
 
-    m_params.departureBody = kPlanets[m_depPlanetIdx].naifId;  // 399 (Earth)
-    m_params.arrivalBody   = kPlanets[m_arrPlanetIdx].naifId;  // 499 (Mars)
+    // Departure/arrival bodies keep their current values (defaulting to 399/499
+    // from member initializers); resolved into m_bodies indices in update() once
+    // the body list arrives from MFDContext.
+    if (m_params.departureBody == 0) m_params.departureBody = 399;
+    if (m_params.arrivalBody   == 0) m_params.arrivalBody   = 499;
     m_params.centralBody   = 10;   // Sun
     m_params.muCentral     = 0.0;
-
-    m_depBodyName = kPlanets[m_depPlanetIdx].name;
-    m_arrBodyName = kPlanets[m_arrPlanetIdx].name;
     queryDepBodyConstants();
 
     m_params.t0 = m_currentET;
@@ -449,12 +437,15 @@ void TransferMFD::onLeft(int slot)
         return;
     }
     if (m_page == 4) {
-        const int nP = kNPlanets;
+        const int nP = static_cast<int>(m_bodies.size());
+        if (nP == 0) return;
+        const int di = (m_depPlanetIdx < 0) ? 0 : m_depPlanetIdx;
+        const int ai = (m_arrPlanetIdx < 0) ? 0 : m_arrPlanetIdx;
         switch (slot) {
-        case 0: selectDeparture((m_depPlanetIdx + nP - 1) % nP); break;
-        case 1: selectDeparture((m_depPlanetIdx + 1)      % nP); break;
-        case 2: selectArrival  ((m_arrPlanetIdx + nP - 1) % nP); break;
-        case 3: selectArrival  ((m_arrPlanetIdx + 1)      % nP); break;
+        case 0: selectDeparture((di + nP - 1) % nP); break;
+        case 1: selectDeparture((di + 1)      % nP); break;
+        case 2: selectArrival  ((ai + nP - 1) % nP); break;
+        case 3: selectArrival  ((ai + 1)      % nP); break;
         case 4: m_page = 0; break;
         default: break;
         }
@@ -743,11 +734,11 @@ void TransferMFD::renderBodySelect(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // ---- Orbit diagram: all planets ----
     OrbitDiagram diag;
 
-    for (int i = 0; i < kNPlanets; ++i) {
+    for (int i = 0; i < static_cast<int>(m_bodies.size()); ++i) {
         try {
             astro::PosState ps;
             astro::Spice().getRelativeGeometricState(
-                kPlanets[i].naifId, m_params.centralBody,
+                m_bodies[i].naifId, m_params.centralBody,
                 astro::EphemerisTime(m_currentET), ps, kEclipJ2000);
             glm::dvec3 r(ps.r.x, ps.r.y, ps.r.z);
             glm::dvec3 v(ps.v.x, ps.v.y, ps.v.z);
@@ -766,11 +757,9 @@ void TransferMFD::renderBodySelect(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
             diag.addOrbit(r, v, muSun, col, "", false, false);
 
-            // Planet marker
             ImU32 mCol = isDepIdx ? kDepCol : (isArrIdx ? kArrCol : IM_COL32(120,120,120,200));
-            // Use first 3 chars of name as label
             char label[4];
-            std::snprintf(label, sizeof(label), "%.3s", kPlanets[i].name);
+            std::snprintf(label, sizeof(label), "%.3s", m_bodies[i].shortName.c_str());
             diag.addMarker(r, mCol, label);
         } catch (...) {}
     }
@@ -2649,6 +2638,25 @@ void TransferMFD::update(const MFDContext& ctx)
 {
     m_eventQueue = ctx.eventQueue;
     m_autopilot  = ctx.autopilot;
+
+    // Populate body list from context on first call (or if it changes).
+    if (m_bodies.size() != ctx.solarSystemBodies.size()) {
+        m_bodies = ctx.solarSystemBodies;
+        // Resolve indices from the current NAIF IDs (may have been set by setEpoch
+        // or restorePlan before the body list was available).
+        int di = findPlanetIdx(m_params.departureBody);
+        int ai = findPlanetIdx(m_params.arrivalBody);
+        if (di < 0) di = findPlanetIdx(399);   // fallback: Earth
+        if (ai < 0) ai = findPlanetIdx(499);   // fallback: Mars
+        // Also try barycenters if planet-centre IDs aren't in the list.
+        if (di < 0) di = findPlanetIdx(3);
+        if (ai < 0) ai = findPlanetIdx(4);
+        if (di >= 0) { m_depPlanetIdx = di; m_depBodyName = m_bodies[di].shortName;
+                       m_params.departureBody = m_bodies[di].naifId; queryDepBodyConstants(); }
+        if (ai >= 0) { m_arrPlanetIdx = ai; m_arrBodyName = m_bodies[ai].shortName;
+                       m_params.arrivalBody   = m_bodies[ai].naifId; }
+        updateDefaultTof();
+    }
 
     // Compute departure-body-centric state from heliocentric.
     // For Earth (399) the dedicated geocentric field is more precise;

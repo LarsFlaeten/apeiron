@@ -177,12 +177,14 @@ private:
     // Returns true when the ship is inside the arrival body's sphere of influence.
     bool inArrivalSoi() const;
 
-    // Find the planet index for a given NAIF ID (-1 if not in table).
-    static int findPlanetIdx(int naifId);
+    // Find the index of a NAIF ID in m_bodies (-1 if not found).
+    int findPlanetIdx(int naifId) const;
 
     // ---- Body selection ----
-    int m_depPlanetIdx = 2;   // index into kPlanets[] — default Earth
-    int m_arrPlanetIdx = 3;   // index into kPlanets[] — default Mars
+    // Populated from MFDContext::solarSystemBodies on first update().
+    std::vector<BodyEntry> m_bodies;
+    int m_depPlanetIdx = -1;   // index into m_bodies (-1 until populated)
+    int m_arrPlanetIdx = -1;   // index into m_bodies (-1 until populated)
 
     // Display names for departure and arrival bodies.
     std::string m_depBodyName = "EARTH";

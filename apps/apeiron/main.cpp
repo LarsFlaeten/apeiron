@@ -376,6 +376,26 @@ int main(int argc, char* argv[])
                 }
             }
         }
+        // Bodies available for transfer planning — planets and barycenters only,
+        // excluding the Sun.  Built once from bodyInfos; handed to MFDContext.
+        // Filter: barycenters 1-9, or planet centres x99 (199-899).
+        std::vector<BodyEntry> transferBodies;
+        {
+            for (auto& bi : bodyInfos) {
+                const std::string& name = bi.node->naifName();
+                SpiceInt id; SpiceBoolean found;
+                bodn2c_c(name.c_str(), &id, &found);
+                if (!found) continue;
+                // Barycenters 1-9 or planet centres 199,299,...,899.
+                const bool isBarycenter   = (id >= 1 && id <= 9);
+                const bool isPlanetCentre = (id >= 199 && id <= 899 && id % 100 == 99);
+                if (!isBarycenter && !isPlanetCentre) continue;
+                // Short name = first word of NAIF name.
+                std::string shortName = name.substr(0, name.find(' '));
+                transferBodies.push_back({ name, shortName, static_cast<int>(id) });
+            }
+        }
+
         // Track which body currently dominates gravity for the player spacecraft.
         // Start assuming Earth.
         std::string dominantBodyName = "EARTH";
@@ -2455,8 +2475,9 @@ int main(int argc, char* argv[])
                 mfdCtx.shipGeoV        = ship.velocity();
                 mfdCtx.mainThrustN     = mainEngineThrust;
                 mfdCtx.shipMassKg      = shipMass;
-                mfdCtx.eventQueue      = &obcEventQueue;
-                mfdCtx.autopilot       = &autopilot;
+                mfdCtx.eventQueue        = &obcEventQueue;
+                mfdCtx.autopilot         = &autopilot;
+                mfdCtx.solarSystemBodies = transferBodies;
 
                 // Ship state relative to reference body.
                 {
