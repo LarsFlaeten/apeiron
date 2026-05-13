@@ -5,6 +5,7 @@
 #include "apeiron/spacecraft/ManifestLoader.h"
 #include "apeiron/spacecraft/Autopilot.h"
 #include "apeiron/spacecraft/Lambert.h"
+#include "apeiron/spacecraft/FiniteBurnPredictor.h"
 
 
 #include <glm/glm.hpp>
@@ -578,4 +579,180 @@ TEST_CASE("Lambert — degenerate inputs return false", "[lambert]")
 
     // Identical positions (zero transfer angle).
     CHECK_FALSE(spacecraft::solveLambert(kMuEarth, r1, r1, 1000.0, true, v1, v2));
+}
+
+// ===========================================================================
+// FiniteBurnPredictor tests
+// ===========================================================================
+
+// Gravitational parameters and radii used in predictor tests.
+static constexpr double kMuMars    = 42828.375816;   // km³/s²
+static constexpr double kRMars     = 3389.5;         // km
+static constexpr double kMuJupiter = 126686534.0;    // km³/s²
+static constexpr double kRJupiter  = 71492.0;        // km
+
+// ---------------------------------------------------------------------------
+// Test 1: periapsisRadius — known circular orbit.
+// For a circular orbit of radius r, rPe == r.
+// ---------------------------------------------------------------------------
+TEST_CASE("FiniteBurnPredictor — periapsisRadius circular orbit", "[finiteBurn]")
+{
+    const double r0 = kRMars + 400.0;
+    const double vc = std::sqrt(kMuMars / r0);
+    const glm::dvec3 r{r0, 0.0, 0.0};
+    const glm::dvec3 v{0.0, vc, 0.0};
+
+    const double rPe = spacecraft::periapsisRadius(r, v, kMuMars);
+    CHECK_THAT(rPe, WithinRel(r0, 1e-6));
+}
+
+// ---------------------------------------------------------------------------
+// Test 2: periapsisRadius — hyperbolic orbit returns NaN (not captured).
+// ---------------------------------------------------------------------------
+TEST_CASE("FiniteBurnPredictor — periapsisRadius hyperbolic returns NaN", "[finiteBurn]")
+{
+    const double r0 = kRMars + 400.0;
+    const double vc = std::sqrt(kMuMars / r0);
+    const glm::dvec3 r{r0, 0.0, 0.0};
+    const glm::dvec3 v{0.0, vc * 2.0, 0.0};   // well above escape speed
+
+    const double rPe = spacecraft::periapsisRadius(r, v, kMuMars);
+    CHECK(std::isnan(rPe));
+}
+
+// ---------------------------------------------------------------------------
+// Test 3: coast-only propagation preserves orbital energy.
+// An unperturbed orbit should not gain or lose energy over a free coast.
+// ---------------------------------------------------------------------------
+TEST_CASE("FiniteBurnPredictor — coast conserves energy", "[finiteBurn]")
+{
+    // Elliptic orbit around Mars: e = 0.5, rPe = 400 km alt.
+    const double rPe = kRMars + 400.0;
+    const double rAp = rPe * 3.0;
+    const double sma = 0.5 * (rPe + rAp);
+    const double vPe = std::sqrt(kMuMars * (2.0 / rPe - 1.0 / sma));
+    const glm::dvec3 r0{rPe, 0.0, 0.0};
+    const glm::dvec3 v0{0.0, vPe, 0.0};
+
+    const double E0 = 0.5 * glm::dot(v0, v0) - kMuMars / glm::length(r0);
+
+    // Coast for one full period (should return to start within tolerance).
+    const double T = 2.0 * M_PI * std::sqrt(sma * sma * sma / kMuMars);
+    auto [rf, vf] = spacecraft::propagateFiniteBurn(r0, v0, kMuMars,
+                                                    0.0,          // no thrust
+                                                    T, 1000,      // coast 1 period
+                                                    0.0, 0);      // no burn
+
+    const double Ef = 0.5 * glm::dot(vf, vf) - kMuMars / glm::length(rf);
+    CHECK_THAT(Ef, WithinAbs(E0, std::abs(E0) * 1e-6));
+}
+
+// ---------------------------------------------------------------------------
+// Build a hyperbolic approach state at radius r0Mag, inbound toward periapsis
+// at rPeTgt with hyperbolic excess speed vInf.
+// Angular momentum h = rPeTgt * vAtPe is conserved.
+// ---------------------------------------------------------------------------
+static void hyperbolicApproachState(
+    double mu, double rPeTgt, double vInf, double r0Mag,
+    glm::dvec3& r0, glm::dvec3& v0)
+{
+    const double vAtPe = std::sqrt(vInf * vInf + 2.0 * mu / rPeTgt);
+    const double h     = rPeTgt * vAtPe;
+    const double vTot  = std::sqrt(vInf * vInf + 2.0 * mu / r0Mag);
+    const double vPerp = h / r0Mag;
+    const double vRad  = -std::sqrt(std::max(0.0, vTot * vTot - vPerp * vPerp));
+    r0 = glm::dvec3{r0Mag, 0.0, 0.0};
+    v0 = glm::dvec3{vRad,  vPerp, 0.0};
+}
+
+// ---------------------------------------------------------------------------
+// Analytic time-to-periapsis for a hyperbolic inbound orbit.
+// Returns seconds to Pe from the given state (positive when inbound).
+// ---------------------------------------------------------------------------
+static double tToPeHyperbolic(const glm::dvec3& r, const glm::dvec3& v, double mu)
+{
+    const double rMag  = glm::length(r);
+    const double v2    = glm::dot(v, v);
+    const double rv    = glm::dot(r, v);
+    const glm::dvec3 eVec = ((v2 - mu / rMag) * r - rv * v) / mu;
+    const double e    = glm::length(eVec);
+    if (e <= 1.0) return 0.0;
+    const double energy = 0.5 * v2 - mu / rMag;
+    const double absA  = mu / (2.0 * std::abs(energy));
+    const double cosNu = std::clamp(glm::dot(eVec / e, r / rMag), -1.0, 1.0);
+    double nu = std::acos(cosNu);
+    if (rv < 0.0) nu = -nu;
+    const double k     = std::sqrt((e - 1.0) / (e + 1.0));
+    const double argF  = k * std::tan(nu * 0.5);
+    if (!std::isfinite(argF) || std::abs(argF) >= 1.0) return 0.0;
+    const double F     = 2.0 * std::atanh(argF);
+    const double Mh    = e * std::sinh(F) - F;
+    const double n     = std::sqrt(mu / (absA * absA * absA));
+    return -Mh / n;
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: Mars MOI — retrograde burn from hyperbolic approach achieves capture.
+//
+// Ship arrives at Mars with v_inf = 2.5 km/s.  Analytic tToPe is computed
+// from the initial hyperbolic state; ignition is centred on Pe.
+// ---------------------------------------------------------------------------
+TEST_CASE("FiniteBurnPredictor — Mars MOI achieves capture", "[finiteBurn]")
+{
+    const double rPeTgt  = kRMars + 400.0;
+    const double vInf    = 2.5;
+    const double vAtPe   = std::sqrt(vInf * vInf + 2.0 * kMuMars / rPeTgt);
+    const double vCirc   = std::sqrt(kMuMars / rPeTgt);
+    const double dv      = vAtPe - vCirc;
+    const double accelKm = 9.8 / 1000.0;
+    const double tBurn   = dv / accelKm;
+
+    glm::dvec3 r0, v0;
+    hyperbolicApproachState(kMuMars, rPeTgt, vInf, 10.0 * rPeTgt, r0, v0);
+
+    const double tToPe = tToPeHyperbolic(r0, v0, kMuMars);
+    REQUIRE(tToPe > tBurn);  // must have enough time to centre the burn
+
+    const double tIgn = tToPe - tBurn * 0.5;
+    auto [rf, vf] = spacecraft::propagateFiniteBurn(r0, v0, kMuMars, accelKm,
+                                                    tIgn, 300,
+                                                    tBurn, 400);
+
+    CHECK(0.5 * glm::dot(vf, vf) - kMuMars / glm::length(rf) < 0.0);
+
+    const double predPe = spacecraft::periapsisAltitude(rf, vf, kMuMars, kRMars);
+    // Wide tolerance: centred finite burn introduces Pe error due to gravity during burn.
+    CHECK_THAT(predPe, WithinAbs(400.0, 500.0));
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: Jupiter MOI — high dV, long burn (~30 min), still achieves capture.
+// ---------------------------------------------------------------------------
+TEST_CASE("FiniteBurnPredictor — Jupiter MOI achieves capture", "[finiteBurn]")
+{
+    const double rPeTgt  = kRJupiter + 2000.0;
+    const double vInf    = 5.5;
+    const double vAtPe   = std::sqrt(vInf * vInf + 2.0 * kMuJupiter / rPeTgt);
+    const double vCirc   = std::sqrt(kMuJupiter / rPeTgt);
+    const double dv      = vAtPe - vCirc;
+    const double accelKm = 9.8 / 1000.0;
+    const double tBurn   = dv / accelKm;
+
+    glm::dvec3 r0, v0;
+    hyperbolicApproachState(kMuJupiter, rPeTgt, vInf, 5.0 * rPeTgt, r0, v0);
+
+    const double tToPe = tToPeHyperbolic(r0, v0, kMuJupiter);
+    REQUIRE(tToPe > tBurn);
+
+    const double tIgn = tToPe - tBurn * 0.5;
+    auto [rf, vf] = spacecraft::propagateFiniteBurn(r0, v0, kMuJupiter, accelKm,
+                                                    tIgn, 300,
+                                                    tBurn, 400);
+
+    CHECK(0.5 * glm::dot(vf, vf) - kMuJupiter / glm::length(rf) < 0.0);
+
+    const double predPe = spacecraft::periapsisAltitude(rf, vf, kMuJupiter, kRJupiter);
+    // Long burn → larger gravity-turn error → wide tolerance.
+    CHECK_THAT(predPe, WithinAbs(2000.0, 3000.0));
+    CHECK(predPe > -kRJupiter);
 }

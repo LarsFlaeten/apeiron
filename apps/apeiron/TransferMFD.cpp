@@ -4,6 +4,7 @@
 #include "VoiceAnnouncer.h"
 
 #include "apeiron/spacecraft/Autopilot.h"
+#include "apeiron/spacecraft/FiniteBurnPredictor.h"
 
 #include <astro/SpiceCore.h>
 #include <astro/ReferenceFrame.h>
@@ -2084,6 +2085,20 @@ void TransferMFD::tickApproach()
         m_moiBurnDur = m_moiDvCirc * 1000.0 / accel;
         const double tIgn = m_tToPeHyp - m_moiBurnDur * 0.5;
         m_moiIgnET = (tIgn > 0.0) ? m_currentET + tIgn : 0.0;
+
+        // Numerically propagate the finite burn to predict the actual Pe.
+        // Phase 1: coast (no thrust) from now to ignition.
+        // Phase 2: burn (retrograde thrust) for burnDuration.
+        m_predictedPeKm = std::numeric_limits<double>::quiet_NaN();
+        if (tIgn > 0.0 && m_moiBurnDur > 0.0) {
+            const double accelKmS2 = accel / 1000.0;  // m/s² → km/s²
+            auto [rf, vf] = spacecraft::propagateFiniteBurn(
+                m_shipArrR, m_shipArrV,
+                m_muArr, accelKmS2,
+                tIgn, 100,
+                m_moiBurnDur, 200);
+            m_predictedPeKm = spacecraft::periapsisAltitude(rf, vf, m_muArr, m_arrBodyRadius);
+        }
     }
 }
 
@@ -2561,6 +2576,10 @@ void TransferMFD::renderArrival(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             if (!m_capturedAtArrival && m_moiDvCirc > 0.0) {
                 add(kYellow, "MOI dV    %.3f km/s  (%s)", m_moiDvCirc, bufBurn);
                 add(kCyan,   "T-ign     %s  (T-0.5burn)", bufIgn);
+                if (std::isfinite(m_predictedPeKm)) {
+                    const ImU32 peCol = (m_predictedPeKm < 0.0) ? kOrange : kYellow;
+                    add(peCol, "Pred Pe   %.0f km  (finite burn)", m_predictedPeKm);
+                }
 
                 sep();
 

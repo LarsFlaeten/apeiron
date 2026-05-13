@@ -6,6 +6,7 @@ add_library(spacecraft STATIC
     src/OrbitLoader.cpp
     src/Lambert.cpp
     src/Porkchop.cpp
+    src/FiniteBurnPredictor.cpp
 )
 
 target_include_directories(spacecraft

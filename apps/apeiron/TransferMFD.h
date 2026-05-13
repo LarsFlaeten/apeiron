@@ -266,10 +266,11 @@ private:
     double     m_arrBodyRadius = 0.0;   // arrival body equatorial radius, km
 
     // Approach / MOI planning — cached in tickApproach(), used by renderCoasting() and ARM.
-    double m_tToPeHyp   = std::numeric_limits<double>::quiet_NaN(); // seconds to Pe (NaN if unknown)
-    double m_moiIgnET   = 0.0;   // absolute ET for MOI ignition (0 = not computable)
-    double m_moiDvCirc  = 0.0;   // circularisation ΔV at Pe, km/s
-    double m_moiBurnDur = 0.0;   // estimated burn duration, seconds
+    double m_tToPeHyp      = std::numeric_limits<double>::quiet_NaN();
+    double m_moiIgnET      = 0.0;   // absolute ET for MOI ignition (0 = not computable)
+    double m_moiDvCirc     = 0.0;   // circularisation ΔV at Pe, km/s
+    double m_moiBurnDur    = 0.0;   // estimated burn duration, seconds
+    double m_predictedPeKm = std::numeric_limits<double>::quiet_NaN();   // finite-burn Pe prediction (0 = not computed)
 
     // B-plane targeting.
     static constexpr double kPeTargetAlts[] = { 200.0, 500.0, 1000.0, 2000.0, 5000.0 };
