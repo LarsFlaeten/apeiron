@@ -2086,18 +2086,53 @@ void TransferMFD::tickApproach()
         const double tIgn = m_tToPeHyp - m_moiBurnDur * 0.5;
         m_moiIgnET = (tIgn > 0.0) ? m_currentET + tIgn : 0.0;
 
-        // Numerically propagate the finite burn to predict the actual Pe.
-        // Phase 1: coast (no thrust) from now to ignition.
-        // Phase 2: burn (retrograde thrust) for burnDuration.
+        // Predict the finite-burn Pe by:
+        //   1. Analytically propagating the hyperbolic conic to the ignition
+        //      point (T−0.5burn) — exact, avoids 100 RK4 coast steps.
+        //   2. RK4-integrating the retrograde burn from that point.
         m_predictedPeKm = std::numeric_limits<double>::quiet_NaN();
-        if (tIgn > 0.0 && m_moiBurnDur > 0.0) {
-            const double accelKmS2 = accel / 1000.0;  // m/s² → km/s²
-            auto [rf, vf] = spacecraft::propagateFiniteBurn(
-                m_shipArrR, m_shipArrV,
-                m_muArr, accelKmS2,
-                tIgn, 100,
-                m_moiBurnDur, 200);
-            m_predictedPeKm = spacecraft::periapsisAltitude(rf, vf, m_muArr, m_arrBodyRadius);
+        if (m_moiBurnDur > 0.0) {
+            const double mu  = m_muArr;
+            // Orbital frame vectors from current state.
+            const glm::dvec3 eVec = ((v2 - mu/rMag)*m_shipArrR
+                                     - glm::dot(m_shipArrR, m_shipArrV)*m_shipArrV) / mu;
+            const double ecc = glm::length(eVec);
+            if (ecc > 1.0) {
+                const glm::dvec3 hVec  = glm::cross(m_shipArrR, m_shipArrV);
+                const double hMag      = glm::length(hVec);
+                const double absA      = mu / (2.0 * std::abs(0.5*v2 - mu/rMag));
+                const double n         = std::sqrt(mu / (absA * absA * absA));
+                const double p         = absA * (ecc * ecc - 1.0);
+
+                // Solve Kepler's hyperbolic equation for ignition point
+                // (tBurn/2 before Pe, i.e. Mh = -n*tBurn/2).
+                const double Mh = -n * (m_moiBurnDur * 0.5);
+                double F = Mh;
+                for (int i = 0; i < 50; ++i) {
+                    const double dF = -(ecc * std::sinh(F) - F - Mh)
+                                     / (ecc * std::cosh(F) - 1.0);
+                    F += dF;
+                    if (std::abs(dF) < 1e-12) break;
+                }
+                const double k   = std::sqrt((ecc - 1.0) / (ecc + 1.0));
+                const double nu  = 2.0 * std::atan(std::tanh(F * 0.5) / k);
+                const double cosNu = std::cos(nu), sinNu = std::sin(nu);
+
+                // State at ignition in perifocal frame.
+                const glm::dvec3 periDir = eVec / ecc;
+                const glm::dvec3 qDir    = glm::cross(hVec / hMag, periDir);
+                const double rIgnMag     = p / (1.0 + ecc * cosNu);
+                const glm::dvec3 rIgn    = rIgnMag * (cosNu * periDir + sinNu * qDir);
+                const double sqMuP       = std::sqrt(mu / p);
+                const glm::dvec3 vIgn    = sqMuP * (-sinNu * periDir + (ecc + cosNu) * qDir);
+
+                // RK4 through the burn only — coast replaced by analytic step above.
+                const double accelKmS2 = accel / 1000.0;
+                auto [rf, vf] = spacecraft::propagateFiniteBurn(
+                    rIgn, vIgn, mu, accelKmS2,
+                    0.0, 0, m_moiBurnDur, 200);
+                m_predictedPeKm = spacecraft::periapsisAltitude(rf, vf, mu, m_arrBodyRadius);
+            }
         }
     }
 }
@@ -2113,6 +2148,11 @@ void TransferMFD::tickMcc()
     // like the asymptotic departure velocity — the Lambert result would be
     // completely wrong (17+ km/s artifacts).  Suppress until clear of SOI.
     if (glm::length(m_shipR) < m_depSOI) return;
+
+    // Inside the arrival SOI the ship's heliocentric position is essentially
+    // at the target, so Lambert degenerates and produces garbage (50+ km/s).
+    // B-plane targeting handles corrections from this point on.
+    if (inArrivalSoi()) return;
 
     const double tofRemaining = m_detail.arrET - m_currentET;
     if (tofRemaining <= kDay) return;

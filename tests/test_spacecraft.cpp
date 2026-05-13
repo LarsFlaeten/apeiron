@@ -692,10 +692,49 @@ static double tToPeHyperbolic(const glm::dvec3& r, const glm::dvec3& v, double m
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: Mars MOI — retrograde burn from hyperbolic approach achieves capture.
+// Helper: analytic ignition state (tBurn/2 before Pe) on a hyperbolic orbit.
+// Mirrors the logic in TransferMFD::tickApproach().
+// ---------------------------------------------------------------------------
+static std::pair<glm::dvec3, glm::dvec3> hyperbolicIgnitionState(
+    const glm::dvec3& r0, const glm::dvec3& v0, double mu, double tBurn)
+{
+    const double rMag = glm::length(r0);
+    const double v2   = glm::dot(v0, v0);
+    const glm::dvec3 eVec = ((v2 - mu / rMag) * r0
+                              - glm::dot(r0, v0) * v0) / mu;
+    const double ecc  = glm::length(eVec);
+    const glm::dvec3 hVec  = glm::cross(r0, v0);
+    const double hMag      = glm::length(hVec);
+    const double absA      = mu / std::abs(v2 - 2.0 * mu / rMag);
+    const double n         = std::sqrt(mu / (absA * absA * absA));
+    const double p         = absA * (ecc * ecc - 1.0);
+
+    // Solve Kepler's equation for F at tBurn/2 before Pe (Mh = -n*tBurn/2).
+    const double Mh = -n * (tBurn * 0.5);
+    double F = Mh;
+    for (int i = 0; i < 50; ++i) {
+        const double dF = -(ecc * std::sinh(F) - F - Mh) / (ecc * std::cosh(F) - 1.0);
+        F += dF;
+        if (std::abs(dF) < 1e-12) break;
+    }
+    const double k     = std::sqrt((ecc - 1.0) / (ecc + 1.0));
+    const double nu    = 2.0 * std::atan(std::tanh(F * 0.5) / k);
+    const double cosNu = std::cos(nu), sinNu = std::sin(nu);
+
+    const glm::dvec3 periDir = eVec / ecc;
+    const glm::dvec3 qDir    = glm::cross(hVec / hMag, periDir);
+    const double rIgnMag     = p / (1.0 + ecc * cosNu);
+    const glm::dvec3 rIgn    = rIgnMag * (cosNu * periDir + sinNu * qDir);
+    const double sqMuP       = std::sqrt(mu / p);
+    const glm::dvec3 vIgn    = sqMuP * (-sinNu * periDir + (ecc + cosNu) * qDir);
+    return {rIgn, vIgn};
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: Mars MOI — burn from analytic ignition state achieves capture.
 //
-// Ship arrives at Mars with v_inf = 2.5 km/s.  Analytic tToPe is computed
-// from the initial hyperbolic state; ignition is centred on Pe.
+// Mirrors the production approach: analytically propagate to T−0.5burn,
+// then RK4 through the retrograde burn.
 // ---------------------------------------------------------------------------
 TEST_CASE("FiniteBurnPredictor — Mars MOI achieves capture", "[finiteBurn]")
 {
@@ -709,19 +748,14 @@ TEST_CASE("FiniteBurnPredictor — Mars MOI achieves capture", "[finiteBurn]")
 
     glm::dvec3 r0, v0;
     hyperbolicApproachState(kMuMars, rPeTgt, vInf, 10.0 * rPeTgt, r0, v0);
+    auto [rIgn, vIgn] = hyperbolicIgnitionState(r0, v0, kMuMars, tBurn);
 
-    const double tToPe = tToPeHyperbolic(r0, v0, kMuMars);
-    REQUIRE(tToPe > tBurn);  // must have enough time to centre the burn
-
-    const double tIgn = tToPe - tBurn * 0.5;
-    auto [rf, vf] = spacecraft::propagateFiniteBurn(r0, v0, kMuMars, accelKm,
-                                                    tIgn, 300,
-                                                    tBurn, 400);
+    auto [rf, vf] = spacecraft::propagateFiniteBurn(rIgn, vIgn, kMuMars, accelKm,
+                                                    0.0, 0, tBurn, 400);
 
     CHECK(0.5 * glm::dot(vf, vf) - kMuMars / glm::length(rf) < 0.0);
 
     const double predPe = spacecraft::periapsisAltitude(rf, vf, kMuMars, kRMars);
-    // Wide tolerance: centred finite burn introduces Pe error due to gravity during burn.
     CHECK_THAT(predPe, WithinAbs(400.0, 500.0));
 }
 
@@ -740,19 +774,14 @@ TEST_CASE("FiniteBurnPredictor — Jupiter MOI achieves capture", "[finiteBurn]"
 
     glm::dvec3 r0, v0;
     hyperbolicApproachState(kMuJupiter, rPeTgt, vInf, 5.0 * rPeTgt, r0, v0);
+    auto [rIgn, vIgn] = hyperbolicIgnitionState(r0, v0, kMuJupiter, tBurn);
 
-    const double tToPe = tToPeHyperbolic(r0, v0, kMuJupiter);
-    REQUIRE(tToPe > tBurn);
-
-    const double tIgn = tToPe - tBurn * 0.5;
-    auto [rf, vf] = spacecraft::propagateFiniteBurn(r0, v0, kMuJupiter, accelKm,
-                                                    tIgn, 300,
-                                                    tBurn, 400);
+    auto [rf, vf] = spacecraft::propagateFiniteBurn(rIgn, vIgn, kMuJupiter, accelKm,
+                                                    0.0, 0, tBurn, 400);
 
     CHECK(0.5 * glm::dot(vf, vf) - kMuJupiter / glm::length(rf) < 0.0);
 
     const double predPe = spacecraft::periapsisAltitude(rf, vf, kMuJupiter, kRJupiter);
-    // Long burn → larger gravity-turn error → wide tolerance.
     CHECK_THAT(predPe, WithinAbs(2000.0, 3000.0));
     CHECK(predPe > -kRJupiter);
 }
