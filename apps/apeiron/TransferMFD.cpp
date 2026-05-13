@@ -601,8 +601,12 @@ void TransferMFD::onRight(int slot)
                     const double arrET = m_detail.arrET;
                     const double depET = m_detail.depET;
                     const double tof   = m_detail.tofSec;
+                    // MCC-1 scales with TOF so the Lambert solution has time to
+                    // converge: 1/60 of TOF, minimum 7 days.  This gives ~7 d for
+                    // Mars transfers and ~25 d for Jupiter.
+                    const double mcc1Lead = std::max(7.0 * kDay, tof / 60.0);
                     const MccWpt wpts[] = {
-                        { "MCC-1", depET  +  7.0 * kDay },  // early post-departure
+                        { "MCC-1", depET  + mcc1Lead    },  // early post-departure
                         { "MCC-2", depET  + tof  * 0.5  },  // mid-course
                         { "MCC-3", arrET - 30.0 * kDay  },  // arrival −30 d
                         { "MCC-4", arrET -  7.0 * kDay  },  // arrival −7 d
