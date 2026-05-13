@@ -119,11 +119,10 @@ void BurnController::tick(double currentET,
         const double r = glm::length(shipR);
         if (r < 1.0 || m_plan.depBodyMu <= 0.0) return;
 
-        const double c3Now = glm::dot(shipV, shipV) - 2.0 * m_plan.depBodyMu / r;
-        // Prograde (TMI): fire until energy rises above threshold (escape).
-        // Retrograde (MOI): fire until energy drops below threshold (capture).
+        const double v2    = glm::dot(shipV, shipV);
+        const double c3Now = v2 - 2.0 * m_plan.depBodyMu / r;
         const bool cutoff = m_plan.retrogradeBurn ? (c3Now <= m_plan.c3Required)
-                                                   : (c3Now >= m_plan.c3Required);
+                                                  : (c3Now >= m_plan.c3Required);
         if (cutoff) {
             m_phase = BurnPhase::Complete;
 

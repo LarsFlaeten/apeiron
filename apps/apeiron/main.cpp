@@ -316,9 +316,10 @@ int main(int argc, char* argv[])
         struct GravBody {
             std::string name;
             SpiceInt    naifId;
-            double      gm;       // km³/s²
-            double      soiKm;    // Hill-sphere radius (approx), km
-            glm::dvec3  posECI;   // geocentric ECLIPJ2000, km  (updated each frame)
+            double      gm;        // km³/s²
+            double      radiusKm;  // equatorial radius (from scenario radii_naif)
+            double      soiKm;     // Hill-sphere radius (approx), km
+            glm::dvec3  posECI;    // geocentric ECLIPJ2000, km  (updated each frame)
         };
         std::vector<GravBody> gravBodies;
         {
@@ -338,7 +339,11 @@ int main(int argc, char* argv[])
                     continue;  // body has no GM in the loaded kernels — skip
                 }
                 if (gm <= 0.0) continue;
-                gravBodies.push_back({ name, id, gm, 0.0, glm::dvec3(0.0) });
+                // Radius comes from bodyInfos which already applied radii_naif,
+                // so JUPITER BARYCENTER correctly carries Jupiter's physical radius.
+                gravBodies.push_back({ name, id, gm,
+                                       static_cast<double>(bi.radiusKm),
+                                       0.0, glm::dvec3(0.0) });
             }
         }
         // Compute Hill-sphere (SOI) radii for all non-Sun bodies.
@@ -1349,16 +1354,9 @@ int main(int argc, char* argv[])
                         // GM is already in gravBodies; fetch radius via astro helper.
                         for (const auto& gb : gravBodies) {
                             if (gb.name != dominantBodyName) continue;
-                            double radiusKm = 0.0;
-                            try {
-                                astro::Vec3 radii;
-                                astro::Spice().getPlanetaryConstants(
-                                    static_cast<int>(gb.naifId), "RADII", radii);
-                                radiusKm = radii.x;  // equatorial
-                            } catch (const astro::SpiceException&) {}
                             std::string upperName = dominantBodyName;
                             for (auto& c : upperName) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                            refBody = { upperName, gb.gm, radiusKm,
+                            refBody = { upperName, gb.gm, gb.radiusKm,
                                         static_cast<SpiceInt>(gb.naifId) };
                             orbitalMFD.setContext(refBody.name.c_str(), "");
                             break;
@@ -2332,20 +2330,13 @@ int main(int argc, char* argv[])
                         // Restore the saved reference body so the OrbitalMFD shows
                         // the same body the user had selected at save time.
                         if (!sd.refBodyName.empty()) {
-                            SpiceInt rid; SpiceBoolean rfound;
-                            bodn2c_c(sd.refBodyName.c_str(), &rid, &rfound);
-                            if (rfound) {
-                                try {
-                                    double      rgm = 0.0;
-                                    astro::Vec3 rradii;
-                                    astro::Spice().getPlanetaryConstants(
-                                        static_cast<int>(rid), "GM", rgm);
-                                    astro::Spice().getPlanetaryConstants(
-                                        static_cast<int>(rid), "RADII", rradii);
-                                    refBody = { sd.refBodyName, rgm, rradii.x, rid };
-                                    dominantBodyName = sd.refBodyName;
-                                    orbitalMFD.setContext(refBody.name.c_str(), "");
-                                } catch (const astro::SpiceException&) {}
+                            for (const auto& gb : gravBodies) {
+                                if (gb.name != sd.refBodyName) continue;
+                                refBody = { sd.refBodyName, gb.gm, gb.radiusKm,
+                                            static_cast<SpiceInt>(gb.naifId) };
+                                dominantBodyName = sd.refBodyName;
+                                orbitalMFD.setContext(refBody.name.c_str(), "");
+                                break;
                             }
                         }
                         scenarioStatusMsg = "Loaded.";
@@ -2447,19 +2438,14 @@ int main(int argc, char* argv[])
                 {
                     std::string pending = orbitalMFD.consumePendingRef();
                     if (!pending.empty()) {
-                        SpiceInt id;  SpiceBoolean found;
-                        bodn2c_c(pending.c_str(), &id, &found);
-                        if (found) {
-                            try {
-                                double      gm = 0.0;
-                                astro::Vec3 radii;
-                                astro::Spice().getPlanetaryConstants(static_cast<int>(id), "GM", gm);
-                                astro::Spice().getPlanetaryConstants(static_cast<int>(id), "RADII", radii);
-                                for (auto& c : pending)
-                                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                                refBody = { pending, gm, radii.x, id };
-                                orbitalMFD.setContext(refBody.name.c_str(), "");
-                            } catch (const astro::SpiceException&) {}
+                        for (auto& c : pending)
+                            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                        for (const auto& gb : gravBodies) {
+                            if (gb.name != pending) continue;
+                            refBody = { pending, gb.gm, gb.radiusKm,
+                                        static_cast<SpiceInt>(gb.naifId) };
+                            orbitalMFD.setContext(refBody.name.c_str(), "");
+                            break;
                         }
                     }
                 }
