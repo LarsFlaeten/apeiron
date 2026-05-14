@@ -1121,6 +1121,7 @@ int main(int argc, char* argv[])
 
         // Autopilot.
         spacecraft::Autopilot autopilot;
+        bool prevSettleClamp = false;
 
         // Calibrate rcsAuthorityNm from actual thruster geometry so the
         // parabolic braking-distance estimate in the bang-bang controller
@@ -1518,11 +1519,22 @@ int main(int argc, char* argv[])
                             if (settleClamp) {
                                 glm::dvec3 w_ff_inertial = att * autopilot.omegaFF;
                                 ship.setAngularVelocity(w_ff_inertial);
+                            } else if (prevSettleClamp) {
+                                // Clamp just released — zero once more so the physics
+                                // state that was being overridden each frame doesn't
+                                // produce a one-frame nudge.
+                                ship.setAngularVelocity(att * autopilot.omegaFF);
                             }
+                            prevSettleClamp = settleClamp;
                             // NullV fills [0..2] (translation); attitude modes fill [3..5].
                             for (int i = 0; i < 3; ++i) desired[i] += apWrench[i];
                             for (int i = 3; i < 6; ++i) desired[i]  = apWrench[i];
                         } else {
+                            if (prevSettleClamp) {
+                                auto& ship = *spacecraft[playerIdx];
+                                ship.setAngularVelocity(ship.attitude() * autopilot.omegaFF);
+                            }
+                            prevSettleClamp = false;
                             // Manual rotation.
                             if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) desired[4] += rcsTorque;
                             if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) desired[4] -= rcsTorque;
