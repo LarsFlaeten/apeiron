@@ -2100,40 +2100,8 @@ void TransferMFD::tickApproach()
                 const double tIgn = m_tToPeHyp - m_moiBurnDur * 0.5;
                 m_moiIgnET = (tIgn > 0.0) ? m_currentET + tIgn : 0.0;
 
-                // Predict Pe: analytically propagate elliptic orbit to ignition
-                // (T−0.5burn before Pe) via Kepler, then RK4 through the burn.
-                m_predictedPeKm = std::numeric_limits<double>::quiet_NaN();
-                if (m_moiBurnDur > 0.0) {
-                    const double mu   = m_muArr;
-                    const double p    = sma * (1.0 - ecc * ecc);
-                    const double nMM  = std::sqrt(mu / (sma * sma * sma));
-                    const double Mign = -nMM * (m_moiBurnDur * 0.5);
-                    double Eign = Mign;
-                    for (int i = 0; i < 50; ++i) {
-                        const double dE = -(Eign - ecc * std::sin(Eign) - Mign)
-                                         / (1.0 - ecc * std::cos(Eign));
-                        Eign += dE;
-                        if (std::abs(dE) < 1e-12) break;
-                    }
-                    const double nuIgn = 2.0 * std::atan2(
-                        std::sqrt(1.0 + ecc) * std::sin(Eign * 0.5),
-                        std::sqrt(1.0 - ecc) * std::cos(Eign * 0.5));
-                    const double cosNuI = std::cos(nuIgn), sinNuI = std::sin(nuIgn);
-
-                    const glm::dvec3 periDir = eVec / ecc;
-                    const glm::dvec3 hVec2   = glm::cross(m_shipArrR, m_shipArrV);
-                    const glm::dvec3 qDir    = glm::cross(glm::normalize(hVec2), periDir);
-                    const double rIgnMag     = p / (1.0 + ecc * cosNuI);
-                    const glm::dvec3 rIgn    = rIgnMag * (cosNuI * periDir + sinNuI * qDir);
-                    const double sqMuP       = std::sqrt(mu / p);
-                    const glm::dvec3 vIgn    = sqMuP * (-sinNuI * periDir + (ecc + cosNuI) * qDir);
-
-                    const double accelKmS2 = accel / 1000.0;
-                    auto [rf, vf] = spacecraft::propagateFiniteBurn(
-                        rIgn, vIgn, mu, accelKmS2,
-                        0.0, 0, m_moiBurnDur, 200);
-                    m_predictedPeKm = spacecraft::periapsisAltitude(rf, vf, mu, m_arrBodyRadius);
-                }
+                // Pred Pe is NOT recomputed here — it keeps the last value
+                // from the hyperbolic approach, which was accurate and stable.
             }
         }
     }
