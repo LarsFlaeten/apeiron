@@ -2690,7 +2690,8 @@ int main(int argc, char* argv[])
                 {
                     navConsole.update(*spacecraft[playerIdx], shipForce, shipMass, frameDt);
                     navConsole.render(kMfdW, H, kMfdW, nav, autopilot,
-                                      spacecraft, playerIdx, kSpacecraftNames, scPorts, mainEngineOn);
+                                      spacecraft, playerIdx, kSpacecraftNames, scPorts, mainEngineOn,
+                                      activeNavDv);
                 }
 
                 // ---- Helmet HUD overlay ----

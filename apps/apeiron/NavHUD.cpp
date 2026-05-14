@@ -344,25 +344,36 @@ void NavHUD::render(const Spacecraft&                              ship,
     }
 
     // ---- MCC direction marker (orange diamond + "MCC" label) ----
-    // Drawn whenever TransferMFD has a valid MCC solution (mccDv != 0).
-    // Direction is heliocentric ECLIPJ2000 — same inertial frame as the camera.
-    const double mccDvMag = glm::length(mccDv);
-    if (mccDvMag > 1e-9) {
-        const ImU32 kMccOrange = IM_COL32(255, 140, 0, 230);
-        glm::vec3 mccDir = glm::normalize(glm::vec3(mccDv));
-        auto mcc = projectDir(mccDir);
-        if (mcc.onScreen(W, H)) {
-            // Diamond shape (rotated square).
-            constexpr float r = 12.0f;
-            ImVec2 p { mcc.sx, mcc.sy };
-            dl->AddLine({p.x,     p.y - r}, {p.x + r, p.y    }, kMccOrange, 1.5f);
-            dl->AddLine({p.x + r, p.y    }, {p.x,     p.y + r}, kMccOrange, 1.5f);
-            dl->AddLine({p.x,     p.y + r}, {p.x - r, p.y    }, kMccOrange, 1.5f);
-            dl->AddLine({p.x - r, p.y    }, {p.x,     p.y - r}, kMccOrange, 1.5f);
-            // Label
-            char mccBuf[24];
-            std::snprintf(mccBuf, sizeof(mccBuf), "MCC %.1f m/s", mccDvMag * 1000.0);
-            dl->AddText({p.x + r + 4.0f, p.y - 6.0f}, kMccOrange, mccBuf);
+    // Only shown in MCC nav mode.
+    if (nav.navMode == NavMode::Mcc) {
+        const double mccDvMag = glm::length(mccDv);
+        if (mccDvMag > 1e-9) {
+            const ImU32 kMccOrange = IM_COL32(255, 140, 0, 230);
+            glm::vec3 mccDir = glm::normalize(glm::vec3(mccDv));
+            auto mcc = projectDir(mccDir);
+
+            char mccBuf[32];
+            std::snprintf(mccBuf, sizeof(mccBuf), "MCC %.2f m/s", mccDvMag * 1000.0);
+
+            if (mcc.w > 0.0f && mcc.onScreen(W, H)) {
+                // On-screen: orange diamond.
+                constexpr float r = 14.0f;
+                ImVec2 p { mcc.sx, mcc.sy };
+                dl->AddLine({p.x,     p.y - r}, {p.x + r, p.y    }, kMccOrange, 2.0f);
+                dl->AddLine({p.x + r, p.y    }, {p.x,     p.y + r}, kMccOrange, 2.0f);
+                dl->AddLine({p.x,     p.y + r}, {p.x - r, p.y    }, kMccOrange, 2.0f);
+                dl->AddLine({p.x - r, p.y    }, {p.x,     p.y - r}, kMccOrange, 2.0f);
+                dl->AddText({p.x + r + 4.0f, p.y - 6.0f}, kMccOrange, mccBuf);
+            } else if (mcc.w > 0.0f) {
+                // Off-screen: edge arrow pointing toward the MCC direction.
+                auto edge = clampToEdge(mcc.sx, mcc.sy, W, H, kEdgeMargin);
+                drawArrow(dl, edge.pos, edge.dir, 10.0f, kMccOrange);
+                ImVec2 textPos{
+                    edge.pos.x + edge.dir.x * 16.0f - 10.0f,
+                    edge.pos.y + edge.dir.y * 16.0f - 6.0f
+                };
+                dl->AddText(textPos, kMccOrange, mccBuf);
+            }
         }
     }
 }

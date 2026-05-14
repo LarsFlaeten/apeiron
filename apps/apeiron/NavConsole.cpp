@@ -71,7 +71,8 @@ void NavConsole::render(float                                           posX,
                         size_t                                          playerIdx,
                         const std::vector<std::string>&                 scNames,
                         const std::vector<std::vector<DockPort>>&       scPorts,
-                        bool                                            mainEngineOn)
+                        bool                                            mainEngineOn,
+                        const glm::dvec3&                               mccDv)
 {
     const float  consW  = width;
     const ImU32  kGrn   = IM_COL32(  0, 210,  75, 210);
@@ -92,17 +93,21 @@ void NavConsole::render(float                                           posX,
 
     // ---- Title + MODE button ----
     {
-        const bool isOrbit = (nav.navMode == NavMode::Orbit);
         ImGui::SetCursorPosX((consW - ImGui::CalcTextSize("-- NAV CONSOLE --").x) * 0.5f);
         ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.8f}, "-- NAV CONSOLE --");
         ImGui::SameLine();
-        if (isOrbit)
+        if (nav.navMode == NavMode::Orbit)
             ImGui::TextColored({0.0f, 0.82f, 0.30f, 1.0f}, "[ORBIT]");
-        else
+        else if (nav.navMode == NavMode::Docking)
             ImGui::TextColored({0.2f, 0.8f, 1.0f, 1.0f}, "[DOCK]");
+        else
+            ImGui::TextColored({1.0f, 0.55f, 0.0f, 1.0f}, "[MCC]");
         ImGui::SameLine();
         if (ImGui::SmallButton("MODE")) {
-            nav.navMode    = isOrbit ? NavMode::Docking : NavMode::Orbit;
+            // Cycle: Orbit → Docking → Mcc → Orbit
+            if      (nav.navMode == NavMode::Orbit)   nav.navMode = NavMode::Docking;
+            else if (nav.navMode == NavMode::Docking)  nav.navMode = NavMode::Mcc;
+            else                                       nav.navMode = NavMode::Orbit;
             autopilot.mode = spacecraft::AutopilotMode::Off;
         }
     }
@@ -155,6 +160,27 @@ void NavConsole::render(float                                           posX,
     if (nav.navMode == NavMode::Orbit) {
         rowf("Pro∠   ", "%7.1f °",      m_progradeErrDeg);
         rowf("Vspd   ", "%+7.3f km/s",  m_vsKms);
+        ImGui::Separator();
+    }
+
+    // ---- MCC mode: course correction data ----
+    if (nav.navMode == NavMode::Mcc) {
+        const double mccMagMs = glm::length(mccDv) * 1000.0;
+        const ImU32  kOrange  = IM_COL32(255, 140, 0, 230);
+        if (mccMagMs > 1e-6) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                ImGui::ColorConvertU32ToFloat4(kOrange));
+            ImGui::Text("MCC  %.3f m/s", mccMagMs);
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                ImGui::ColorConvertU32ToFloat4(IM_COL32(255,140,0,160)));
+            ImGui::Text("  X %+.4f km/s", mccDv.x);
+            ImGui::Text("  Y %+.4f km/s", mccDv.y);
+            ImGui::Text("  Z %+.4f km/s", mccDv.z);
+            ImGui::PopStyleColor();
+        } else {
+            ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "MCC  on target");
+        }
         ImGui::Separator();
     }
 
@@ -323,6 +349,9 @@ void NavConsole::render(float                                           posX,
         apButton("Retro [⇧R]",    M::Retrograde);
         apButton("Nrm+ [⇧N]",     M::NormalPlus);
         apButton("Nrm- [⇧M]",     M::NormalMinus);
+    }
+    if (nav.navMode == NavMode::Mcc) {
+        apButton("MCC DIR [⇧G]", M::MccPlus);
     }
     if (nav.navMode == NavMode::Docking && nav.dockTgtIdx >= 0) {
         apButton("NULL V [⇧V]", M::NullV);

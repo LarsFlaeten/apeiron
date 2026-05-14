@@ -45,7 +45,8 @@ public:
                 size_t                                          playerIdx,
                 const std::vector<std::string>&                 scNames,
                 const std::vector<std::vector<DockPort>>&       scPorts,
-                bool                                            mainEngineOn);
+                bool                                            mainEngineOn,
+                const glm::dvec3&                               mccDv = {});
 
 private:
     // Finite-difference / EMA state
