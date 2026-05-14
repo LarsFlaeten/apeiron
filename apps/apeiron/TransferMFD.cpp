@@ -2072,10 +2072,58 @@ void TransferMFD::tickApproach()
             const double T       = 2.0 * M_PI / n;
             const double tFromPe = M / n;
             m_tToPeHyp = (tFromPe >= 0.0) ? -(T - tFromPe) : -tFromPe;
+
+            // MOI burn parameters for elliptic circularization at next Pe.
+            if (std::isfinite(m_tToPeHyp)) {
+                const double rPeCurrent = sma * (1.0 - ecc);
+                const double vAtPe      = std::sqrt(m_muArr * (2.0 / rPeCurrent - 1.0 / sma));
+                const double rPeTgt     = m_arrBodyRadius + kPeTargetAlts[m_peAltIdx];
+                const double vCircAtPe  = std::sqrt(m_muArr / rPeTgt);
+                m_moiDvCirc  = std::max(0.0, vAtPe - vCircAtPe);
+                const double accel = (m_shipMass > 1.0) ? m_mainThrustN / m_shipMass : 0.97;
+                m_moiBurnDur = m_moiDvCirc * 1000.0 / accel;
+                const double tIgn = m_tToPeHyp - m_moiBurnDur * 0.5;
+                m_moiIgnET = (tIgn > 0.0) ? m_currentET + tIgn : 0.0;
+
+                // Predict Pe: analytically propagate elliptic orbit to ignition
+                // (T−0.5burn before Pe) via Kepler, then RK4 through the burn.
+                m_predictedPeKm = std::numeric_limits<double>::quiet_NaN();
+                if (m_moiBurnDur > 0.0) {
+                    const double mu   = m_muArr;
+                    const double p    = sma * (1.0 - ecc * ecc);
+                    const double nMM  = std::sqrt(mu / (sma * sma * sma));
+                    const double Mign = -nMM * (m_moiBurnDur * 0.5);
+                    double Eign = Mign;
+                    for (int i = 0; i < 50; ++i) {
+                        const double dE = -(Eign - ecc * std::sin(Eign) - Mign)
+                                         / (1.0 - ecc * std::cos(Eign));
+                        Eign += dE;
+                        if (std::abs(dE) < 1e-12) break;
+                    }
+                    const double nuIgn = 2.0 * std::atan2(
+                        std::sqrt(1.0 + ecc) * std::sin(Eign * 0.5),
+                        std::sqrt(1.0 - ecc) * std::cos(Eign * 0.5));
+                    const double cosNuI = std::cos(nuIgn), sinNuI = std::sin(nuIgn);
+
+                    const glm::dvec3 periDir = eVec / ecc;
+                    const glm::dvec3 hVec2   = glm::cross(m_shipArrR, m_shipArrV);
+                    const glm::dvec3 qDir    = glm::cross(glm::normalize(hVec2), periDir);
+                    const double rIgnMag     = p / (1.0 + ecc * cosNuI);
+                    const glm::dvec3 rIgn    = rIgnMag * (cosNuI * periDir + sinNuI * qDir);
+                    const double sqMuP       = std::sqrt(mu / p);
+                    const glm::dvec3 vIgn    = sqMuP * (-sinNuI * periDir + (ecc + cosNuI) * qDir);
+
+                    const double accelKmS2 = accel / 1000.0;
+                    auto [rf, vf] = spacecraft::propagateFiniteBurn(
+                        rIgn, vIgn, mu, accelKmS2,
+                        0.0, 0, m_moiBurnDur, 200);
+                    m_predictedPeKm = spacecraft::periapsisAltitude(rf, vf, mu, m_arrBodyRadius);
+                }
+            }
         }
     }
 
-    // MOI burn parameters — only meaningful on hyperbolic approach.
+    // MOI burn parameters — hyperbolic approach only.
     if (std::isfinite(m_tToPeHyp) && !m_capturedAtArrival && vInfSq > 0.0) {
         const double rPeTgt    = m_arrBodyRadius + kPeTargetAlts[m_peAltIdx];
         const double vAtPe     = std::sqrt(vInfSq + 2.0 * m_muArr / rPeTgt);
@@ -2086,53 +2134,41 @@ void TransferMFD::tickApproach()
         const double tIgn = m_tToPeHyp - m_moiBurnDur * 0.5;
         m_moiIgnET = (tIgn > 0.0) ? m_currentET + tIgn : 0.0;
 
-        // Predict the finite-burn Pe by:
-        //   1. Analytically propagating the hyperbolic conic to the ignition
-        //      point (T−0.5burn) — exact, avoids 100 RK4 coast steps.
-        //   2. RK4-integrating the retrograde burn from that point.
+        // Predict the finite-burn Pe: analytically propagate the hyperbolic
+        // conic to the ignition point (T−0.5burn), then RK4 through the burn.
         m_predictedPeKm = std::numeric_limits<double>::quiet_NaN();
-        if (m_moiBurnDur > 0.0) {
+        if (m_moiBurnDur > 0.0 && ecc > 1.0) {
             const double mu  = m_muArr;
-            // Orbital frame vectors from current state.
-            const glm::dvec3 eVec = ((v2 - mu/rMag)*m_shipArrR
-                                     - glm::dot(m_shipArrR, m_shipArrV)*m_shipArrV) / mu;
-            const double ecc = glm::length(eVec);
-            if (ecc > 1.0) {
-                const glm::dvec3 hVec  = glm::cross(m_shipArrR, m_shipArrV);
-                const double hMag      = glm::length(hVec);
-                const double absA      = mu / (2.0 * std::abs(0.5*v2 - mu/rMag));
-                const double n         = std::sqrt(mu / (absA * absA * absA));
-                const double p         = absA * (ecc * ecc - 1.0);
+            const glm::dvec3 hVec  = glm::cross(m_shipArrR, m_shipArrV);
+            const double hMag      = glm::length(hVec);
+            const double absA      = mu / (2.0 * std::abs(0.5*v2 - mu/rMag));
+            const double n         = std::sqrt(mu / (absA * absA * absA));
+            const double p         = absA * (ecc * ecc - 1.0);
 
-                // Solve Kepler's hyperbolic equation for ignition point
-                // (tBurn/2 before Pe, i.e. Mh = -n*tBurn/2).
-                const double Mh = -n * (m_moiBurnDur * 0.5);
-                double F = Mh;
-                for (int i = 0; i < 50; ++i) {
-                    const double dF = -(ecc * std::sinh(F) - F - Mh)
-                                     / (ecc * std::cosh(F) - 1.0);
-                    F += dF;
-                    if (std::abs(dF) < 1e-12) break;
-                }
-                const double k   = std::sqrt((ecc - 1.0) / (ecc + 1.0));
-                const double nu  = 2.0 * std::atan(std::tanh(F * 0.5) / k);
-                const double cosNu = std::cos(nu), sinNu = std::sin(nu);
-
-                // State at ignition in perifocal frame.
-                const glm::dvec3 periDir = eVec / ecc;
-                const glm::dvec3 qDir    = glm::cross(hVec / hMag, periDir);
-                const double rIgnMag     = p / (1.0 + ecc * cosNu);
-                const glm::dvec3 rIgn    = rIgnMag * (cosNu * periDir + sinNu * qDir);
-                const double sqMuP       = std::sqrt(mu / p);
-                const glm::dvec3 vIgn    = sqMuP * (-sinNu * periDir + (ecc + cosNu) * qDir);
-
-                // RK4 through the burn only — coast replaced by analytic step above.
-                const double accelKmS2 = accel / 1000.0;
-                auto [rf, vf] = spacecraft::propagateFiniteBurn(
-                    rIgn, vIgn, mu, accelKmS2,
-                    0.0, 0, m_moiBurnDur, 200);
-                m_predictedPeKm = spacecraft::periapsisAltitude(rf, vf, mu, m_arrBodyRadius);
+            const double Mh = -n * (m_moiBurnDur * 0.5);
+            double F = Mh;
+            for (int i = 0; i < 50; ++i) {
+                const double dF = -(ecc * std::sinh(F) - F - Mh)
+                                 / (ecc * std::cosh(F) - 1.0);
+                F += dF;
+                if (std::abs(dF) < 1e-12) break;
             }
+            const double k   = std::sqrt((ecc - 1.0) / (ecc + 1.0));
+            const double nu  = 2.0 * std::atan(std::tanh(F * 0.5) / k);
+            const double cosNu = std::cos(nu), sinNu = std::sin(nu);
+
+            const glm::dvec3 periDir = eVec / ecc;
+            const glm::dvec3 qDir    = glm::cross(hVec / hMag, periDir);
+            const double rIgnMag     = p / (1.0 + ecc * cosNu);
+            const glm::dvec3 rIgn    = rIgnMag * (cosNu * periDir + sinNu * qDir);
+            const double sqMuP       = std::sqrt(mu / p);
+            const glm::dvec3 vIgn    = sqMuP * (-sinNu * periDir + (ecc + cosNu) * qDir);
+
+            const double accelKmS2 = accel / 1000.0;
+            auto [rf, vf] = spacecraft::propagateFiniteBurn(
+                rIgn, vIgn, mu, accelKmS2,
+                0.0, 0, m_moiBurnDur, 200);
+            m_predictedPeKm = spacecraft::periapsisAltitude(rf, vf, mu, m_arrBodyRadius);
         }
     }
 }
@@ -2613,7 +2649,7 @@ void TransferMFD::renderArrival(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             const ImU32 tPeCol = (m_tToPeHyp > 0.0) ? kCyan : kOrange;
             add(tPeCol,  "T-to-Pe   %s", bufTpe);
 
-            if (!m_capturedAtArrival && m_moiDvCirc > 0.0) {
+            if (m_moiDvCirc > 0.0) {
                 add(kYellow, "MOI dV    %.3f km/s  (%s)", m_moiDvCirc, bufBurn);
                 add(kCyan,   "T-ign     %s  (T-0.5burn)", bufIgn);
                 if (std::isfinite(m_predictedPeKm)) {
