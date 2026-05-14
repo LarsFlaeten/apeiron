@@ -349,6 +349,15 @@ const char* TransferMFD::leftLabel(int slot) const
         }
     }
     if (m_page == 3) {
+        if (slot == 0) {
+            switch (m_mccWarnIdx) {
+            case 0:  return "W:OFF";
+            case 1:  return "W:100";
+            case 2:  return "W:200";
+            case 3:  return "W:500";
+            default: return "";
+            }
+        }
         if (slot == 4) return "BACK";
         return "";
     }
@@ -453,6 +462,12 @@ void TransferMFD::onLeft(int slot)
         return;
     }
     if (m_page == 3) {
+        if (slot == 0) {
+            m_mccWarnIdx   = (m_mccWarnIdx + 1)
+                             % static_cast<int>(std::size(kMccWarnKms));
+            m_mccWarnActive = false;  // reset active state on threshold change
+            return;
+        }
         if (slot == 4) { m_page = 2; return; }
         return;
     }
@@ -2205,6 +2220,26 @@ void TransferMFD::tickMcc()
                                  tofRemaining, true, vMCC_dep, vMCC_arr)) {
         m_mccDv = vMCC_dep - m_shipHelioV;
     }
+
+    // MCC deviation warning: fire voice alert on rising edge, keep sim cap active.
+    if (m_mccWarnIdx > 0) {
+        const double dv     = glm::length(m_mccDv);
+        const double thresh = kMccWarnKms[m_mccWarnIdx];
+        if (dv > thresh) {
+            if (!m_mccWarnActive) {
+                char buf[80];
+                std::snprintf(buf, sizeof(buf),
+                    "Course correction warning. %.0f meters per second.",
+                    dv * 1000.0);
+                obc::speakImmediate(buf);
+            }
+            m_mccWarnActive = true;
+        } else {
+            m_mccWarnActive = false;
+        }
+    } else {
+        m_mccWarnActive = false;
+    }
 }
 
 void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
@@ -2463,8 +2498,16 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         if (dvMCC < 0.001)
             addLine(kGreen,  " ON NOMINAL TRAJECTORY");
         else
-            // V-inf at arrival: use planned Mars velocity at arrival time, not current time.
             addLine(kDim,    " arr dV %.3f km/s (new)", glm::length(vMCC_arr - m_detail.vArrBody));
+    }
+    {
+        static constexpr const char* kWarnLabels[] = {"OFF", "100 m/s", "200 m/s", "500 m/s"};
+        if (m_mccWarnActive)
+            addLine(kOrange, " WARN >%s  [ACTIVE — 1x]", kWarnLabels[m_mccWarnIdx]);
+        else if (m_mccWarnIdx > 0)
+            addLine(kDim,    " WARN >%s", kWarnLabels[m_mccWarnIdx]);
+        else
+            addLine(kDim,    " WARN  OFF");
     }
 
     // -- Approach status (brief) — full detail on ARR page ------------------

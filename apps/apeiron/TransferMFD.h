@@ -133,8 +133,10 @@ public:
         return m_burnCtrl.requestMainEngine() || m_moiBurnCtrl.requestMainEngine();
     }
 
-    // Returns a positive time-accel cap (10×) during burn execution, or 0.
+    // Returns a positive time-accel cap during execution or MCC warning, or 0.
+    // 1× while an MCC deviation warning is active; 10× while a burn is executing.
     double maxSimSpeed() const {
+        if (m_mccWarnActive) return 1.0;
         const double a = m_burnCtrl.maxSimSpeed();
         const double b = m_moiBurnCtrl.maxSimSpeed();
         return (a > 0.0) ? a : b;
@@ -288,4 +290,11 @@ private:
         { -1.0, 0.0, 30.0, 60.0, 90.0, 120.0, 150.0, 180.0 };
     int    m_incPresetIdx    = 0;   // 0 = FREE
     double m_insertionIncDeg = 0.0; // current predicted insertion orbit inclination (deg)
+
+    // MCC deviation warning (page 3 — Coasting).
+    // Index 0 = OFF; otherwise the threshold in km/s at which a voice warning
+    // fires and sim speed is capped to 1× until the deviation drops back below.
+    static constexpr double kMccWarnKms[] = { 0.0, 0.1, 0.2, 0.5 };
+    int  m_mccWarnIdx    = 0;     // 0 = OFF
+    bool m_mccWarnActive = false; // true while dV exceeds threshold
 };
