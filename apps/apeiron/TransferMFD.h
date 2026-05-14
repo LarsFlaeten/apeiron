@@ -288,8 +288,9 @@ private:
     // Other values are target ecliptic inclination in degrees.
     static constexpr double kIncPresetDeg[] =
         { -1.0, 0.0, 30.0, 60.0, 90.0, 120.0, 150.0, 180.0 };
-    int    m_incPresetIdx    = 0;   // 0 = FREE
-    double m_insertionIncDeg = 0.0; // current predicted insertion orbit inclination (deg)
+    int    m_incPresetIdx       = 0;   // 0 = FREE
+    double m_insertionIncDeg    = 0.0; // current predicted insertion orbit inclination (deg)
+    double m_minAchievableIncDeg = 0.0; // minimum ecliptic inc achievable via B-plane (deg)
 
     // MCC deviation warning (page 3 — Coasting).
     // Index 0 = OFF; otherwise the threshold in km/s at which a voice warning

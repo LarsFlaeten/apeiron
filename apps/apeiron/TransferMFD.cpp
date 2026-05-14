@@ -1814,15 +1814,16 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 // ---------------------------------------------------------------------------
 void TransferMFD::tickBplane()
 {
-    m_bplaneDv          = glm::dvec3(0.0);
-    m_bplaneValid       = false;
-    m_bplanePeCurrentKm = 0.0;
-    m_capturedAtArrival = false;
-    m_shipArrR          = glm::dvec3(0.0);
-    m_shipArrV          = glm::dvec3(0.0);
-    m_muArr             = 0.0;
-    m_arrBodyRadius     = 0.0;
-    m_insertionIncDeg   = 0.0;
+    m_bplaneDv             = glm::dvec3(0.0);
+    m_bplaneValid          = false;
+    m_bplanePeCurrentKm    = 0.0;
+    m_capturedAtArrival    = false;
+    m_shipArrR             = glm::dvec3(0.0);
+    m_shipArrV             = glm::dvec3(0.0);
+    m_muArr                = 0.0;
+    m_arrBodyRadius        = 0.0;
+    m_insertionIncDeg      = 0.0;
+    m_minAchievableIncDeg  = 0.0;
 
     if (!m_detail.valid) return;
 
@@ -1886,7 +1887,7 @@ void TransferMFD::tickBplane()
     double vInfSq = glm::dot(v, v) - 2.0 * muArr / rMag;
     if (vInfSq <= 0.0) {
         // Captured in elliptic orbit — B-plane correction no longer applies,
-        // but compute Pe altitude from orbital elements so the display persists.
+        // but compute Pe altitude and actual inclination from orbital elements.
         const double v2  = glm::dot(v, v);
         const double rv  = glm::dot(r, v);
         const glm::dvec3 eVec = ((v2 - muArr / rMag) * r - rv * v) / muArr;
@@ -1897,6 +1898,14 @@ void TransferMFD::tickBplane()
             m_bplanePeCurrentKm = sma * (1.0 - ecc) - arrRadius;
             m_bplaneValid       = true;
             m_capturedAtArrival = true;
+            // Compute actual orbit inclination from angular momentum vector.
+            const glm::dvec3 hCapVec = glm::cross(r, v);
+            const double     hCap    = glm::length(hCapVec);
+            if (hCap > 1e-6) {
+                const glm::dvec3 zEcl(0.0, 0.0, 1.0);
+                m_insertionIncDeg = std::acos(std::clamp(
+                    glm::dot(hCapVec / hCap, zEcl), -1.0, 1.0)) * 180.0 / M_PI;
+            }
         }
         return;   // skip hyperbolic BPL dV computation
     }
@@ -1973,9 +1982,12 @@ void TransferMFD::tickBplane()
         const double a         = glm::dot(tHat, zEcl);
         const double c         = glm::dot(rHatBpl, zEcl);
         const double amp       = std::sqrt(a * a + c * c);
-        if (amp < 1e-9 || std::abs(cosInc) > amp + 1e-9) {
-            phiTarget = phiCurrent;  // inclination not achievable, keep current
+        m_minAchievableIncDeg  = std::acos(std::clamp(amp, 0.0, 1.0)) * 180.0 / M_PI;
+        if (amp < 1e-9) {
+            phiTarget = phiCurrent;  // degenerate geometry — keep current
         } else {
+            // clamp cosInc/amp to [-1,1]: targets the closest achievable inclination
+            // when the requested value is outside the achievable range.
             const double arg  = std::clamp(cosInc / amp, -1.0, 1.0);
             const double base = std::atan2(c, a);
             auto wrapPi = [](double x) {
@@ -2627,6 +2639,11 @@ void TransferMFD::renderArrival(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         } else {
             double tgtDeg = kIncPresetDeg[m_incPresetIdx];
             add(kYellow, "Inc tgt  %s = %.0f°  [INC]", presetName, tgtDeg);
+            // Warn when the requested inclination is below the minimum achievable.
+            if (!m_capturedAtArrival && m_minAchievableIncDeg > 0.1
+                    && tgtDeg < m_minAchievableIncDeg - 0.5) {
+                add(kOrange, "  Min achievable  %.1f°", m_minAchievableIncDeg);
+            }
         }
 
         sep();
