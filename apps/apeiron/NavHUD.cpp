@@ -174,13 +174,13 @@ void NavHUD::render(const Spacecraft&                              ship,
     };
 
     // ==================================================================
-    if (nav.navMode == NavMode::Orbit) {
-        // ---- Orbit: prograde / retrograde / normal+/normal- ----
-        // Use reference-body-relative velocity/position when provided (non-zero)
-        // so markers are correct in Mars SOI, Moon SOI, etc.
+    if (nav.navMode == NavMode::Orbit || nav.navMode == NavMode::Mcc) {
+        // ---- Orbit / MCC: prograde / retrograde / normal+/normal- ----
+        // (In MCC mode these are suppressed; only the MCC diamond below is shown.)
+        // Prograde/retrograde/normal markers only in Orbit mode.
         const glm::dvec3 vel = (glm::length(shipRelRefV) > 1e-9) ? shipRelRefV : ship.velocity();
         const glm::dvec3 pos = (glm::length(shipRelRefR) > 1e-9) ? shipRelRefR : ship.position();
-        if (glm::length(vel) > 1e-9) {
+        if (nav.navMode == NavMode::Orbit && glm::length(vel) > 1e-9) {
             glm::vec3 pgDir = glm::normalize(glm::vec3(vel));
             auto pg  = projectDir( pgDir);
             auto ret = projectDir(-pgDir);
