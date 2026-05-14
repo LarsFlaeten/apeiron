@@ -1656,48 +1656,13 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                  taDeg_now, altKm, sma);
     sep();
 
-    // -----------------------------------------------------------------------
-    // Plane-change costs
-    //
-    // Direct (at current LEO):  dV_pc = 2·v_c·sin(Δi/2)
-    //
-    // Bi-elliptic (raise to r_a, plane change at apoapsis, TMI at periapsis):
-    //   v_apo(r_a)  = sqrt(2·μ·r_c / (r_a·(r_c+r_a)))
-    //   dV_pc(r_a)  = 2·v_apo·sin(Δi/2)
-    //   dV_total    = (v_hyp − v_c) + dV_pc(r_a)   ← same base TMI cost
-    //   t_to_apo    = π·sqrt((r_c+r_a)³ / (8·μ))   (half-period of transfer ellipse)
-    //
-    // Orion main engine accel ≈ 0.97 m/s² (25700 N / 26500 kg)
-    // -----------------------------------------------------------------------
-    const double sinHalfDi = std::sin(planeErr * M_PI / 180.0 * 0.5);
-    const double vCircPark = std::sqrt(mu / rPark);   // circular at reference alt
-    const double vHyp      = std::sqrt(m_detail.c3 + 2.0 * mu / rPark);
-    const double dvTMIbase = vHyp - vCircPark;        // base TMI ΔV (independent of plane strat)
-
-    // Direct plane change at current LEO speed
-    double vLEO   = std::sqrt(mu / rShip);
-    double dvPCdirect = 2.0 * vLEO * sinHalfDi;
-
-    const double thrustN  = m_mainThrustN;
-    const double massKg   = m_shipMass;
-    const double accel    = thrustN / massKg;   // m/s²
-
-    // Bi-elliptic candidates: 10×, 25×, 60× departure body radius.
-    // Scales naturally with the departure body (GEO~42k, HEO~100k, Lunar~380k for Earth;
-    // comparable ratios for Mars or other bodies).
-    const double r_body = m_depBodyRadius;
-    struct BiElliptic { char label[20]; double r_a; };
-    BiElliptic kCands[3];
-    {
-        double factors[] = { 10.0, 25.0, 60.0 };
-        for (int ci = 0; ci < 3; ++ci) {
-            double ra = r_body * factors[ci];
-            int altK  = static_cast<int>((ra - r_body) / 1000.0 + 0.5);
-            std::snprintf(kCands[ci].label, sizeof(kCands[ci].label),
-                          "%dk km", altK);
-            kCands[ci].r_a = ra;
-        }
-    }
+    // Plane-change cost at current altitude:  dV_pc = 2·v_c·sin(Δi/2)
+    const double sinHalfDi    = std::sin(planeErr * M_PI / 180.0 * 0.5);
+    const double vLEO         = std::sqrt(mu / rShip);
+    const double dvPCdirect   = 2.0 * vLEO * sinHalfDi;
+    const double thrustN      = m_mainThrustN;
+    const double massKg       = m_shipMass;
+    const double accel        = thrustN / massKg;   // m/s²
 
     // Target plane
     ImU32 tgtCol = (planeErr < 0.5) ? kGreen : (planeErr < 5.0) ? kOrange : kRed;
@@ -1709,26 +1674,6 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         double burnTimeDirect = dvPCdirect * 1000.0 / accel;
         char bufD[12]; fmtHMS(burnTimeDirect, bufD, sizeof(bufD));
         add(tgtCol, " direct dV %.2f km/s  burn %s", dvPCdirect, bufD);
-    }
-    sep();
-
-    // Bi-elliptic section (only show if plane change is non-trivial)
-    if (planeErr > 0.5) {
-        add(kCyan, "BI-ELLIPTIC  (raise apo, chg plane there, TMI at peri)");
-        add(kDim,  " base TMI dV unchanged: %.3f km/s", dvTMIbase);
-        for (const auto& c : kCands) {
-            double r_a   = c.r_a;
-            double v_apo = std::sqrt(2.0 * mu * rShip / (r_a * (rShip + r_a)));
-            double dvPCbi = 2.0 * v_apo * sinHalfDi;
-            double saving = dvPCdirect - dvPCbi;
-            // Time to reach apoapsis = half transfer orbit period
-            double a_tr  = (rShip + r_a) * 0.5;
-            double tApo  = M_PI * std::sqrt(a_tr * a_tr * a_tr / mu);  // seconds
-            char bufT[12]; fmtHMS(tApo, bufT, sizeof(bufT));
-            ImU32 col = (saving > 0.5) ? kGreen : (saving > 0.1) ? kYellow : kDim;
-            add(col, " %-12s  dV-pc %.2f  save %.2f  T+ %s",
-                c.label, dvPCbi, saving, bufT);
-        }
     }
     sep();
 
