@@ -1536,13 +1536,17 @@ int main(int argc, char* argv[])
                                 ship.setAngularVelocity(ship.attitude() * autopilot.omegaFF);
                             }
                             prevSettleClamp = false;
-                            // Manual rotation.
-                            if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) desired[4] += rcsTorque;
-                            if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) desired[4] -= rcsTorque;
-                            if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) desired[5] += rcsTorque;
-                            if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) desired[5] -= rcsTorque;
-                            if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) desired[3] -= rcsTorque;
-                            if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) desired[3] += rcsTorque;
+                            // Manual rotation — guard against Shift held, since Shift+I/K/J/L/U/O
+                            // are autopilot toggle commands; testing the bare key while Shift is
+                            // down causes a one-frame torque spike on AP disengage.
+                            if (!shiftHeld) {
+                                if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) desired[4] += rcsTorque;
+                                if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) desired[4] -= rcsTorque;
+                                if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) desired[5] += rcsTorque;
+                                if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) desired[5] -= rcsTorque;
+                                if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) desired[3] -= rcsTorque;
+                                if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) desired[3] += rcsTorque;
+                            }
                         }
 
                         // Allocation strategy:
