@@ -31,6 +31,9 @@ struct BurnPlan {
     // If true: attitude = Retrograde; engine stops when energy drops BELOW c3Required.
     // If false (TMI): attitude = Prograde; engine stops when energy rises ABOVE c3Required.
     bool        retrogradeBurn = false;
+    // If false: arm() does NOT slew the autopilot immediately — pilot orients manually.
+    // The attitude is still asserted at PreIgnition and during Executing.
+    bool        slewOnArm      = true;
 };
 
 // ---------------------------------------------------------------------------

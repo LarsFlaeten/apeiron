@@ -575,6 +575,7 @@ void TransferMFD::onRight(int slot)
                 plan.dvMagnitude    = m_moiDvCirc;
                 plan.burnDuration   = m_moiBurnDur;
                 plan.retrogradeBurn = true;
+                plan.slewOnArm      = false;   // pilot orients manually; retro asserted at T-10s
                 if (m_eventQueue) m_eventQueue->cancelByName("MOI");
                 m_moiBurnCtrl.arm(plan, m_autopilot, m_eventQueue);
             }
@@ -2768,8 +2769,10 @@ void TransferMFD::update(const MFDContext& ctx)
     // SOI transition announcements.
     {
         const bool nowInSoi = inArrivalSoi();
-        if (nowInSoi && !m_wasInArrivalSoi)
+        if (nowInSoi && !m_wasInArrivalSoi) {
             obc::speak("Entered " + m_arrBodyName + " sphere of influence.");
+            m_soiEntryPending = true;
+        }
         m_wasInArrivalSoi = nowInSoi;
     }
 

@@ -1285,6 +1285,12 @@ int main(int argc, char* argv[])
                 }
             }
 
+            // Drop to 1× on SOI entry so the pilot can arm the arrival burn.
+            if (transferMFD.consumeSoiEntry()) {
+                simSpeedTarget          = 1.0;
+                simSecondsPerRealSecond = 1.0;
+            }
+
             // Smooth time acceleration: converge in log-space toward target.
             // Time constant ~0.15 s real time — fast enough to feel responsive,
             // slow enough to avoid the one-frame orbital skip on t/T presses.

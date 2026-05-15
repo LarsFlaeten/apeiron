@@ -23,8 +23,8 @@ void BurnController::arm(const BurnPlan& plan,
     if (eq)
         eq->schedule(plan.name + "-IGN", plan.ignitionET, /* countdown10s= */ true);
 
-    // Slew to burn attitude immediately.
-    if (ap)
+    // Slew to burn attitude immediately (unless pilot wants to orient manually).
+    if (ap && plan.slewOnArm)
         ap->mode = plan.retrogradeBurn ? spacecraft::AutopilotMode::Retrograde
                                        : spacecraft::AutopilotMode::Prograde;
 }

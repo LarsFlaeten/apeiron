@@ -117,6 +117,9 @@ public:
     // Computes time-to-Pe, MOI burn duration/ignition ET from cached B-plane state.
     void tickApproach();
 
+    // Returns true once per SOI entry event, then resets.  main.cpp uses this to drop to 1×.
+    bool consumeSoiEntry() { const bool v = m_soiEntryPending; m_soiEntryPending = false; return v; }
+
     glm::dvec3 getBplaneDv() const { return m_bplaneDv; }
     double     getBplanePeCurrentKm() const { return m_bplanePeCurrentKm; }
     glm::dvec3 getMccDv() const { return m_mccDv; }
@@ -281,7 +284,8 @@ private:
     double     m_bplanePeCurrentKm = 0.0;
     bool       m_bplaneValid       = false;
     bool       m_capturedAtArrival = false;
-    bool       m_wasInArrivalSoi   = false;  // previous-frame SOI state for transition detection
+    bool       m_wasInArrivalSoi    = false;  // previous-frame SOI state for transition detection
+    bool       m_soiEntryPending    = false;  // set on rising edge; consumed by main to drop to 1×
 
     // Arrival inclination targeting (page 5).
     // Preset -1.0 = FREE (only Pe targeting, no inclination change).
