@@ -351,7 +351,15 @@ void NavConsole::render(float                                           posX,
         apButton("Nrm- [⇧M]",     M::NormalMinus);
     }
     if (nav.navMode == NavMode::Mcc) {
-        apButton("MCC DIR [⇧G]", M::MccPlus);
+        // Suppress MCC DIR active highlight while burn AP is running — it forces
+        // MccPlus internally, so lighting both buttons simultaneously is confusing.
+        if (nav.mccBurnPhase == MccBurnPhase::Idle) {
+            apButton("MCC DIR [⇧G]", M::MccPlus);
+        } else {
+            if (ImGui::Button("MCC DIR [⇧G]"))
+                autopilot.mode = (apMode == M::MccPlus) ? M::Off : M::MccPlus;
+            ImGui::SameLine();
+        }
 
         // MCC-C (coarse, main engine) and MCC-F (fine, aux) burn AP buttons.
         // Active when the respective burn AP is running.

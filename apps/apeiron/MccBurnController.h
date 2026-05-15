@@ -38,7 +38,10 @@ struct MccBurnController {
                 phase = (mccDvMs > thr) ? MccBurnPhase::Burning : MccBurnPhase::Done;
             break;
         case MccBurnPhase::Burning:
-            if (mccDvMs <= thr) phase = MccBurnPhase::Done;
+            if (attErrorRad >= kAttTolRad)
+                phase = MccBurnPhase::Slewing;  // attitude drifted — re-slew before resuming
+            else if (mccDvMs <= thr)
+                phase = MccBurnPhase::Done;
             break;
         case MccBurnPhase::Done: break;
         }
