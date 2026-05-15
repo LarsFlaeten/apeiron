@@ -1525,11 +1525,6 @@ int main(int argc, char* argv[])
                             if (settleClamp) {
                                 glm::dvec3 w_ff_inertial = att * autopilot.omegaFF;
                                 ship.setAngularVelocity(w_ff_inertial);
-                            } else if (prevSettleClamp) {
-                                // Clamp just released — zero once more so the physics
-                                // state that was being overridden each frame doesn't
-                                // produce a one-frame nudge.
-                                ship.setAngularVelocity(att * autopilot.omegaFF);
                             }
                             prevSettleClamp = settleClamp;
                             // NullV fills [0..2] (translation); attitude modes fill [3..5].

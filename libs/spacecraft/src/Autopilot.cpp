@@ -183,6 +183,7 @@ Wrench Autopilot::compute(const glm::dquat& currentAttitude,
     if (mode == AutopilotMode::Killrot) {
         m_timedBurnActive = false;
         m_burnTimer       = 0.0;
+        omegaFF           = {};   // Killrot always targets zero rate; clear stale feedforward.
 
         const double omegaMag = glm::length(omega_body);
 
