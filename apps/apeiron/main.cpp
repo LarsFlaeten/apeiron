@@ -1026,6 +1026,14 @@ int main(int argc, char* argv[])
                 using M = spacecraft::AutopilotMode;
                 s->autopilot->mode = (s->autopilot->mode == M::MccPlus) ? M::Off : M::MccPlus;
             }
+            else if (key == GLFW_KEY_C && (mods & GLFW_MOD_SHIFT)) {
+                if (s->nav && s->nav->navMode == NavMode::Mcc)
+                    s->nav->mccCoarseToggle = true;
+            }
+            else if (key == GLFW_KEY_F && (mods & GLFW_MOD_SHIFT)) {
+                if (s->nav && s->nav->navMode == NavMode::Mcc)
+                    s->nav->mccFineToggle = true;
+            }
             else if (key == GLFW_KEY_V && (mods & GLFW_MOD_SHIFT)) {
                 if (s->nav && s->nav->navMode == NavMode::Docking && s->nav->dockTgtIdx >= 0) {
                     using M = spacecraft::AutopilotMode;
@@ -1435,12 +1443,53 @@ int main(int argc, char* argv[])
                             glfwGetKey(window, GLFW_KEY_LEFT_SHIFT)  == GLFW_PRESS
                             || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
                         const bool spaceDown = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-                        const bool auxEngineKey  = spaceDown && shiftHeld;
+
+                        // ---- MCC burn AP toggle and tick ----
+                        {
+                            const auto toggleMccBurn = [&](bool coarse) {
+                                if (transferMFD.mccBurnActive() && transferMFD.mccBurnCoarse() == coarse)
+                                    transferMFD.disarmMccBurn();
+                                else {
+                                    transferMFD.armMccBurn(coarse);
+                                    autopilot.mode = spacecraft::AutopilotMode::MccPlus;
+                                }
+                            };
+                            if (nav.mccCoarseToggle) { nav.mccCoarseToggle = false; toggleMccBurn(true);  }
+                            if (nav.mccFineToggle)   { nav.mccFineToggle   = false; toggleMccBurn(false); }
+
+                            if (transferMFD.mccBurnActive()) {
+                                if (autopilot.mode != spacecraft::AutopilotMode::MccPlus) {
+                                    // User changed autopilot mode — abort MCC burn AP.
+                                    transferMFD.disarmMccBurn();
+                                } else {
+                                    const glm::dvec3 mccDvVec = transferMFD.getMccDv(); // km/s
+                                    const double mccDvMs = glm::length(mccDvVec) * 1000.0;
+                                    double attErr = M_PI;
+                                    if (mccDvMs > 1e-3) {
+                                        const glm::dvec3 mccDirNorm = glm::normalize(mccDvVec);
+                                        const glm::dvec3 shipFwd = glm::dvec3(
+                                            spacecraft[playerIdx]->attitude() * glm::dvec3(1.0, 0.0, 0.0));
+                                        attErr = std::acos(std::clamp(
+                                            glm::dot(shipFwd, mccDirNorm), -1.0, 1.0));
+                                    }
+                                    if (transferMFD.tickMccBurn(mccDvMs, attErr)) {
+                                        autopilot.mode = spacecraft::AutopilotMode::Killrot;
+                                        transferMFD.consumeMccDone();
+                                    }
+                                }
+                            }
+                            nav.mccBurnPhase  = transferMFD.mccBurnPhase();
+                            nav.mccBurnCoarse = transferMFD.mccBurnCoarse();
+                        }
+
+                        const bool auxEngineKey  = (spaceDown && shiftHeld)
+                                                   || transferMFD.requestMccAuxEngine();
                         // Main engine (SPACE) — tracked separately so allocation
                         // always uses the full matrix when the main engine is firing.
                         const bool mainEngineKey =
                             (spaceDown && !shiftHeld)
-                            || transferMFD.requestMainEngine();
+                            || transferMFD.requestMainEngine()
+                            || transferMFD.requestMccMainEngine();
                         if (mainEngineKey) {
                             desired[0] += mainEngineThrust;
                             mainEngineOn = true;

@@ -352,6 +352,22 @@ void NavConsole::render(float                                           posX,
     }
     if (nav.navMode == NavMode::Mcc) {
         apButton("MCC DIR [⇧G]", M::MccPlus);
+
+        // MCC-C (coarse, main engine) and MCC-F (fine, aux) burn AP buttons.
+        // Active when the respective burn AP is running.
+        auto mccBurnButton = [&](const char* label, bool isCoarse) {
+            const bool active = nav.mccBurnPhase != MccBurnPhase::Idle
+                             && nav.mccBurnCoarse == isCoarse;
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
+            if (ImGui::Button(label)) {
+                if (isCoarse) nav.mccCoarseToggle = true;
+                else          nav.mccFineToggle   = true;
+            }
+            if (active) ImGui::PopStyleColor();
+            ImGui::SameLine();
+        };
+        mccBurnButton("MCC-C [⇧C]", true);
+        mccBurnButton("MCC-F [⇧F]", false);
     }
     if (nav.navMode == NavMode::Docking && nav.dockTgtIdx >= 0) {
         apButton("NULL V [⇧V]", M::NullV);

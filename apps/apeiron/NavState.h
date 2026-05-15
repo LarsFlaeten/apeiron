@@ -1,5 +1,6 @@
 #pragma once
 #include "NavMode.h"
+#include "MccBurnController.h"
 
 // Mutable navigation/docking state shared between main loop and UI renderers.
 struct NavState {
@@ -17,4 +18,11 @@ struct NavState {
     // Number of compatible ports currently available for sub-selection.
     // Updated each frame by main.cpp; used by NavConsole to show/hide the PORT button.
     int compatiblePortCount = 0;
+
+    // MCC burn AP — one-shot toggle requests set by NavConsole/key, cleared by main.cpp.
+    bool mccCoarseToggle = false;
+    bool mccFineToggle   = false;
+    // Current MCC burn state — written by main.cpp, read by NavConsole for display.
+    MccBurnPhase mccBurnPhase  = MccBurnPhase::Idle;
+    bool         mccBurnCoarse = true;
 };

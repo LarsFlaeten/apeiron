@@ -3,6 +3,7 @@
 #include "MFD.h"
 #include "MFDContext.h"
 #include "BurnController.h"
+#include "MccBurnController.h"
 
 #include "apeiron/spacecraft/Porkchop.h"
 #include "apeiron/spacecraft/Lambert.h"
@@ -136,6 +137,20 @@ public:
         return m_burnCtrl.requestMainEngine() || m_moiBurnCtrl.requestMainEngine();
     }
 
+    // MCC burn AP — arm, tick, and query.
+    void         armMccBurn(bool coarse) { m_mccBurnCtrl.arm(coarse); }
+    void         disarmMccBurn()         { m_mccBurnCtrl.disarm(); }
+    // Per-frame tick: returns true when burn completes (Done state).
+    // Caller must engage Killrot and call consumeMccDone().
+    bool         tickMccBurn(double mccDvMs, double attErrorRad)
+                     { return m_mccBurnCtrl.tick(mccDvMs, attErrorRad); }
+    bool         requestMccMainEngine() const { return m_mccBurnCtrl.requestMainEngine(); }
+    bool         requestMccAuxEngine()  const { return m_mccBurnCtrl.requestAuxEngine(); }
+    void         consumeMccDone()             { m_mccBurnCtrl.consumeDone(); }
+    MccBurnPhase mccBurnPhase()  const { return m_mccBurnCtrl.phase; }
+    bool         mccBurnCoarse() const { return m_mccBurnCtrl.coarse; }
+    bool         mccBurnActive() const { return m_mccBurnCtrl.active(); }
+
     // Returns a positive time-accel cap during execution or MCC warning, or 0.
     // 1× while an MCC deviation warning is active; 10× while a burn is executing.
     double maxSimSpeed() const {
@@ -261,8 +276,9 @@ private:
     spacecraft::Autopilot* m_autopilot  = nullptr;
     double                 m_lastMccET  = 0.0;
 
-    BurnController m_burnCtrl;     // departure (TMI) burn
-    BurnController m_moiBurnCtrl;  // arrival (MOI) burn
+    BurnController    m_burnCtrl;     // departure (TMI) burn
+    BurnController    m_moiBurnCtrl;  // arrival (MOI) burn
+    MccBurnController m_mccBurnCtrl;  // MCC coarse/fine burn AP
 
     // Arrival-body-centric ship state — cached in tickBplane(), used by tickApproach().
     glm::dvec3 m_shipArrR { 0.0 };
