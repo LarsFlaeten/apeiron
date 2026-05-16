@@ -1299,6 +1299,12 @@ int main(int argc, char* argv[])
                 simSecondsPerRealSecond = 1.0;
             }
 
+            // Drop to 1× on MCC warning rising edge; pilot can speed up freely after.
+            if (transferMFD.consumeMccWarnDrop()) {
+                simSpeedTarget          = 1.0;
+                simSecondsPerRealSecond = 1.0;
+            }
+
             // Smooth time acceleration: converge in log-space toward target.
             // Time constant ~0.15 s real time — fast enough to feel responsive,
             // slow enough to avoid the one-frame orbital skip on t/T presses.

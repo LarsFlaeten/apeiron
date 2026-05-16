@@ -358,7 +358,6 @@ const char* TransferMFD::leftLabel(int slot) const
             default: return "";
             }
         }
-        if (slot == 1) return (m_mccWarnActive && !m_mccWarnDismissed) ? "DISM" : "";
         if (slot == 4) return "BACK";
         return "";
     }
@@ -464,13 +463,11 @@ void TransferMFD::onLeft(int slot)
     }
     if (m_page == 3) {
         if (slot == 0) {
-            m_mccWarnIdx       = (m_mccWarnIdx + 1)
-                                 % static_cast<int>(std::size(kMccWarnKms));
-            m_mccWarnActive    = false;  // reset active state on threshold change
-            m_mccWarnDismissed = false;
+            m_mccWarnIdx    = (m_mccWarnIdx + 1)
+                              % static_cast<int>(std::size(kMccWarnKms));
+            m_mccWarnActive = false;  // reset active state on threshold change
             return;
         }
-        if (slot == 1) { m_mccWarnDismissed = true; return; }
         if (slot == 4) { m_page = 2; return; }
         return;
     }
@@ -2162,14 +2159,14 @@ void TransferMFD::tickMcc()
                     dv * 1000.0);
                 obc::speakImmediate(buf);
             }
+            if (!m_mccWarnActive)
+                m_mccWarnDropPending = true;  // rising edge — drop to 1× once
             m_mccWarnActive = true;
         } else {
-            m_mccWarnActive    = false;
-            m_mccWarnDismissed = false;  // reset so next spike triggers again
+            m_mccWarnActive = false;
         }
     } else {
-        m_mccWarnActive    = false;
-        m_mccWarnDismissed = false;
+        m_mccWarnActive = false;
     }
 }
 
@@ -2433,10 +2430,8 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     }
     {
         static constexpr const char* kWarnLabels[] = {"OFF", "100 m/s", "200 m/s", "500 m/s"};
-        if (m_mccWarnActive && !m_mccWarnDismissed)
-            addLine(kOrange, " WARN >%s  [ACTIVE — 1x]", kWarnLabels[m_mccWarnIdx]);
-        else if (m_mccWarnActive && m_mccWarnDismissed)
-            addLine(kYellow, " WARN >%s  [dismissed]", kWarnLabels[m_mccWarnIdx]);
+        if (m_mccWarnActive)
+            addLine(kOrange, " WARN >%s  [ACTIVE]", kWarnLabels[m_mccWarnIdx]);
         else if (m_mccWarnIdx > 0)
             addLine(kDim,    " WARN >%s", kWarnLabels[m_mccWarnIdx]);
         else

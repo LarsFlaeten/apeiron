@@ -151,13 +151,19 @@ public:
     bool         mccBurnCoarse() const { return m_mccBurnCtrl.coarse; }
     bool         mccBurnActive() const { return m_mccBurnCtrl.active(); }
 
-    // Returns a positive time-accel cap during execution or MCC warning, or 0.
-    // 1× while an MCC deviation warning is active; 10× while a burn is executing.
+    // Returns a positive time-accel cap during burn execution, or 0.
+    // 10× while a burn is executing; MCC warning no longer caps ongoing speed.
     double maxSimSpeed() const {
-        if (m_mccWarnActive && !m_mccWarnDismissed) return 1.0;
         const double a = m_burnCtrl.maxSimSpeed();
         const double b = m_moiBurnCtrl.maxSimSpeed();
         return (a > 0.0) ? a : b;
+    }
+
+    // Returns true once on the MCC warning rising edge — caller drops to 1×.
+    bool consumeMccWarnDrop() {
+        const bool v = m_mccWarnDropPending;
+        m_mccWarnDropPending = false;
+        return v;
     }
 
     void render(ImDrawList* dl, ImVec2 origin, ImVec2 size) override;
@@ -316,7 +322,7 @@ private:
     // Index 0 = OFF; otherwise the threshold in km/s at which a voice warning
     // fires and sim speed is capped to 1× until the deviation drops back below.
     static constexpr double kMccWarnKms[] = { 0.0, 0.1, 0.2, 0.5 };
-    int  m_mccWarnIdx       = 0;     // 0 = OFF
-    bool m_mccWarnActive    = false; // true while dV exceeds threshold
-    bool m_mccWarnDismissed = false; // user acknowledged — skip 1× cap until next rising edge
+    int  m_mccWarnIdx         = 0;     // 0 = OFF
+    bool m_mccWarnActive      = false; // true while dV exceeds threshold
+    bool m_mccWarnDropPending = false; // one-shot: drop sim speed to 1× on rising edge
 };
