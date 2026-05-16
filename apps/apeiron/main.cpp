@@ -1468,11 +1468,14 @@ int main(int argc, char* argv[])
                                     // User changed autopilot mode — abort MCC burn AP.
                                     transferMFD.disarmMccBurn();
                                 } else {
-                                    const glm::dvec3 mccDvVec = transferMFD.getMccDv(); // km/s
-                                    const double mccDvMs = glm::length(mccDvVec) * 1000.0;
+                                    // Use activeNavDv — same vector the attitude AP targets.
+                                    // In late approach this is the B-plane dV, not getMccDv().
+                                    // Using getMccDv() here would mismatch the attitude target
+                                    // and keep attErr above threshold, preventing thrust.
+                                    const double mccDvMs = glm::length(activeNavDv) * 1000.0;
                                     double attErr = M_PI;
                                     if (mccDvMs > 1e-3) {
-                                        const glm::dvec3 mccDirNorm = glm::normalize(mccDvVec);
+                                        const glm::dvec3 mccDirNorm = glm::normalize(activeNavDv);
                                         const glm::dvec3 shipFwd = glm::dvec3(
                                             spacecraft[playerIdx]->attitude() * glm::dvec3(1.0, 0.0, 0.0));
                                         attErr = std::acos(std::clamp(
