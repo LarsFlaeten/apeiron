@@ -2147,9 +2147,15 @@ void TransferMFD::tickMcc()
         m_mccDv = vMCC_dep - m_shipHelioV;
     }
 
-    // MCC deviation warning: fire voice alert on rising edge, keep sim cap active.
+    // MCC deviation warning: fire voice alert on rising edge, drop sim speed once.
+    // Use the same active-nav-dV selection as the HUD diamond and burn AP:
+    // B-plane correction when available (late approach or Pe < 50,000 km), else Lambert MCC.
     if (m_mccWarnIdx > 0) {
-        const double dv     = glm::length(m_mccDv);
+        const bool   bplUsable = m_bplaneValid
+                              && (glm::length(m_bplaneDv) > 1e-9)
+                              && (m_bplanePeCurrentKm < 50000.0 || getTransferProgress() >= 0.97);
+        const double dv        = bplUsable ? glm::length(m_bplaneDv)
+                                           : glm::length(m_mccDv);
         const double thresh = kMccWarnKms[m_mccWarnIdx];
         if (dv > thresh) {
             if (!m_mccWarnActive) {
