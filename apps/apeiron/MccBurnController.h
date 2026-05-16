@@ -34,8 +34,10 @@ struct MccBurnController {
         switch (phase) {
         case MccBurnPhase::Idle: break;
         case MccBurnPhase::Slewing:
-            if (attErrorRad < kAttTolRad)
-                phase = (mccDvMs > thr) ? MccBurnPhase::Burning : MccBurnPhase::Done;
+            if (mccDvMs <= thr)
+                phase = MccBurnPhase::Done;        // already done — no need to aim first
+            else if (attErrorRad < kAttTolRad)
+                phase = MccBurnPhase::Burning;
             break;
         case MccBurnPhase::Burning:
             if (attErrorRad >= kAttTolRad)
