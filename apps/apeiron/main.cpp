@@ -1489,6 +1489,7 @@ int main(int argc, char* argv[])
                             }
                             nav.mccBurnPhase  = transferMFD.mccBurnPhase();
                             nav.mccBurnCoarse = transferMFD.mccBurnCoarse();
+                            nav.lambertFlip   = transferMFD.lambertFlipActive();
                         }
 
                         const bool auxEngineKey  = (spaceDown && shiftHeld)

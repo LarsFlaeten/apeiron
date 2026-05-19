@@ -138,7 +138,7 @@ public:
     }
 
     // MCC burn AP — arm, tick, and query.
-    void         armMccBurn(bool coarse) { m_mccBurnCtrl.arm(coarse); }
+    void         armMccBurn(bool coarse) { if (!m_lambertFlip) m_mccBurnCtrl.arm(coarse); }
     void         disarmMccBurn()         { m_mccBurnCtrl.disarm(); }
     // Per-frame tick: returns true when burn completes (Done state).
     // Caller must engage Killrot and call consumeMccDone().
@@ -149,7 +149,8 @@ public:
     void         consumeMccDone()             { m_mccBurnCtrl.consumeDone(); }
     MccBurnPhase mccBurnPhase()  const { return m_mccBurnCtrl.phase; }
     bool         mccBurnCoarse() const { return m_mccBurnCtrl.coarse; }
-    bool         mccBurnActive() const { return m_mccBurnCtrl.active(); }
+    bool         mccBurnActive()    const { return m_mccBurnCtrl.active(); }
+    bool         lambertFlipActive() const { return m_lambertFlip; }
 
     // Returns a positive time-accel cap during burn execution, or 0.
     // 10× while a burn is executing; MCC warning no longer caps ongoing speed.
@@ -325,4 +326,8 @@ private:
     int  m_mccWarnIdx         = 0;     // 0 = OFF
     bool m_mccWarnActive      = false; // true while dV exceeds threshold
     bool m_mccWarnDropPending = false; // one-shot: drop sim speed to 1× on rising edge
+
+    // True when the heliocentric transfer angle ship→arrival is within 15° of 180°.
+    // Lambert is degenerate there; MCC is suppressed and autopilots are blocked.
+    bool m_lambertFlip = false;
 };

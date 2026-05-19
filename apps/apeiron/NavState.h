@@ -25,4 +25,5 @@ struct NavState {
     // Current MCC burn state — written by main.cpp, read by NavConsole for display.
     MccBurnPhase mccBurnPhase  = MccBurnPhase::Idle;
     bool         mccBurnCoarse = true;
+    bool         lambertFlip   = false;  // MCC suppressed: near 180° transfer angle
 };

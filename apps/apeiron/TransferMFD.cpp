@@ -2117,22 +2117,44 @@ void TransferMFD::tickApproach()
 void TransferMFD::tickMcc()
 {
     m_mccDv = glm::dvec3(0.0);
-    if (!m_detail.valid) return;
+    if (!m_detail.valid) { m_lambertFlip = false; return; }
 
     // The MCC correction is computed with a heliocentric two-body model.
     // Inside Earth's sphere of influence (~929,000 km) the geocentric
     // velocity dominates and the heliocentric velocity vector looks nothing
     // like the asymptotic departure velocity — the Lambert result would be
     // completely wrong (17+ km/s artifacts).  Suppress until clear of SOI.
-    if (glm::length(m_shipR) < m_depSOI) return;
+    if (glm::length(m_shipR) < m_depSOI) { m_lambertFlip = false; return; }
 
     // Inside the arrival SOI the ship's heliocentric position is essentially
     // at the target, so Lambert degenerates and produces garbage (50+ km/s).
     // B-plane targeting handles corrections from this point on.
-    if (inArrivalSoi()) return;
+    if (inArrivalSoi()) { m_lambertFlip = false; return; }
 
     const double tofRemaining = m_detail.arrET - m_currentET;
-    if (tofRemaining <= kDay) return;
+    if (tofRemaining <= kDay) { m_lambertFlip = false; return; }
+
+    // Lambert flip detection: suppress MCC when the heliocentric transfer angle
+    // (ship position → planned arrival position) is within 15° of 180°.
+    // At that geometry the Lambert problem is degenerate and the solver jumps
+    // between short-way / long-way branches, producing nonsense dV vectors.
+    {
+        const double rShip = glm::length(m_shipHelioR);
+        const double rArr  = glm::length(m_detail.arrPos);
+        if (rShip > 1e-9 && rArr > 1e-9) {
+            const double cosTheta = glm::dot(m_shipHelioR, m_detail.arrPos) / (rShip * rArr);
+            m_lambertFlip = (cosTheta < -0.966);  // θ > 165°
+        } else {
+            m_lambertFlip = false;
+        }
+    }
+
+    if (m_lambertFlip) {
+        // Auto-disarm any active MCC burn AP to prevent unwanted thrust.
+        if (m_mccBurnCtrl.active()) m_mccBurnCtrl.disarm();
+        m_mccWarnActive = false;
+        return;
+    }
 
     double muSun = m_params.muCentral;
     if (muSun <= 0.0) {
@@ -2282,13 +2304,12 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
     const bool insideDepSOI = (glm::length(m_shipR) < m_depSOI);
 
-    if (!insideDepSOI && tofRemaining > kDay) {   // at least 1 day remaining
+    if (!insideDepSOI && tofRemaining > kDay && !m_lambertFlip) {
         mccValid = spacecraft::solveLambert(muSun, shipR, m_detail.arrPos,
                                             tofRemaining, true,
                                             vMCC_dep, vMCC_arr);
         if (mccValid) {
-            dvMCC   = glm::length(vMCC_dep - shipV);
-            m_mccDv = vMCC_dep - shipV;   // heliocentric ΔV vector, km/s
+            dvMCC = glm::length(vMCC_dep - shipV);
             // Draw MCC arc only when noticeably off-nominal (> 0.5 m/s).
             if (dvMCC > 5e-4) {
                 mccArc.colour    = kCyan;
@@ -2420,7 +2441,11 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     sep();
 
     // -- MCC ----------------------------------------------------------------
-    if (!mccValid || tofRemaining <= kDay) {
+    if (m_lambertFlip) {
+        const ImU32 kRed = IM_COL32(255, 60, 60, 220);
+        addLine(kRed,    "MCC  LAMBERT FLIP");
+        addLine(kOrange, " SINGULARITY — MCC SUPPRESSED");
+    } else if (!mccValid || tofRemaining <= kDay) {
         if (tofRemaining <= 0.0)
             addLine(kGreen,  "ARRIVAL  dV-arr %.3f km/s", m_detail.dv2);
         else
