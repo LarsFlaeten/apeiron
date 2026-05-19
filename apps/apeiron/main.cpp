@@ -1831,10 +1831,12 @@ int main(int argc, char* argv[])
                     // conservation tight at any warp factor.
                     double physStep = step;
                     if (useBodyFrame && refBody.mu > 0.0) {
-                        const double r0 = glm::length(spacecraft[playerIdx]->position()
-                                                      - frameR0);  // body-centric radius
+                        // spacecraft[playerIdx] has already been shifted to the
+                        // body-centric frame, so its position() IS the body-centric
+                        // radius — do NOT subtract frameR0 again.
+                        const double r0 = glm::length(spacecraft[playerIdx]->position());
                         if (r0 > 1.0) {
-                            constexpr double kMinOrbitSteps = 50.0;
+                            constexpr double kMinOrbitSteps = 100.0;
                             const double T = 2.0 * M_PI
                                            * std::sqrt(r0 * r0 * r0 / refBody.mu);
                             physStep = std::min(physStep, T / kMinOrbitSteps);
