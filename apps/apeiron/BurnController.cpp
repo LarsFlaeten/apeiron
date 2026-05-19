@@ -33,12 +33,10 @@ void BurnController::arm(const BurnPlan& plan,
 void BurnController::updateIgnitionET(double newET, OBCEventQueue* eq)
 {
     if (m_phase != BurnPhase::Armed) return;
-    const double delta = std::abs(newET - m_plan.ignitionET);
     m_plan.ignitionET = newET;
-    if (eq && delta > 30.0) {
-        eq->cancelByName(m_plan.name + "-IGN");
-        eq->schedule(m_plan.name + "-IGN", newET, /* countdown10s= */ true);
-    }
+    // Silently move the event timestamp so callouts track the live ignition
+    // estimate without resetting announcement flags or firing stale callouts.
+    if (eq) eq->updateEventTime(m_plan.name + "-IGN", newET);
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +97,7 @@ void BurnController::tick(double currentET,
                 if (m_evtQueue && m_plan.burnDuration > 0.0) {
                     const double mecoET = m_plan.ignitionET + m_plan.burnDuration;
                     m_mecoEventId = m_evtQueue->schedule(
-                        "MECO", mecoET, /* countdown10s= */ true);
+                        "MECO", mecoET, /* countdown10s= */ true, currentET);
                 }
             } else if (currentET > m_plan.ignitionET + kIgnAbort) {
                 // Attitude never settled — abort.

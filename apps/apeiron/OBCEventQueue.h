@@ -41,13 +41,19 @@ struct ScheduledEvent {
 class OBCEventQueue {
 public:
     // Schedule a new event.  Returns a non-zero id usable for cancel().
-    // If an event with the same name already exists it is replaced in-place
-    // (announcement flags are reset), preventing duplicate callouts if a
-    // plan is reconfirmed.
+    // If an event with the same name already exists it is replaced in-place.
+    // Pass currentET > 0 to pre-mark announcement milestones that have already
+    // passed, suppressing spurious callouts when the event is imminent at arm time.
     // Set countdown10s = true to get an extra T-10 s voice callout in addition
     // to the standard T-10 min / T-5 min / T-1 min / T-0 set.
     uint64_t schedule(const std::string& name, double eventET,
-                      bool countdown10s = false);
+                      bool countdown10s = false, double currentET = 0.0);
+
+    // Silently update the ET of an existing event without resetting announcement
+    // flags.  Used for continuous ignition-time refinement so callouts track the
+    // live ignition estimate rather than the originally-armed estimate.
+    // No-op if the event does not exist.
+    void updateEventTime(const std::string& name, double newET);
 
     // Cancel by id (no-op if not found).
     void cancel(uint64_t id);

@@ -6,28 +6,43 @@
 
 // ---------------------------------------------------------------------------
 uint64_t OBCEventQueue::schedule(const std::string& name, double eventET,
-                                  bool countdown10s)
+                                  bool countdown10s, double currentET)
 {
+    // Pre-mark announcement milestones that are already in the past at schedule time
+    // so that a near-future event doesn't fire stale "T-minus 10 minutes" callouts.
+    const double dt = (currentET > 0.0) ? (eventET - currentET) : 1e9;
+
     // Replace existing event with the same name.
     for (auto& ev : m_events) {
         if (ev.name == name) {
             ev.eventET        = eventET;
             ev.countdown10s   = countdown10s;
-            ev.announced10min = false;
-            ev.announced5min  = false;
-            ev.announced1min  = false;
-            ev.announced10s   = false;
+            ev.announced10min = (dt < 600.0);
+            ev.announced5min  = (dt < 300.0);
+            ev.announced1min  = (dt <  60.0);
+            ev.announced10s   = (dt <  10.0);
             ev.announced0     = false;
             return ev.id;
         }
     }
     ScheduledEvent ev;
-    ev.id           = m_nextId++;
-    ev.name         = name;
-    ev.eventET      = eventET;
-    ev.countdown10s = countdown10s;
+    ev.id             = m_nextId++;
+    ev.name           = name;
+    ev.eventET        = eventET;
+    ev.countdown10s   = countdown10s;
+    ev.announced10min = (dt < 600.0);
+    ev.announced5min  = (dt < 300.0);
+    ev.announced1min  = (dt <  60.0);
+    ev.announced10s   = (dt <  10.0);
     m_events.push_back(ev);
     return ev.id;
+}
+
+// ---------------------------------------------------------------------------
+void OBCEventQueue::updateEventTime(const std::string& name, double newET)
+{
+    for (auto& ev : m_events)
+        if (ev.name == name) { ev.eventET = newET; return; }
 }
 
 // ---------------------------------------------------------------------------
