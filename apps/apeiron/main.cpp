@@ -320,6 +320,7 @@ int main(int argc, char* argv[])
             double      radiusKm;  // equatorial radius (from scenario radii_naif)
             double      soiKm;     // Hill-sphere radius (approx), km
             glm::dvec3  posECI;    // geocentric ECLIPJ2000, km  (updated each frame)
+            glm::dvec3  prevPosECI;// posECI from the previous frame (for SOI check)
         };
         std::vector<GravBody> gravBodies;
         {
@@ -343,7 +344,7 @@ int main(int argc, char* argv[])
                 // so JUPITER BARYCENTER correctly carries Jupiter's physical radius.
                 gravBodies.push_back({ name, id, gm,
                                        static_cast<double>(bi.radiusKm),
-                                       0.0, glm::dvec3(0.0) });
+                                       0.0, glm::dvec3(0.0), glm::dvec3(0.0) });
             }
         }
         // Compute Hill-sphere (SOI) radii for all non-Sun bodies.
@@ -1337,6 +1338,12 @@ int main(int argc, char* argv[])
                 static const astro::ReferenceFrame kEclipJ2000 =
                     astro::ReferenceFrame::createEclipJ2000();
                 for (auto& gb : gravBodies) {
+                    // Save last frame's position before overwriting — used by the
+                    // SOI check below.  player.position() is from the previous
+                    // frame's end, so prevPosECI gives a consistent comparison
+                    // and prevents false SOI exits at high warp when a body's
+                    // ECI position shifts by hundreds of thousands of km per frame.
+                    gb.prevPosECI = gb.posECI;
                     if (gb.name == "EARTH") {
                         gb.posECI = glm::dvec3(0.0);
                     } else {
@@ -1349,18 +1356,18 @@ int main(int argc, char* argv[])
                 }
 
                 // Dominant body: the body whose SOI the player is currently inside.
-                // For each non-Sun body with a known SOI radius, check if the
-                // ship is inside it.  If inside multiple (rare, e.g. near a moon),
-                // prefer the smallest SOI (closest body).  If outside all, use Sun.
-                // SOI membership is the physically correct criterion for which
-                // body's gravity dominates the spacecraft's trajectory.
+                // Use prevPosECI (body position from LAST frame's end) rather than
+                // posECI (this frame's end), because player.position() is also the
+                // previous frame's end state.  At 1,000,000× a body moves ~400,000 km
+                // per frame; comparing against the current-frame position creates a
+                // spurious distance spike that can falsely trigger a SOI exit.
                 {
                     glm::dvec3 playerPos = player.position();
                     std::string bestName = "SUN";
                     double      bestSoi  = 1e18;  // pick smallest SOI if nested
                     for (const auto& gb : gravBodies) {
                         if (gb.name == "SUN" || gb.soiKm <= 0.0) continue;
-                        glm::dvec3 rel = gb.posECI - playerPos;
+                        glm::dvec3 rel = gb.prevPosECI - playerPos;
                         double r = glm::length(rel);
                         if (r < gb.soiKm && gb.soiKm < bestSoi) {
                             bestSoi  = gb.soiKm;
