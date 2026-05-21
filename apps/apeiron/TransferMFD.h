@@ -124,6 +124,7 @@ public:
     glm::dvec3 getBplaneDv() const { return m_bplaneDv; }
     double     getBplanePeCurrentKm() const { return m_bplanePeCurrentKm; }
     glm::dvec3 getMccDv() const { return m_mccDv; }
+    bool       bplaneValid() const { return m_bplaneValid; }
 
     // Transfer progress [0, 1]; returns -1 if no plan is loaded.
     double getTransferProgress() const {

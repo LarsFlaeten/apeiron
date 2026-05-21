@@ -1824,10 +1824,17 @@ void TransferMFD::tickBplane()
     double rMag = glm::length(r);
     if (rMag < 100.0) return;   // too close to body centre (inside body)
 
-    // No upper distance threshold: the lever-arm formula ΔV = v∞×|Δb|/r is
-    // valid at any range where v∞² > 0.  The ΔV naturally shrinks with
-    // distance, so the display is useful throughout the approach.
-    // (SOI is computed for informational use only, not as a gate.)
+    // Gate B-plane computation to inside the arrival SOI.
+    // Outside the SOI the lever-arm formula still yields a mathematically
+    // valid (but astronomically large) ΔV that would corrupt activeNavDv
+    // during heliocentric coasting.  m_shipArrR / m_muArr are already cached
+    // above so inArrivalSoi() and tickApproach() continue to work correctly.
+    {
+        const double muSun = (m_params.muCentral > 0.0) ? m_params.muCentral : 1.32712440018e11;
+        const double aBody = glm::length(m_shipHelioR - r);  // heliocentric distance of arrival body
+        const double soiKm = (aBody > 1.0) ? aBody * std::pow(muArr / muSun, 0.4) : 0.0;
+        if (soiKm <= 0.0 || rMag >= soiKm) return;
+    }
 
     // Hyperbolic excess speed v∞² = v² − 2μ/r.
     double vInfSq = glm::dot(v, v) - 2.0 * muArr / rMag;

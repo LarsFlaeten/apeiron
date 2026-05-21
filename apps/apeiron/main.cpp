@@ -1429,8 +1429,10 @@ int main(int argc, char* argv[])
                 double     peNow      = transferMFD.getBplanePeCurrentKm();
                 double     progress   = transferMFD.getTransferProgress();
                 const bool lateApproach = (progress >= 0.97);
-                const bool bplUsable  = (glm::length(bpl) > 1e-9)
-                                        && (peNow < 50000.0 || lateApproach);
+                // Switch to B-plane when bpl is non-zero.  tickBplane() is gated
+                // to the arrival SOI, so bpl is zero during heliocentric transit
+                // and automatically non-zero once inside the SOI.
+                const bool bplUsable  = (glm::length(bpl) > 1e-9);
                 return bplUsable ? bpl : transferMFD.getMccDv();
             }();
             {
