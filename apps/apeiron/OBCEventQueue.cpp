@@ -64,6 +64,18 @@ void OBCEventQueue::cancelByName(const std::string& name)
 }
 
 // ---------------------------------------------------------------------------
+void OBCEventQueue::cancelByPrefix(const std::string& prefix)
+{
+    m_events.erase(
+        std::remove_if(m_events.begin(), m_events.end(),
+            [&prefix](const ScheduledEvent& e) {
+                return e.name.size() >= prefix.size()
+                    && e.name.compare(0, prefix.size(), prefix) == 0;
+            }),
+        m_events.end());
+}
+
+// ---------------------------------------------------------------------------
 void OBCEventQueue::tick(double currentET, double frameDtReal,
                          double& simSpeedTarget, double& simSecondsPerRealSecond)
 {

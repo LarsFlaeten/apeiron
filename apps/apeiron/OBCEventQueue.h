@@ -61,6 +61,9 @@ public:
     // Cancel by name (no-op if not found).
     void cancelByName(const std::string& name);
 
+    // Cancel all events whose name starts with prefix.
+    void cancelByPrefix(const std::string& prefix);
+
     // Called once per frame from main.cpp, BEFORE the sim-time advance.
     //   currentET              — pre-advance SPICE ET (previous frame's state)
     //   frameDtReal            — real-time frame duration (seconds), used to compute

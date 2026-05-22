@@ -121,6 +121,10 @@ public:
     // Returns true once per SOI entry event, then resets.  main.cpp uses this to drop to 1×.
     bool consumeSoiEntry() { const bool v = m_soiEntryPending; m_soiEntryPending = false; return v; }
 
+    // Cancel cruise TCM events and schedule fine approach TCMs (TCM-F1, TCM-F2 …)
+    // based on the current time and MOI ignition ET.  Call once on SOI entry.
+    void scheduleFineApproachTcms();
+
     glm::dvec3 getBplaneDv() const { return m_bplaneDv; }
     double     getBplanePeCurrentKm() const { return m_bplanePeCurrentKm; }
     glm::dvec3 getTcmDv() const { return m_tcmDv; }

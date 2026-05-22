@@ -1294,10 +1294,12 @@ int main(int argc, char* argv[])
                 }
             }
 
-            // Drop to 1× on SOI entry so the pilot can arm the arrival burn.
+            // Drop to 1× on SOI entry so the pilot can arm the arrival burn,
+            // then schedule the fine approach TCM reminder sequence.
             if (transferMFD.consumeSoiEntry()) {
                 simSpeedTarget          = 1.0;
                 simSecondsPerRealSecond = 1.0;
+                transferMFD.scheduleFineApproachTcms();
             }
 
             // Drop to 1× on TCM warning rising edge; pilot can speed up freely after.

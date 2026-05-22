@@ -2758,6 +2758,71 @@ void TransferMFD::renderArrival(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 }
 
 // ---------------------------------------------------------------------------
+// scheduleFineApproachTcms — called once on SOI entry.
+//
+// Cancels any pending cruise TCM events, then posts a bisection-style fine
+// approach schedule:
+//   TCM-F1  halfway between now and MOI ignition
+//   TCM-F2  halfway between TCM-F1 and MOI ignition
+//   TCM-F3…  at 24-hour intervals between TCM-F2 and ignition (if gap > 24 h)
+//   final    12 h before ignition (if TCM-F2 is more than 12 h from ignition)
+//
+// Events are voice-callout reminders only — the pilot arms the burn AP manually
+// when they hear the T−10 min countdown.
+// ---------------------------------------------------------------------------
+void TransferMFD::scheduleFineApproachTcms()
+{
+    if (!m_eventQueue) return;
+    if (m_moiIgnET <= 0.0 || m_moiIgnET <= m_currentET) return;
+
+    constexpr double k24h = 86400.0;
+    constexpr double k12h = 43200.0;
+
+    const double now   = m_currentET;
+    const double ignET = m_moiIgnET;
+    const double T     = ignET - now;
+    if (T < k12h) return;   // too close to IGN to be useful
+
+    // Cancel any existing cruise-phase TCM events (TCM-1-IGN, TCM-2-IGN, …)
+    // and any previously scheduled fine-approach TCMs.
+    m_eventQueue->cancelByPrefix("TCM-");
+
+    // Build chronologically-ordered list of TCM-F times.
+    std::vector<double> times;
+
+    // Bisection pair: F1 at T/2, F2 halfway between F1 and IGN (= 3T/4 from now).
+    const double f1ET     = now + T * 0.5;
+    const double f2ET     = now + T * 0.75;
+    const double f2ToIgn  = ignET - f2ET;   // = T/4
+
+    times.push_back(f1ET);
+    times.push_back(f2ET);
+
+    // 24-hour interval TCMs between F2 and IGN (only if gap is large enough).
+    if (f2ToIgn > k24h) {
+        // Walk backwards from IGN-24h, adding every slot that falls after F2.
+        for (double t = ignET - k24h; t > f2ET + 60.0; t -= k24h)
+            times.push_back(t);
+    }
+
+    // Fixed 12-hour-before-IGN TCM if F2 is far enough from IGN.
+    if (f2ToIgn > k12h) {
+        const double t12 = ignET - k12h;
+        if (t12 > f2ET + 60.0)
+            times.push_back(t12);
+    }
+
+    std::sort(times.begin(), times.end());
+
+    // Schedule each as a named OBC event (voice callouts at T−10min/−5min/−1min/−0).
+    for (int i = 0; i < static_cast<int>(times.size()); ++i) {
+        char name[16];
+        std::snprintf(name, sizeof(name), "TCM-F%d", i + 1);
+        m_eventQueue->schedule(name, times[i], /* countdown10s= */ false, now);
+    }
+}
+
+// ---------------------------------------------------------------------------
 void TransferMFD::update(const MFDContext& ctx)
 {
     m_eventQueue = ctx.eventQueue;
