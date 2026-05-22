@@ -912,9 +912,22 @@ void TransferMFD::renderPorkchop(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
     // ---- Contour lines (marching squares) ----
     {
-        // ΔV iso-levels to draw (km/s).
-        static const float kLevels[] = { 6.f, 7.f, 8.f, 9.f, 10.f, 12.f, 15.f };
-        static const int   kNLev     = static_cast<int>(std::size(kLevels));
+        // Build adaptive iso-levels spanning [dvLo, dvHi] with ~6-10 lines.
+        const float range = dvHi - dvLo;
+        float step;
+        if      (range <  5.f)  step = 0.5f;
+        else if (range < 10.f)  step = 1.0f;
+        else if (range < 25.f)  step = 2.0f;
+        else if (range < 60.f)  step = 5.0f;
+        else if (range < 120.f) step = 10.0f;
+        else                    step = 20.0f;
+
+        std::vector<float> levVec;
+        const float first = std::ceil(dvLo / step) * step;
+        for (float lev = first; lev <= dvHi && levVec.size() < 16; lev += step)
+            levVec.push_back(lev);
+        const float* kLevels = levVec.data();
+        const int    kNLev   = static_cast<int>(levVec.size());
 
         // Marching squares lookup: {eA,eB,eC,eD} — draw segment(eA→eB) and optional (eC→eD).
         // Cases 5 & 10 are saddles, handled separately.
@@ -963,8 +976,6 @@ void TransferMFD::renderPorkchop(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 
         for (int li = 0; li < kNLev; ++li) {
             const float lev = kLevels[li];
-            if (lev < dvLo - 0.5f || lev > dvHi * 1.5f) continue;
-
             const ImU32 col = IM_COL32(255, 255, 255, 110);
 
             for (int i = 0; i < nDep - 1; ++i) {
