@@ -1,6 +1,6 @@
 #pragma once
 #include "NavMode.h"
-#include "MccBurnController.h"
+#include "TcmBurnController.h"
 
 // Mutable navigation/docking state shared between main loop and UI renderers.
 struct NavState {
@@ -19,11 +19,11 @@ struct NavState {
     // Updated each frame by main.cpp; used by NavConsole to show/hide the PORT button.
     int compatiblePortCount = 0;
 
-    // MCC burn AP — one-shot toggle requests set by NavConsole/key, cleared by main.cpp.
-    bool mccCoarseToggle = false;
-    bool mccFineToggle   = false;
-    // Current MCC burn state — written by main.cpp, read by NavConsole for display.
-    MccBurnPhase mccBurnPhase  = MccBurnPhase::Idle;
-    bool         mccBurnCoarse = true;
-    bool         lambertFlip   = false;  // MCC suppressed: near 180° transfer angle
+    // TCM burn AP — one-shot toggle requests set by NavConsole/key, cleared by main.cpp.
+    bool tcmCoarseToggle = false;
+    bool tcmFineToggle   = false;
+    // Current TCM burn state — written by main.cpp, read by NavConsole for display.
+    TcmBurnPhase tcmBurnPhase  = TcmBurnPhase::Idle;
+    bool         tcmBurnCoarse = true;
+    bool         lambertFlip   = false;  // TCM suppressed: near 180° transfer angle
 };

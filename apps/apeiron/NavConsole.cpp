@@ -72,7 +72,7 @@ void NavConsole::render(float                                           posX,
                         const std::vector<std::string>&                 scNames,
                         const std::vector<std::vector<DockPort>>&       scPorts,
                         bool                                            mainEngineOn,
-                        const glm::dvec3&                               mccDv)
+                        const glm::dvec3&                               tcmDv)
 {
     const float  consW  = width;
     const ImU32  kGrn   = IM_COL32(  0, 210,  75, 210);
@@ -101,12 +101,12 @@ void NavConsole::render(float                                           posX,
         else if (nav.navMode == NavMode::Docking)
             ImGui::TextColored({0.2f, 0.8f, 1.0f, 1.0f}, "[DOCK]");
         else
-            ImGui::TextColored({1.0f, 0.55f, 0.0f, 1.0f}, "[MCC]");
+            ImGui::TextColored({1.0f, 0.55f, 0.0f, 1.0f}, "[TCM]");
         ImGui::SameLine();
         if (ImGui::SmallButton("MODE")) {
             // Cycle: Orbit → Docking → Mcc → Orbit
             if      (nav.navMode == NavMode::Orbit)   nav.navMode = NavMode::Docking;
-            else if (nav.navMode == NavMode::Docking)  nav.navMode = NavMode::Mcc;
+            else if (nav.navMode == NavMode::Docking)  nav.navMode = NavMode::Tcm;
             else                                       nav.navMode = NavMode::Orbit;
             autopilot.mode = spacecraft::AutopilotMode::Off;
         }
@@ -163,23 +163,23 @@ void NavConsole::render(float                                           posX,
         ImGui::Separator();
     }
 
-    // ---- MCC mode: course correction data ----
-    if (nav.navMode == NavMode::Mcc) {
-        const double mccMagMs = glm::length(mccDv) * 1000.0;
+    // ---- TCM mode: course correction data ----
+    if (nav.navMode == NavMode::Tcm) {
+        const double tcmMagMs = glm::length(tcmDv) * 1000.0;
         const ImU32  kOrange  = IM_COL32(255, 140, 0, 230);
-        if (mccMagMs > 1e-6) {
+        if (tcmMagMs > 1e-6) {
             ImGui::PushStyleColor(ImGuiCol_Text,
                 ImGui::ColorConvertU32ToFloat4(kOrange));
-            ImGui::Text("MCC  %.3f m/s", mccMagMs);
+            ImGui::Text("TCM  %.3f m/s", tcmMagMs);
             ImGui::PopStyleColor();
             ImGui::PushStyleColor(ImGuiCol_Text,
                 ImGui::ColorConvertU32ToFloat4(IM_COL32(255,140,0,160)));
-            ImGui::Text("  X %+.4f km/s", mccDv.x);
-            ImGui::Text("  Y %+.4f km/s", mccDv.y);
-            ImGui::Text("  Z %+.4f km/s", mccDv.z);
+            ImGui::Text("  X %+.4f km/s", tcmDv.x);
+            ImGui::Text("  Y %+.4f km/s", tcmDv.y);
+            ImGui::Text("  Z %+.4f km/s", tcmDv.z);
             ImGui::PopStyleColor();
         } else {
-            ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "MCC  on target");
+            ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "TCM  on target");
         }
         ImGui::Separator();
     }
@@ -329,7 +329,7 @@ void NavConsole::render(float                                           posX,
     else if (apMode == M::NullV)       apLabel = "NULL V";
     else if (apMode == M::RelVelPlus)  apLabel = "+V";
     else if (apMode == M::RelVelMinus) apLabel = "-V";
-    else if (apMode == M::MccPlus)     apLabel = "MCC+";
+    else if (apMode == M::TcmPlus)     apLabel = "TCM+";
     ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "AP:");
     ImGui::SameLine();
     ImGui::TextColored(apMode != M::Off
@@ -350,22 +350,22 @@ void NavConsole::render(float                                           posX,
         apButton("Nrm+ [⇧N]",     M::NormalPlus);
         apButton("Nrm- [⇧M]",     M::NormalMinus);
     }
-    if (nav.navMode == NavMode::Mcc) {
-        // Suppress MCC DIR active highlight while burn AP is running — it forces
-        // MccPlus internally, so lighting both buttons simultaneously is confusing.
-        if (nav.mccBurnPhase == MccBurnPhase::Idle) {
-            apButton("MCC DIR [⇧G]", M::MccPlus);
+    if (nav.navMode == NavMode::Tcm) {
+        // Suppress TCM DIR active highlight while burn AP is running — it forces
+        // TcmPlus internally, so lighting both buttons simultaneously is confusing.
+        if (nav.tcmBurnPhase == TcmBurnPhase::Idle) {
+            apButton("TCM DIR [⇧G]", M::TcmPlus);
         } else {
-            if (ImGui::Button("MCC DIR [⇧G]"))
-                autopilot.mode = (apMode == M::MccPlus) ? M::Off : M::MccPlus;
+            if (ImGui::Button("TCM DIR [⇧G]"))
+                autopilot.mode = (apMode == M::TcmPlus) ? M::Off : M::TcmPlus;
             ImGui::SameLine();
         }
 
-        // MCC-C (coarse, main engine) and MCC-F (fine, aux) burn AP buttons.
-        // Greyed out during Lambert flip (MCC suppressed); active (green) when running.
-        auto mccBurnButton = [&](const char* label, bool isCoarse) {
-            const bool active  = nav.mccBurnPhase != MccBurnPhase::Idle
-                              && nav.mccBurnCoarse == isCoarse;
+        // TCM-C (coarse, main engine) and TCM-F (fine, aux) burn AP buttons.
+        // Greyed out during Lambert flip (TCM suppressed); active (green) when running.
+        auto tcmBurnButton = [&](const char* label, bool isCoarse) {
+            const bool active  = nav.tcmBurnPhase != TcmBurnPhase::Idle
+                              && nav.tcmBurnCoarse == isCoarse;
             const bool blocked = nav.lambertFlip;
             int pushCount = 0;
             if (active) {
@@ -378,14 +378,14 @@ void NavConsole::render(float                                           posX,
                 pushCount = 3;
             }
             if (ImGui::Button(label) && !blocked) {
-                if (isCoarse) nav.mccCoarseToggle = true;
-                else          nav.mccFineToggle   = true;
+                if (isCoarse) nav.tcmCoarseToggle = true;
+                else          nav.tcmFineToggle   = true;
             }
             if (pushCount) ImGui::PopStyleColor(pushCount);
             ImGui::SameLine();
         };
-        mccBurnButton("MCC-C [⇧C]", true);
-        mccBurnButton("MCC-F [⇧F]", false);
+        tcmBurnButton("TCM-C [⇧C]", true);
+        tcmBurnButton("TCM-F [⇧F]", false);
     }
     if (nav.navMode == NavMode::Docking && nav.dockTgtIdx >= 0) {
         apButton("NULL V [⇧V]", M::NullV);

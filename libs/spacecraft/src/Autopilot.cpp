@@ -56,14 +56,14 @@ void Autopilot::updateOrbitalTarget(const glm::dvec3& r, const glm::dvec3& v,
     }
 }
 
-void Autopilot::updateMccTarget(const glm::dquat& att)
+void Autopilot::updateTcmTarget(const glm::dquat& att)
 {
-    if (mode != AutopilotMode::MccPlus) return;
+    if (mode != AutopilotMode::TcmPlus) return;
 
-    const double len = glm::length(mccDirInertial);
+    const double len = glm::length(tcmDirInertial);
     if (len < 1e-9) return;
 
-    const glm::dvec3 T = mccDirInertial / len;
+    const glm::dvec3 T = tcmDirInertial / len;
 
     // Build an orthonormal frame: T is body +X (burn direction).
     // Pick a reference vector to minimise roll during transitions:

@@ -46,7 +46,7 @@ public:
                 const std::vector<std::string>&                 scNames,
                 const std::vector<std::vector<DockPort>>&       scPorts,
                 bool                                            mainEngineOn,
-                const glm::dvec3&                               mccDv = {});
+                const glm::dvec3&                               tcmDv = {});
 
 private:
     // Finite-difference / EMA state

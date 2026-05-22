@@ -936,7 +936,7 @@ int main(int argc, char* argv[])
             kSpacecraftNames.push_back(vc.name.empty() ? "Spacecraft" : vc.name);
         double simSpeedTarget          = 1.0; // set instantly by t/T keys
         double simSecondsPerRealSecond = 1.0; // smoothly tracks target (log-space)
-        OBCEventQueue obcEventQueue;          // scheduled mission events (TMI, MOI, MCC…)
+        OBCEventQueue obcEventQueue;          // scheduled mission events (TMI, MOI, TCM…)
 
         // Window state shared between callbacks.
         struct WindowState {
@@ -1025,15 +1025,15 @@ int main(int argc, char* argv[])
             }
             else if (key == GLFW_KEY_G && (mods & GLFW_MOD_SHIFT)) {
                 using M = spacecraft::AutopilotMode;
-                s->autopilot->mode = (s->autopilot->mode == M::MccPlus) ? M::Off : M::MccPlus;
+                s->autopilot->mode = (s->autopilot->mode == M::TcmPlus) ? M::Off : M::TcmPlus;
             }
             else if (key == GLFW_KEY_C && (mods & GLFW_MOD_SHIFT)) {
-                if (s->nav && s->nav->navMode == NavMode::Mcc)
-                    s->nav->mccCoarseToggle = true;
+                if (s->nav && s->nav->navMode == NavMode::Tcm)
+                    s->nav->tcmCoarseToggle = true;
             }
             else if (key == GLFW_KEY_F && (mods & GLFW_MOD_SHIFT)) {
-                if (s->nav && s->nav->navMode == NavMode::Mcc)
-                    s->nav->mccFineToggle = true;
+                if (s->nav && s->nav->navMode == NavMode::Tcm)
+                    s->nav->tcmFineToggle = true;
             }
             else if (key == GLFW_KEY_V && (mods & GLFW_MOD_SHIFT)) {
                 if (s->nav && s->nav->navMode == NavMode::Docking && s->nav->dockTgtIdx >= 0) {
@@ -1300,8 +1300,8 @@ int main(int argc, char* argv[])
                 simSecondsPerRealSecond = 1.0;
             }
 
-            // Drop to 1× on MCC warning rising edge; pilot can speed up freely after.
-            if (transferMFD.consumeMccWarnDrop()) {
+            // Drop to 1× on TCM warning rising edge; pilot can speed up freely after.
+            if (transferMFD.consumeTcmWarnDrop()) {
                 simSpeedTarget          = 1.0;
                 simSecondsPerRealSecond = 1.0;
             }
@@ -1419,8 +1419,8 @@ int main(int argc, char* argv[])
             // Autopilot runs in all three views so switching to MFD fullscreen doesn't freeze it.
             bool mainEngineOn = false;
             glm::dvec3 shipForce(0.0);   // body-frame thrust force (N), hoisted for nav console
-            // Active burn-direction for MCC+ autopilot and HUD marker.
-            // Active nav ΔV: Lambert MCC while in transit; B-plane Pe targeting in
+            // Active burn-direction for TCM+ autopilot and HUD marker.
+            // Active nav ΔV: Lambert TCM while in transit; B-plane Pe targeting in
             // final approach.  Switch to B-plane exclusively above 97% TOF progress
             // (or whenever Pe < 50,000 km) so shift-G stays locked on the approach
             // correction without a jarring mid-course jump.
@@ -1433,7 +1433,7 @@ int main(int argc, char* argv[])
                 // to the arrival SOI, so bpl is zero during heliocentric transit
                 // and automatically non-zero once inside the SOI.
                 const bool bplUsable  = (glm::length(bpl) > 1e-9);
-                return bplUsable ? bpl : transferMFD.getMccDv();
+                return bplUsable ? bpl : transferMFD.getTcmDv();
             }();
             {
                 glm::dvec3 shipTorque(0.0);
@@ -1459,56 +1459,56 @@ int main(int argc, char* argv[])
                             || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
                         const bool spaceDown = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
 
-                        // ---- MCC burn AP toggle and tick ----
+                        // ---- TCM burn AP toggle and tick ----
                         {
-                            const auto toggleMccBurn = [&](bool coarse) {
-                                if (transferMFD.mccBurnActive() && transferMFD.mccBurnCoarse() == coarse)
-                                    transferMFD.disarmMccBurn();
+                            const auto toggleTcmBurn = [&](bool coarse) {
+                                if (transferMFD.tcmBurnActive() && transferMFD.tcmBurnCoarse() == coarse)
+                                    transferMFD.disarmTcmBurn();
                                 else {
-                                    transferMFD.armMccBurn(coarse);
-                                    autopilot.mode = spacecraft::AutopilotMode::MccPlus;
+                                    transferMFD.armTcmBurn(coarse);
+                                    autopilot.mode = spacecraft::AutopilotMode::TcmPlus;
                                 }
                             };
-                            if (nav.mccCoarseToggle) { nav.mccCoarseToggle = false; toggleMccBurn(true);  }
-                            if (nav.mccFineToggle)   { nav.mccFineToggle   = false; toggleMccBurn(false); }
+                            if (nav.tcmCoarseToggle) { nav.tcmCoarseToggle = false; toggleTcmBurn(true);  }
+                            if (nav.tcmFineToggle)   { nav.tcmFineToggle   = false; toggleTcmBurn(false); }
 
-                            if (transferMFD.mccBurnActive()) {
-                                if (autopilot.mode != spacecraft::AutopilotMode::MccPlus) {
-                                    // User changed autopilot mode — abort MCC burn AP.
-                                    transferMFD.disarmMccBurn();
+                            if (transferMFD.tcmBurnActive()) {
+                                if (autopilot.mode != spacecraft::AutopilotMode::TcmPlus) {
+                                    // User changed autopilot mode — abort TCM burn AP.
+                                    transferMFD.disarmTcmBurn();
                                 } else {
                                     // Use activeNavDv — same vector the attitude AP targets.
-                                    // In late approach this is the B-plane dV, not getMccDv().
-                                    // Using getMccDv() here would mismatch the attitude target
+                                    // In late approach this is the B-plane dV, not getTcmDv().
+                                    // Using getTcmDv() here would mismatch the attitude target
                                     // and keep attErr above threshold, preventing thrust.
-                                    const double mccDvMs = glm::length(activeNavDv) * 1000.0;
+                                    const double tcmDvMs = glm::length(activeNavDv) * 1000.0;
                                     double attErr = M_PI;
-                                    if (mccDvMs > 1e-3) {
-                                        const glm::dvec3 mccDirNorm = glm::normalize(activeNavDv);
+                                    if (tcmDvMs > 1e-3) {
+                                        const glm::dvec3 tcmDirNorm = glm::normalize(activeNavDv);
                                         const glm::dvec3 shipFwd = glm::dvec3(
                                             spacecraft[playerIdx]->attitude() * glm::dvec3(1.0, 0.0, 0.0));
                                         attErr = std::acos(std::clamp(
-                                            glm::dot(shipFwd, mccDirNorm), -1.0, 1.0));
+                                            glm::dot(shipFwd, tcmDirNorm), -1.0, 1.0));
                                     }
-                                    if (transferMFD.tickMccBurn(mccDvMs, attErr)) {
+                                    if (transferMFD.tickTcmBurn(tcmDvMs, attErr)) {
                                         autopilot.mode = spacecraft::AutopilotMode::Killrot;
-                                        transferMFD.consumeMccDone();
+                                        transferMFD.consumeTcmDone();
                                     }
                                 }
                             }
-                            nav.mccBurnPhase  = transferMFD.mccBurnPhase();
-                            nav.mccBurnCoarse = transferMFD.mccBurnCoarse();
+                            nav.tcmBurnPhase  = transferMFD.tcmBurnPhase();
+                            nav.tcmBurnCoarse = transferMFD.tcmBurnCoarse();
                             nav.lambertFlip   = transferMFD.lambertFlipActive();
                         }
 
                         const bool auxEngineKey  = (spaceDown && shiftHeld)
-                                                   || transferMFD.requestMccAuxEngine();
+                                                   || transferMFD.requestTcmAuxEngine();
                         // Main engine (SPACE) — tracked separately so allocation
                         // always uses the full matrix when the main engine is firing.
                         const bool mainEngineKey =
                             (spaceDown && !shiftHeld)
                             || transferMFD.requestMainEngine()
-                            || transferMFD.requestMccMainEngine();
+                            || transferMFD.requestTcmMainEngine();
                         if (mainEngineKey) {
                             desired[0] += mainEngineThrust;
                             mainEngineOn = true;
@@ -1584,8 +1584,8 @@ int main(int argc, char* argv[])
                             }
                             autopilot.updateOrbitalTarget(apR, apV, att);
                             autopilot.updateRelVelTarget(att);
-                            autopilot.mccDirInertial = activeNavDv;
-                            autopilot.updateMccTarget(att);
+                            autopilot.tcmDirInertial = activeNavDv;
+                            autopilot.updateTcmTarget(att);
 
                             bool settleClamp = false;
                             spacecraft::Wrench apWrench = autopilot.compute(
@@ -2631,7 +2631,7 @@ int main(int argc, char* argv[])
 
                 orbitalMFD.update(mfdCtx);
                 mapMFD.update(mfdCtx);
-                transferMFD.update(mfdCtx);   // calls tickMcc + tickBplane internally
+                transferMFD.update(mfdCtx);   // calls tickTcm + tickBplane internally
                 obcMFD.update(mfdCtx);
 
                 // 4. Resolve pending TGT input.

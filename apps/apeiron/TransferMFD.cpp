@@ -350,7 +350,7 @@ const char* TransferMFD::leftLabel(int slot) const
     }
     if (m_page == 3) {
         if (slot == 0) {
-            switch (m_mccWarnIdx) {
+            switch (m_tcmWarnIdx) {
             case 0:  return "W:OFF";
             case 1:  return "W:100";
             case 2:  return "W:200";
@@ -463,9 +463,9 @@ void TransferMFD::onLeft(int slot)
     }
     if (m_page == 3) {
         if (slot == 0) {
-            m_mccWarnIdx    = (m_mccWarnIdx + 1)
-                              % static_cast<int>(std::size(kMccWarnKms));
-            m_mccWarnActive = false;  // reset active state on threshold change
+            m_tcmWarnIdx    = (m_tcmWarnIdx + 1)
+                              % static_cast<int>(std::size(kTcmWarnKms));
+            m_tcmWarnActive = false;  // reset active state on threshold change
             return;
         }
         if (slot == 4) { m_page = 2; return; }
@@ -618,16 +618,16 @@ void TransferMFD::onRight(int slot)
                     const double arrET = m_detail.arrET;
                     const double depET = m_detail.depET;
                     const double tof   = m_detail.tofSec;
-                    // MCC-1 scales with TOF so the Lambert solution has time to
+                    // TCM-1 scales with TOF so the Lambert solution has time to
                     // converge: 1/60 of TOF, minimum 7 days.  This gives ~7 d for
                     // Mars transfers and ~25 d for Jupiter.
                     const double mcc1Lead = std::max(7.0 * kDay, tof / 60.0);
                     const MccWpt wpts[] = {
-                        { "MCC-1", depET  + mcc1Lead    },  // early post-departure
-                        { "MCC-2", depET  + tof  * 0.5  },  // mid-course
-                        { "MCC-3", arrET - 30.0 * kDay  },  // arrival −30 d
-                        { "MCC-4", arrET -  7.0 * kDay  },  // arrival −7 d
-                        { "MCC-5", arrET -  1.0 * kDay  },  // arrival −24 h
+                        { "TCM-1", depET  + mcc1Lead    },  // early post-departure
+                        { "TCM-2", depET  + tof  * 0.5  },  // mid-course
+                        { "TCM-3", arrET - 30.0 * kDay  },  // arrival −30 d
+                        { "TCM-4", arrET -  7.0 * kDay  },  // arrival −7 d
+                        { "TCM-5", arrET -  1.0 * kDay  },  // arrival −24 h
                     };
                     constexpr double kMinSep = 6.0 * 3600.0;
                     double prevET = depET;
@@ -1754,12 +1754,12 @@ void TransferMFD::renderDeparture(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 // ship position).
 //
 // Re-solves Lambert from current heliocentric position to the planned Mars
-// arrival point to compute the mid-course correction (MCC) ΔV.
+// arrival point to compute the mid-course correction (TCM) ΔV.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// tickMcc — called every frame from main.cpp regardless of active view.
-// Keeps m_mccDv current so the HUD marker and autopilot direction are always
+// tickTcm — called every frame from main.cpp regardless of active view.
+// Keeps m_tcmDv current so the HUD marker and autopilot direction are always
 // based on the latest ship trajectory.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -2132,12 +2132,12 @@ void TransferMFD::tickApproach()
     }
 }
 
-void TransferMFD::tickMcc()
+void TransferMFD::tickTcm()
 {
-    m_mccDv = glm::dvec3(0.0);
+    m_tcmDv = glm::dvec3(0.0);
     if (!m_detail.valid) { m_lambertFlip = false; return; }
 
-    // The MCC correction is computed with a heliocentric two-body model.
+    // The TCM correction is computed with a heliocentric two-body model.
     // Inside Earth's sphere of influence (~929,000 km) the geocentric
     // velocity dominates and the heliocentric velocity vector looks nothing
     // like the asymptotic departure velocity — the Lambert result would be
@@ -2152,7 +2152,7 @@ void TransferMFD::tickMcc()
     const double tofRemaining = m_detail.arrET - m_currentET;
     if (tofRemaining <= kDay) { m_lambertFlip = false; return; }
 
-    // Lambert flip detection: suppress MCC when the heliocentric transfer angle
+    // Lambert flip detection: suppress TCM when the heliocentric transfer angle
     // (ship position → planned arrival position) is within 15° of 180°.
     // At that geometry the Lambert problem is degenerate and the solver jumps
     // between short-way / long-way branches, producing nonsense dV vectors.
@@ -2168,9 +2168,9 @@ void TransferMFD::tickMcc()
     }
 
     if (m_lambertFlip) {
-        // Auto-disarm any active MCC burn AP to prevent unwanted thrust.
-        if (m_mccBurnCtrl.active()) m_mccBurnCtrl.disarm();
-        m_mccWarnActive = false;
+        // Auto-disarm any active TCM burn AP to prevent unwanted thrust.
+        if (m_tcmBurnCtrl.active()) m_tcmBurnCtrl.disarm();
+        m_tcmWarnActive = false;
         return;
     }
 
@@ -2181,38 +2181,38 @@ void TransferMFD::tickMcc()
     }
     if (muSun <= 0.0) muSun = 1.32712440018e11;
 
-    glm::dvec3 vMCC_dep, vMCC_arr;
+    glm::dvec3 vTCM_dep, vTCM_arr;
     if (spacecraft::solveLambert(muSun, m_shipHelioR, m_detail.arrPos,
-                                 tofRemaining, true, vMCC_dep, vMCC_arr)) {
-        m_mccDv = vMCC_dep - m_shipHelioV;
+                                 tofRemaining, true, vTCM_dep, vTCM_arr)) {
+        m_tcmDv = vTCM_dep - m_shipHelioV;
     }
 
-    // MCC deviation warning: fire voice alert on rising edge, drop sim speed once.
+    // TCM deviation warning: fire voice alert on rising edge, drop sim speed once.
     // Use the same active-nav-dV selection as the HUD diamond and burn AP:
-    // B-plane correction when available (late approach or Pe < 50,000 km), else Lambert MCC.
-    if (m_mccWarnIdx > 0) {
+    // B-plane correction when available (late approach or Pe < 50,000 km), else Lambert TCM.
+    if (m_tcmWarnIdx > 0) {
         const bool   bplUsable = m_bplaneValid
                               && (glm::length(m_bplaneDv) > 1e-9)
                               && (m_bplanePeCurrentKm < 50000.0 || getTransferProgress() >= 0.97);
         const double dv        = bplUsable ? glm::length(m_bplaneDv)
-                                           : glm::length(m_mccDv);
-        const double thresh = kMccWarnKms[m_mccWarnIdx];
+                                           : glm::length(m_tcmDv);
+        const double thresh = kTcmWarnKms[m_tcmWarnIdx];
         if (dv > thresh) {
-            if (!m_mccWarnActive) {
+            if (!m_tcmWarnActive) {
                 char buf[80];
                 std::snprintf(buf, sizeof(buf),
                     "Course correction warning. %.0f meters per second.",
                     dv * 1000.0);
                 obc::speakImmediate(buf);
             }
-            if (!m_mccWarnActive)
-                m_mccWarnDropPending = true;  // rising edge — drop to 1× once
-            m_mccWarnActive = true;
+            if (!m_tcmWarnActive)
+                m_tcmWarnDropPending = true;  // rising edge — drop to 1× once
+            m_tcmWarnActive = true;
         } else {
-            m_mccWarnActive = false;
+            m_tcmWarnActive = false;
         }
     } else {
-        m_mccWarnActive = false;
+        m_tcmWarnActive = false;
     }
 }
 
@@ -2311,13 +2311,13 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                            m_detail.arrPos, muSun);
 
     // -----------------------------------------------------------------------
-    // Mid-course correction (MCC): re-solve Lambert from now to arrival.
+    // Mid-course correction (TCM): re-solve Lambert from now to arrival.
     // Only meaningful when inside the transfer window.
     // -----------------------------------------------------------------------
     double tofRemaining = m_detail.arrET - m_currentET;
-    glm::dvec3 vMCC_dep, vMCC_arr;
+    glm::dvec3 vTCM_dep, vTCM_arr;
     bool   mccValid = false;
-    double dvMCC    = 0.0;
+    double dvTCM    = 0.0;
     OrbitDiagram::Arc mccArc;
 
     const bool insideDepSOI = (glm::length(m_shipR) < m_depSOI);
@@ -2325,14 +2325,14 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     if (!insideDepSOI && tofRemaining > kDay && !m_lambertFlip) {
         mccValid = spacecraft::solveLambert(muSun, shipR, m_detail.arrPos,
                                             tofRemaining, true,
-                                            vMCC_dep, vMCC_arr);
+                                            vTCM_dep, vTCM_arr);
         if (mccValid) {
-            dvMCC = glm::length(vMCC_dep - shipV);
-            // Draw MCC arc only when noticeably off-nominal (> 0.5 m/s).
-            if (dvMCC > 5e-4) {
+            dvTCM = glm::length(vTCM_dep - shipV);
+            // Draw TCM arc only when noticeably off-nominal (> 0.5 m/s).
+            if (dvTCM > 5e-4) {
                 mccArc.colour    = kCyan;
                 mccArc.thickness = 1.5f;
-                mccArc.pts = buildArc(shipR, vMCC_dep, m_detail.arrPos, muSun);
+                mccArc.pts = buildArc(shipR, vTCM_dep, m_detail.arrPos, muSun);
             }
         }
     }
@@ -2364,7 +2364,7 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // Planned Lambert arc
     diag.addArc(planArc);
 
-    // MCC arc (if off-nominal)
+    // TCM arc (if off-nominal)
     if (!mccArc.pts.empty())
         diag.addArc(mccArc);
 
@@ -2458,31 +2458,31 @@ void TransferMFD::renderCoasting(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     }
     sep();
 
-    // -- MCC ----------------------------------------------------------------
+    // -- TCM ----------------------------------------------------------------
     if (m_lambertFlip) {
         const ImU32 kRed = IM_COL32(255, 60, 60, 220);
-        addLine(kRed,    "MCC  LAMBERT FLIP");
-        addLine(kOrange, " SINGULARITY — MCC SUPPRESSED");
+        addLine(kRed,    "TCM  LAMBERT FLIP");
+        addLine(kOrange, " SINGULARITY — TCM SUPPRESSED");
     } else if (!mccValid || tofRemaining <= kDay) {
         if (tofRemaining <= 0.0)
             addLine(kGreen,  "ARRIVAL  dV-arr %.3f km/s", m_detail.dv2);
         else
-            addLine(kDim,    "MCC  N/A (near arrival)");
+            addLine(kDim,    "TCM  N/A (near arrival)");
     } else {
-        ImU32 mccCol = (dvMCC < 0.001) ? kGreen :
-                       (dvMCC < 0.05)  ? kYellow : kOrange;
-        addLine(mccCol,  "MCC  dV %.3f km/s", dvMCC);
-        if (dvMCC < 0.001)
+        ImU32 mccCol = (dvTCM < 0.001) ? kGreen :
+                       (dvTCM < 0.05)  ? kYellow : kOrange;
+        addLine(mccCol,  "TCM  dV %.3f km/s", dvTCM);
+        if (dvTCM < 0.001)
             addLine(kGreen,  " ON NOMINAL TRAJECTORY");
         else
-            addLine(kDim,    " arr dV %.3f km/s (new)", glm::length(vMCC_arr - m_detail.vArrBody));
+            addLine(kDim,    " arr dV %.3f km/s (new)", glm::length(vTCM_arr - m_detail.vArrBody));
     }
     {
         static constexpr const char* kWarnLabels[] = {"OFF", "100 m/s", "200 m/s", "500 m/s"};
-        if (m_mccWarnActive)
-            addLine(kOrange, " WARN >%s  [ACTIVE]", kWarnLabels[m_mccWarnIdx]);
-        else if (m_mccWarnIdx > 0)
-            addLine(kDim,    " WARN >%s", kWarnLabels[m_mccWarnIdx]);
+        if (m_tcmWarnActive)
+            addLine(kOrange, " WARN >%s  [ACTIVE]", kWarnLabels[m_tcmWarnIdx]);
+        else if (m_tcmWarnIdx > 0)
+            addLine(kDim,    " WARN >%s", kWarnLabels[m_tcmWarnIdx]);
         else
             addLine(kDim,    " WARN  OFF");
     }
@@ -2809,11 +2809,11 @@ void TransferMFD::update(const MFDContext& ctx)
     updateBurnParams(ctx.mainThrustN, ctx.shipMassKg);
     updateHelioState(ctx.shipHelioR, ctx.shipHelioV);
 
-    tickMcc();
+    tickTcm();
     tickBplane();
     tickApproach();
 
-    // Keep MOI ignition ET live while Armed so MCCs don't desync the burn point.
+    // Keep MOI ignition ET live while Armed so TCMs don't desync the burn point.
     if (m_moiIgnET > m_currentET)
         m_moiBurnCtrl.updateIgnitionET(m_moiIgnET, m_eventQueue);
 
@@ -2830,12 +2830,12 @@ void TransferMFD::update(const MFDContext& ctx)
     m_burnCtrl.tick(m_currentET, m_shipR, m_shipV);
     m_moiBurnCtrl.tick(m_currentET, m_shipArrR, m_shipArrV);
 
-    // Re-schedule MCC event if the solution moved by more than 60 s.
+    // Re-schedule TCM event if the solution moved by more than 60 s.
     if (m_eventQueue && m_detail.valid) {
-        const double mccET = m_currentET;  // MCC is "now" — tickMcc solved from current pos
-        // Use arrival ET as a proxy: MCC event = current time (burn is ~now on coasting page).
-        // More precisely: the MCC burn should happen as soon as possible; schedule it
+        const double mccET = m_currentET;  // TCM is "now" — tickTcm solved from current pos
+        // Use arrival ET as a proxy: TCM event = current time (burn is ~now on coasting page).
+        // More precisely: the TCM burn should happen as soon as possible; schedule it
         // only once when detail is first valid and re-schedule if time shifts >60 s.
-        (void)mccET; // MCC scheduling handled via onRight — see below
+        (void)mccET; // TCM scheduling handled via onRight — see below
     }
 }

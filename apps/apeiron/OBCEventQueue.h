@@ -23,7 +23,7 @@
 
 struct ScheduledEvent {
     uint64_t    id           = 0;     // opaque handle; 0 = invalid
-    std::string name;                 // e.g. "MCC-1", "MOI"
+    std::string name;                 // e.g. "TCM-1", "MOI"
     double      eventET      = 0.0;   // SPICE ET of the event
 
     // One-shot announcement guards — preserved across save/load.

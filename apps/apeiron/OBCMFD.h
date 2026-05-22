@@ -8,7 +8,7 @@
 // OBCMFD — On-Board Computer status display.
 //
 // Page 0: Event schedule
-//   Lists all scheduled mission events (TMI, MOI, MCC-1 …) sorted by time.
+//   Lists all scheduled mission events (TMI, MOI, TCM-1 …) sorted by time.
 //   Each row shows:
 //     • Event name (up to 8 chars)
 //     • Four announcement-state indicators (T−10m  T−5m  T−1m  Exec)

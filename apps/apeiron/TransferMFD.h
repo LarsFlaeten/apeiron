@@ -3,7 +3,7 @@
 #include "MFD.h"
 #include "MFDContext.h"
 #include "BurnController.h"
-#include "MccBurnController.h"
+#include "TcmBurnController.h"
 
 #include "apeiron/spacecraft/Porkchop.h"
 #include "apeiron/spacecraft/Lambert.h"
@@ -35,7 +35,7 @@ struct TransferPlanSnapshot {
 // Page 0 — Porkchop plot  (departure date × TOF grid, colour = total ΔV)
 // Page 1 — Leg detail     (orbit diagram + transfer parameters for selected cell)
 // Page 2 — Departure      (geocentric burn planning)
-// Page 3 — Coasting       (heliocentric progress, MCC, B-plane summary)
+// Page 3 — Coasting       (heliocentric progress, TCM, B-plane summary)
 // Page 5 — Arrival        (B-plane full targeting: Pe + inclination, MOI ARM)
 //
 // Page 0 buttons:
@@ -109,8 +109,8 @@ public:
     // Unified per-frame update from MFDContext — preferred entry point.
     void update(const MFDContext& ctx);
 
-    // Recomputes the MCC ΔV vector from current ship state and plan.
-    void tickMcc();
+    // Recomputes the TCM ΔV vector from current ship state and plan.
+    void tickTcm();
 
     // Recomputes B-plane targeting correction on hyperbolic approach to arrival body.
     void tickBplane();
@@ -123,7 +123,7 @@ public:
 
     glm::dvec3 getBplaneDv() const { return m_bplaneDv; }
     double     getBplanePeCurrentKm() const { return m_bplanePeCurrentKm; }
-    glm::dvec3 getMccDv() const { return m_mccDv; }
+    glm::dvec3 getTcmDv() const { return m_tcmDv; }
     bool       bplaneValid() const { return m_bplaneValid; }
 
     // Transfer progress [0, 1]; returns -1 if no plan is loaded.
@@ -138,33 +138,33 @@ public:
         return m_burnCtrl.requestMainEngine() || m_moiBurnCtrl.requestMainEngine();
     }
 
-    // MCC burn AP — arm, tick, and query.
-    void         armMccBurn(bool coarse) { if (!m_lambertFlip) m_mccBurnCtrl.arm(coarse); }
-    void         disarmMccBurn()         { m_mccBurnCtrl.disarm(); }
+    // TCM burn AP — arm, tick, and query.
+    void         armTcmBurn(bool coarse) { if (!m_lambertFlip) m_tcmBurnCtrl.arm(coarse); }
+    void         disarmTcmBurn()         { m_tcmBurnCtrl.disarm(); }
     // Per-frame tick: returns true when burn completes (Done state).
-    // Caller must engage Killrot and call consumeMccDone().
-    bool         tickMccBurn(double mccDvMs, double attErrorRad)
-                     { return m_mccBurnCtrl.tick(mccDvMs, attErrorRad); }
-    bool         requestMccMainEngine() const { return m_mccBurnCtrl.requestMainEngine(); }
-    bool         requestMccAuxEngine()  const { return m_mccBurnCtrl.requestAuxEngine(); }
-    void         consumeMccDone()             { m_mccBurnCtrl.consumeDone(); }
-    MccBurnPhase mccBurnPhase()  const { return m_mccBurnCtrl.phase; }
-    bool         mccBurnCoarse() const { return m_mccBurnCtrl.coarse; }
-    bool         mccBurnActive()    const { return m_mccBurnCtrl.active(); }
+    // Caller must engage Killrot and call consumeTcmDone().
+    bool         tickTcmBurn(double tcmDvMs, double attErrorRad)
+                     { return m_tcmBurnCtrl.tick(tcmDvMs, attErrorRad); }
+    bool         requestTcmMainEngine() const { return m_tcmBurnCtrl.requestMainEngine(); }
+    bool         requestTcmAuxEngine()  const { return m_tcmBurnCtrl.requestAuxEngine(); }
+    void         consumeTcmDone()             { m_tcmBurnCtrl.consumeDone(); }
+    TcmBurnPhase tcmBurnPhase()  const { return m_tcmBurnCtrl.phase; }
+    bool         tcmBurnCoarse() const { return m_tcmBurnCtrl.coarse; }
+    bool         tcmBurnActive()    const { return m_tcmBurnCtrl.active(); }
     bool         lambertFlipActive() const { return m_lambertFlip; }
 
     // Returns a positive time-accel cap during burn execution, or 0.
-    // 10× while a burn is executing; MCC warning no longer caps ongoing speed.
+    // 10× while a burn is executing; TCM warning no longer caps ongoing speed.
     double maxSimSpeed() const {
         const double a = m_burnCtrl.maxSimSpeed();
         const double b = m_moiBurnCtrl.maxSimSpeed();
         return (a > 0.0) ? a : b;
     }
 
-    // Returns true once on the MCC warning rising edge — caller drops to 1×.
-    bool consumeMccWarnDrop() {
-        const bool v = m_mccWarnDropPending;
-        m_mccWarnDropPending = false;
+    // Returns true once on the TCM warning rising edge — caller drops to 1×.
+    bool consumeTcmWarnDrop() {
+        const bool v = m_tcmWarnDropPending;
+        m_tcmWarnDropPending = false;
         return v;
     }
 
@@ -278,15 +278,15 @@ private:
     glm::dvec3 m_shipHelioR { 0.0 };
     glm::dvec3 m_shipHelioV { 0.0 };
 
-    glm::dvec3 m_mccDv { 0.0 };
+    glm::dvec3 m_tcmDv { 0.0 };
 
     OBCEventQueue*         m_eventQueue = nullptr;
     spacecraft::Autopilot* m_autopilot  = nullptr;
-    double                 m_lastMccET  = 0.0;
+    double                 m_lastTcmET  = 0.0;
 
     BurnController    m_burnCtrl;     // departure (TMI) burn
     BurnController    m_moiBurnCtrl;  // arrival (MOI) burn
-    MccBurnController m_mccBurnCtrl;  // MCC coarse/fine burn AP
+    TcmBurnController m_tcmBurnCtrl;  // TCM coarse/fine burn AP
 
     // Arrival-body-centric ship state — cached in tickBplane(), used by tickApproach().
     glm::dvec3 m_shipArrR { 0.0 };
@@ -320,15 +320,15 @@ private:
     double m_insertionIncDeg    = 0.0; // current predicted insertion orbit inclination (deg)
     double m_minAchievableIncDeg = 0.0; // minimum ecliptic inc achievable via B-plane (deg)
 
-    // MCC deviation warning (page 3 — Coasting).
+    // TCM deviation warning (page 3 — Coasting).
     // Index 0 = OFF; otherwise the threshold in km/s at which a voice warning
     // fires and sim speed is capped to 1× until the deviation drops back below.
-    static constexpr double kMccWarnKms[] = { 0.0, 0.1, 0.2, 0.5 };
-    int  m_mccWarnIdx         = 0;     // 0 = OFF
-    bool m_mccWarnActive      = false; // true while dV exceeds threshold
-    bool m_mccWarnDropPending = false; // one-shot: drop sim speed to 1× on rising edge
+    static constexpr double kTcmWarnKms[] = { 0.0, 0.1, 0.2, 0.5 };
+    int  m_tcmWarnIdx         = 0;     // 0 = OFF
+    bool m_tcmWarnActive      = false; // true while dV exceeds threshold
+    bool m_tcmWarnDropPending = false; // one-shot: drop sim speed to 1× on rising edge
 
     // True when the heliocentric transfer angle ship→arrival is within 15° of 180°.
-    // Lambert is degenerate there; MCC is suppressed and autopilots are blocked.
+    // Lambert is degenerate there; TCM is suppressed and autopilots are blocked.
     bool m_lambertFlip = false;
 };

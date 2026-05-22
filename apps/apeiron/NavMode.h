@@ -4,7 +4,7 @@
 enum class NavMode {
     Orbit,    // orbital mechanics: prograde/retrograde markers, orbit autopilots available
     Docking,  // proximity/docking:  relative-velocity markers, target box, only killrot AP
-    Mcc,      // mid-course correction: MCC direction marker, killrot + MCC DIR autopilots
+    Tcm,      // mid-course correction: TCM direction marker, killrot + TCM DIR autopilots
 };
 
 // Translation authority — selectable from the nav console.

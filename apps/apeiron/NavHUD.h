@@ -45,7 +45,7 @@ public:
                 const std::vector<std::string>&                scNames,
                 const std::vector<std::vector<DockPort>>&      scPorts,
                 const char*                                    refBodyName    = "EARTH",
-                const glm::dvec3&                              mccDv          = {},
+                const glm::dvec3&                              tcmDv          = {},
                 const glm::dvec3&                              shipRelRefV    = {},
                 const glm::dvec3&                              shipRelRefR    = {});
 };

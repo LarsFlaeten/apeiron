@@ -98,7 +98,7 @@ void NavHUD::render(const Spacecraft&                              ship,
                     const std::vector<std::string>&                scNames,
                     const std::vector<std::vector<DockPort>>&      scPorts,
                     const char*                                    refBodyName,
-                    const glm::dvec3&                              mccDv,
+                    const glm::dvec3&                              tcmDv,
                     const glm::dvec3&                              shipRelRefV,
                     const glm::dvec3&                              shipRelRefR)
 {
@@ -174,9 +174,9 @@ void NavHUD::render(const Spacecraft&                              ship,
     };
 
     // ==================================================================
-    if (nav.navMode == NavMode::Orbit || nav.navMode == NavMode::Mcc) {
-        // ---- Orbit / MCC: prograde / retrograde / normal+/normal- ----
-        // (In MCC mode these are suppressed; only the MCC diamond below is shown.)
+    if (nav.navMode == NavMode::Orbit || nav.navMode == NavMode::Tcm) {
+        // ---- Orbit / TCM: prograde / retrograde / normal+/normal- ----
+        // (In TCM mode these are suppressed; only the TCM diamond below is shown.)
         // Prograde/retrograde/normal markers only in Orbit mode.
         const glm::dvec3 vel = (glm::length(shipRelRefV) > 1e-9) ? shipRelRefV : ship.velocity();
         const glm::dvec3 pos = (glm::length(shipRelRefR) > 1e-9) ? shipRelRefR : ship.position();
@@ -343,17 +343,17 @@ void NavHUD::render(const Spacecraft&                              ship,
         dl->AddText({ W - refSz.x - 8.0f, 8.0f }, kHudGreen, refBuf);
     }
 
-    // ---- MCC direction marker (orange diamond + "MCC" label) ----
-    // Only shown in MCC nav mode.
-    if (nav.navMode == NavMode::Mcc) {
-        const double mccDvMag = glm::length(mccDv);
+    // ---- TCM direction marker (orange diamond + "TCM" label) ----
+    // Only shown in TCM nav mode.
+    if (nav.navMode == NavMode::Tcm) {
+        const double mccDvMag = glm::length(tcmDv);
         if (mccDvMag > 1e-9) {
             const ImU32 kMccOrange = IM_COL32(255, 140, 0, 230);
-            glm::vec3 mccDir = glm::normalize(glm::vec3(mccDv));
+            glm::vec3 mccDir = glm::normalize(glm::vec3(tcmDv));
             auto mcc = projectDir(mccDir);
 
             char mccBuf[32];
-            std::snprintf(mccBuf, sizeof(mccBuf), "MCC %.2f m/s", mccDvMag * 1000.0);
+            std::snprintf(mccBuf, sizeof(mccBuf), "TCM %.2f m/s", mccDvMag * 1000.0);
 
             if (mcc.w > 0.0f && mcc.onScreen(W, H)) {
                 // On-screen: orange diamond.
@@ -365,7 +365,7 @@ void NavHUD::render(const Spacecraft&                              ship,
                 dl->AddLine({p.x - r, p.y    }, {p.x,     p.y - r}, kMccOrange, 2.0f);
                 dl->AddText({p.x + r + 4.0f, p.y - 6.0f}, kMccOrange, mccBuf);
             } else if (mcc.w > 0.0f) {
-                // Off-screen: edge arrow pointing toward the MCC direction.
+                // Off-screen: edge arrow pointing toward the TCM direction.
                 auto edge = clampToEdge(mcc.sx, mcc.sy, W, H, kEdgeMargin);
                 drawArrow(dl, edge.pos, edge.dir, 10.0f, kMccOrange);
                 ImVec2 textPos{
