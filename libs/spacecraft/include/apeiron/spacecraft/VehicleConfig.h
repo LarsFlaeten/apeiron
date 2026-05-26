@@ -46,6 +46,7 @@ struct VehicleConfig {
     std::string   glbPath;              // relative to APEIRON_DATA_DIR; empty = no model
 
     bool                  hasOrbit     = false;
+    std::string           centralBody  = "EARTH";  // SPICE name of the body being orbited
     astro::OrbitElements  orbitElements;   // valid when hasOrbit == true
 
     SpacecraftModel       model;           // thrusters; empty if no [[thrusters]] section

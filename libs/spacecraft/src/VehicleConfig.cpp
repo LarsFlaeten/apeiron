@@ -1,14 +1,41 @@
 #include "apeiron/spacecraft/VehicleConfig.h"
 
+#include <astro/SpiceCore.h>
 #include <toml++/toml.hpp>
 #include <cmath>
 #include <stdexcept>
 
 namespace spacecraft {
 
-static constexpr double kDeg       = M_PI / 180.0;
-static constexpr double kGM_Earth  = 398600.4418;    // km³/s²
-static constexpr double kObliquity = 23.4393 * kDeg; // Earth J2000 mean obliquity
+static constexpr double kDeg = M_PI / 180.0;
+
+// Earth obliquity — used only for Earth TLE-derived elements (equatorial→ecliptic).
+static constexpr double kObliquityEarth = 23.4393 * kDeg;
+
+// Resolve a SPICE body name to a NAIF integer id via the astro wrapper.
+static int resolveNaifId(const std::string& bodyName)
+{
+    try { return astro::Spice().bodyNameToId(bodyName); }
+    catch (const std::exception& ex) {
+        throw std::runtime_error("VehicleConfig: unknown central_body \""
+                                 + bodyName + "\": " + ex.what());
+    }
+}
+
+// Query GM (km³/s²) for a NAIF body id via the astro wrapper.
+static double queryGM(int naifId)
+{
+    double mu = 0.0;
+    try { astro::Spice().getPlanetaryConstants(naifId, "GM", mu); }
+    catch (const std::exception& ex) {
+        throw std::runtime_error("VehicleConfig: could not retrieve GM for NAIF id "
+                                 + std::to_string(naifId) + ": " + ex.what());
+    }
+    if (mu <= 0.0)
+        throw std::runtime_error("VehicleConfig: GM is zero for NAIF id "
+                                 + std::to_string(naifId));
+    return mu;
+}
 
 static glm::vec3 tomlVec3f(const toml::array& a, const char* field)
 {
@@ -60,6 +87,11 @@ VehicleConfig loadVehicleConfig(const std::filesystem::path& tomlPath)
         if (epochStr.empty())
             throw std::runtime_error("orbit.epoch missing in " + tomlPath.string());
 
+        vc.centralBody = (*orb)["central_body"].value_or(std::string{"EARTH"});
+
+        const int naifId = resolveNaifId(vc.centralBody);
+        const double   mu     = queryGM(naifId);
+
         const double inc    = (*orb)["inclination"].value_or(0.0) * kDeg;
         const double raan   = (*orb)["raan"].value_or(0.0)        * kDeg;
         const double e      = (*orb)["eccentricity"].value_or(0.0);
@@ -68,8 +100,8 @@ VehicleConfig loadVehicleConfig(const std::filesystem::path& tomlPath)
         const double n_revd = (*orb)["mean_motion"].value_or(0.0);   // rev/day
 
         const double n_rads = n_revd * 2.0 * M_PI / 86400.0;
-        const double a      = std::cbrt(kGM_Earth / (n_rads * n_rads));
-        const double h      = std::sqrt(kGM_Earth * a * (1.0 - e * e));
+        const double a      = std::cbrt(mu / (n_rads * n_rads));
+        const double h      = std::sqrt(mu * a * (1.0 - e * e));
 
         astro::OrbitElements& oe = vc.orbitElements;
         oe.h     = h;
@@ -79,7 +111,7 @@ VehicleConfig loadVehicleConfig(const std::filesystem::path& tomlPath)
         oe.w     = argpe;
         oe.M0    = M0;
         oe.epoch = astro::EphemerisTime::fromString(epochStr);
-        oe.mu    = kGM_Earth;
+        oe.mu    = mu;
         oe.computeDerivedQuantities();
 
         vc.hasOrbit = true;
@@ -122,12 +154,34 @@ astro::PosState vehicleStateAtEt(const VehicleConfig& vc,
     astro::OrbitElements oe = vc.orbitElements;   // copy — toStateVector is non-const
     astro::PosState s = oe.toStateVector(et);
 
-    // Rotate J2000 equatorial → ECLIPJ2000 (Rx by Earth's obliquity).
-    const double ce = std::cos(kObliquity), se = std::sin(kObliquity);
-    auto rx = [&](const astro::Vec3& v) -> astro::Vec3 {
-        return { v.x, ce*v.y + se*v.z, -se*v.y + ce*v.z };
+    if (vc.centralBody == "EARTH") {
+        // TLE elements are given in TEME (near-equatorial); rotate to ECLIPJ2000.
+        const double ce = std::cos(kObliquityEarth), se = std::sin(kObliquityEarth);
+        auto rx = [&](const astro::Vec3& v) -> astro::Vec3 {
+            return { v.x, ce*v.y + se*v.z, -se*v.y + ce*v.z };
+        };
+        return { rx(s.r), rx(s.v) };
+    }
+
+    // Non-Earth body: elements are defined in ECLIPJ2000 (inclination relative to
+    // the ecliptic plane).  Add the central body's geocentric ECLIPJ2000 state so
+    // the result is Earth-centred, matching the simulation reference frame.
+    static const astro::ReferenceFrame kEclip = astro::ReferenceFrame::createEclipJ2000();
+    int naifId = resolveNaifId(vc.centralBody);
+    astro::PosState bodyState;
+    try {
+        astro::Spice().getRelativeGeometricState(
+            static_cast<int>(naifId), 399, et, bodyState, kEclip);
+    } catch (const std::exception& ex) {
+        throw std::runtime_error(
+            std::string("vehicleStateAtEt: could not get state for central_body \"")
+            + vc.centralBody + "\": " + ex.what());
+    }
+
+    return {
+        { s.r.x + bodyState.r.x, s.r.y + bodyState.r.y, s.r.z + bodyState.r.z },
+        { s.v.x + bodyState.v.x, s.v.y + bodyState.v.y, s.v.z + bodyState.v.z }
     };
-    return { rx(s.r), rx(s.v) };
 }
 
 } // namespace spacecraft
