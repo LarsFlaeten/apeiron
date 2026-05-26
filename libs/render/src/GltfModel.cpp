@@ -631,11 +631,12 @@ std::vector<GltfModel::DockingPort> GltfModel::dockingPorts() const
 
         glm::mat4 tf = nodeWorldTransform(name);
 
-        // Label = everything after the last '_'
-        std::string label = name;
-        auto pos = name.rfind('_');
-        if (pos != std::string::npos && pos + 1 < name.size())
-            label = name.substr(pos + 1);
+        // Label = everything after the known prefix (preserves underscores in the label).
+        static constexpr std::string_view kActivePrefix  = "docking_port_active_";
+        static constexpr std::string_view kPassivePrefix = "docking_port_passive_";
+        const auto& prefix = isActive ? kActivePrefix : kPassivePrefix;
+        std::string label = (name.size() > prefix.size())
+                          ? name.substr(prefix.size()) : name;
 
         DockingPort p;
         p.nodeName = name;
