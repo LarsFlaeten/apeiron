@@ -800,23 +800,25 @@ int main(int argc, char* argv[])
             }
         }
 
-        // Load AI craft (ISS) glTF model — path from vehicle config.
-        apeiron::render::GltfModel issGltf;
-        if (vehicleConfigs.size() > 1) {
-            const std::string& glbRel = aiVehicle.glbPath;
-            std::filesystem::path glb = glbRel.empty()
+        // Load AI craft glTF models — one entry per non-player vehicle (index = scIdx - 1).
+        std::vector<std::unique_ptr<apeiron::render::GltfModel>> aiGltfs;
+        for (size_t vi = 1; vi < vehicleConfigs.size(); ++vi) {
+            auto& vc = vehicleConfigs[vi];
+            auto gltf = std::make_unique<apeiron::render::GltfModel>();
+            std::filesystem::path glb = vc.glbPath.empty()
                 ? std::filesystem::path{}
-                : std::filesystem::path(APEIRON_DATA_DIR) / glbRel;
+                : std::filesystem::path(APEIRON_DATA_DIR) / vc.glbPath;
             if (!glb.empty() && std::filesystem::exists(glb)) {
-                glfwSetWindowTitle(window, ("Apeiron — Loading " + aiVehicle.name + " model…").c_str());
+                glfwSetWindowTitle(window, ("Apeiron — Loading " + vc.name + " model…").c_str());
                 glfwPollEvents();
-                issGltf.load(ctx, allocator, meshPipeline, glb);
-                std::cout << "[Apeiron] Loaded " << aiVehicle.name << " glTF: "
-                          << issGltf.nodes().size() << " nodes\n";
-            } else {
-                std::cerr << "[Apeiron] WARNING: " << aiVehicle.name
+                gltf->load(ctx, allocator, meshPipeline, glb);
+                std::cout << "[Apeiron] Loaded " << vc.name << " glTF: "
+                          << gltf->nodes().size() << " nodes\n";
+            } else if (!glb.empty()) {
+                std::cerr << "[Apeiron] WARNING: " << vc.name
                           << " GLB not found at " << glb << "\n";
             }
+            aiGltfs.push_back(std::move(gltf));
         }
 
         // OffscreenCams declared BEFORE Renderer so they are destroyed AFTER Renderer
@@ -919,8 +921,9 @@ int main(int argc, char* argv[])
                 p.axisZ = glm::normalize(rf * p.axisZ);
             }
         }
-        if (spacecraft.size() > issIdx)
-            scPorts[issIdx] = issGltf.dockingPorts();
+        for (size_t ai = 0; ai < aiGltfs.size() && ai + 1 < scPorts.size(); ++ai)
+            if (aiGltfs[ai]->isLoaded())
+                scPorts[ai + 1] = aiGltfs[ai]->dockingPorts();
         for (size_t i = 0; i < scPorts.size(); ++i) {
             std::cout << "[Apeiron] Spacecraft[" << i << "] docking ports: "
                       << scPorts[i].size() << "\n";
@@ -2848,7 +2851,6 @@ int main(int argc, char* argv[])
             // Helper: build VP + camPos for a named cam node on the player ship.
             // Returns false (leaves vp/camPos unchanged) if the node is not found.
             glm::mat4 offOrion = glm::mat4(1.0f);
-            glm::mat4 offIss   = glm::mat4(1.0f);
             {
                 auto& sc  = *spacecraft[playerIdx];
                 glm::vec3 rp = scene.origin().toRenderSpace(earthWorld + sc.position());
@@ -2860,13 +2862,15 @@ int main(int argc, char* argv[])
                          * glm::mat4(ar) * rf
                          * glm::scale(glm::mat4(1.0f), glm::vec3(1e-3f));
             }
-            if (issGltf.isLoaded() && spacecraft.size() > issIdx) {
-                auto& sc  = *spacecraft[issIdx];
+            std::vector<glm::mat4> offAi(aiGltfs.size(), glm::mat4(1.0f));
+            for (size_t ai = 0; ai < aiGltfs.size() && ai + 1 < spacecraft.size(); ++ai) {
+                if (!aiGltfs[ai]->isLoaded()) continue;
+                auto& sc  = *spacecraft[ai + 1];
                 glm::vec3 rp = scene.origin().toRenderSpace(earthWorld + sc.position());
                 glm::mat3 ar = glm::mat3_cast(glm::fquat(sc.attitude()));
-                offIss = glm::translate(glm::mat4(1.0f), rp)
-                       * glm::mat4(ar)
-                       * glm::scale(glm::mat4(1.0f), glm::vec3(1e-3f));
+                offAi[ai] = glm::translate(glm::mat4(1.0f), rp)
+                           * glm::mat4(ar)
+                           * glm::scale(glm::mat4(1.0f), glm::vec3(1e-3f));
             }
 
             // Build VP for a named cam node on the player ship (square 1:1 aspect).
@@ -2987,9 +2991,10 @@ int main(int argc, char* argv[])
                 if (orionGltf.isLoaded())
                     orionGltf.draw(renderer.currentCmd(), meshPipeline,
                                    offVP, offOrion, offSunDir, offCamPos);
-                if (issGltf.isLoaded())
-                    issGltf.draw(renderer.currentCmd(), meshPipeline,
-                                 offVP, offIss, offSunDir, offCamPos);
+                for (size_t ai = 0; ai < aiGltfs.size(); ++ai)
+                    if (aiGltfs[ai]->isLoaded())
+                        aiGltfs[ai]->draw(renderer.currentCmd(), meshPipeline,
+                                          offVP, offAi[ai], offSunDir, offCamPos);
                 offscreenCam.end(renderer.currentCmd());
                 camMFD.setTexture(offscreenCam.imguiTexture(fi));
                 } // needCamPass
@@ -3034,9 +3039,10 @@ int main(int argc, char* argv[])
                 if (orionGltf.isLoaded())
                     orionGltf.draw(renderer.currentCmd(), meshPipeline,
                                    dockVP, offOrion, offSunDir, dockCamPos);
-                if (issGltf.isLoaded())
-                    issGltf.draw(renderer.currentCmd(), meshPipeline,
-                                 dockVP, offIss, offSunDir, dockCamPos);
+                for (size_t ai = 0; ai < aiGltfs.size(); ++ai)
+                    if (aiGltfs[ai]->isLoaded())
+                        aiGltfs[ai]->draw(renderer.currentCmd(), meshPipeline,
+                                          dockVP, offAi[ai], offSunDir, dockCamPos);
                 dockingOffscreenCam.end(renderer.currentCmd());
                 dockingMFD.setTexture(dockingOffscreenCam.imguiTexture(fi));
                 } // needDockingPass
@@ -3186,19 +3192,19 @@ int main(int argc, char* argv[])
                     }
                 }
 
-                // ---- ISS ----
-                if (spacecraft.size() > issIdx) {
-                    auto& sc = *spacecraft[issIdx];
+                // ---- AI craft ----
+                for (size_t ai = 0; ai < aiGltfs.size() && ai + 1 < spacecraft.size(); ++ai) {
+                    auto& sc = *spacecraft[ai + 1];
                     glm::dvec3 worldPos = earthWorld + sc.position();
                     glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
                     glm::mat3  attRot   = glm::mat3_cast(glm::fquat(sc.attitude()));
-                    constexpr float kIssToKm = 1e-3f;
-                    glm::mat4 issModel = glm::translate(glm::mat4(1.0f), rp)
+                    constexpr float kScToKm = 1e-3f;
+                    glm::mat4 scModel = glm::translate(glm::mat4(1.0f), rp)
                                       * glm::mat4(attRot)
-                                      * glm::scale(glm::mat4(1.0f), glm::vec3(kIssToKm));
-                    if (issGltf.isLoaded()) {
-                        issGltf.draw(renderer.currentCmd(), meshPipeline,
-                                     vp, issModel, scSunDir, camera.position());
+                                      * glm::scale(glm::mat4(1.0f), glm::vec3(kScToKm));
+                    if (aiGltfs[ai]->isLoaded()) {
+                        aiGltfs[ai]->draw(renderer.currentCmd(), meshPipeline,
+                                          vp, scModel, scSunDir, camera.position());
                     } else {
                         drawFallback(rp, attRot);
                     }

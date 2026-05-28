@@ -135,3 +135,6 @@ player = true
 
 [[spacecraft]]
 config = "../spacecraft/iss/iss.toml"
+
+[[spacecraft]]
+config = "../spacecraft/gateway/gateway.toml"
