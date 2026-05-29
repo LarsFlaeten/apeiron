@@ -326,16 +326,12 @@ int main(int argc, char* argv[])
         {
             for (auto& bi : bodyInfos) {
                 const std::string& name = bi.node->naifName();
-                // bodn2c_c is safe to call raw: it signals failure via the found
-                // output flag rather than the SPICE error system.
-                SpiceInt id; SpiceBoolean found;
-                bodn2c_c(name.c_str(), &id, &found);
-                if (!found) continue;
-                // Use the astro helper which calls checkError() internally.
+                int id;
+                try { id = astro::Spice().bodyNameToId(name); }
+                catch (const astro::SpiceException&) { continue; }
                 double gm = 0.0;
                 try {
-                    astro::Spice().getPlanetaryConstants(
-                        static_cast<int>(id), "GM", gm);
+                    astro::Spice().getPlanetaryConstants(id, "GM", gm);
                 } catch (const astro::SpiceException&) {
                     continue;  // body has no GM in the loaded kernels — skip
                 }
@@ -389,16 +385,16 @@ int main(int argc, char* argv[])
         {
             for (auto& bi : bodyInfos) {
                 const std::string& name = bi.node->naifName();
-                SpiceInt id; SpiceBoolean found;
-                bodn2c_c(name.c_str(), &id, &found);
-                if (!found) continue;
+                auto maybeId = astro::Spice().tryBodyNameToId(name);
+                if (!maybeId) continue;
+                int id = *maybeId;
                 // Barycenters 1-9 or planet centres 199,299,...,899.
                 const bool isBarycenter   = (id >= 1 && id <= 9);
                 const bool isPlanetCentre = (id >= 199 && id <= 899 && id % 100 == 99);
                 if (!isBarycenter && !isPlanetCentre) continue;
                 // Short name = first word of NAIF name.
                 std::string shortName = name.substr(0, name.find(' '));
-                transferBodies.push_back({ name, shortName, static_cast<int>(id) });
+                transferBodies.push_back({ name, shortName, id });
             }
         }
 
@@ -2652,15 +2648,14 @@ int main(int argc, char* argv[])
                             }
                         }
                         if (!foundSC) {
-                            SpiceInt naifId;  SpiceBoolean found;
-                            bodn2c_c(pendingTgt.c_str(), &naifId, &found);
-                            if (!found) {
+                            auto maybeId = astro::Spice().tryBodyNameToId(pendingTgt);
+                            if (!maybeId) {
                                 std::string up = pendingTgt;
                                 for (auto& c : up)
                                     c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                                bodn2c_c(up.c_str(), &naifId, &found);
+                                maybeId = astro::Spice().tryBodyNameToId(up);
                             }
-                            if (found) orbitalMFD.setTgtBody(static_cast<int>(naifId), pendingTgt);
+                            if (maybeId) orbitalMFD.setTgtBody(*maybeId, pendingTgt);
                         }
                     }
                 }
