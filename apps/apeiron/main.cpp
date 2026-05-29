@@ -1911,11 +1911,13 @@ int main(int argc, char* argv[])
             observerPos = observer.worldPosition(currentEt);
             scene.update(currentEt, observerPos);
 
-            // Cache the observer body's world position AFTER scene.update() so node
-            // positions are current — spacecraft positions are relative to this body.
+            // Cache Earth's world position AFTER scene.update() so node positions are
+            // current.  All spacecraft positions are Earth-centred ECI (vehicleStateAtEt
+            // always converts to Earth-ECI regardless of the orbit's central_body), so
+            // this must always be Earth — not the scenario observer body.
             glm::dvec3 refBodyWorld(0.0);
             for (auto& bi : bodyInfos)
-                if (bi.node->naifName() == cfg.observerBody) { refBodyWorld = bi.node->worldPosition(); break; }
+                if (bi.node->naifName() == "EARTH") { refBodyWorld = bi.node->worldPosition(); break; }
 
             // ---- Docking port proximity & matching logic ----
             // Runs every frame; keeps nav.dockPortIdx and nav.compatiblePortCount fresh.
