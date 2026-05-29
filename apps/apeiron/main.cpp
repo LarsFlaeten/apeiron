@@ -383,6 +383,13 @@ int main(int argc, char* argv[])
                 continue;
             }
             auto vc = spacecraft::loadVehicleConfig(ref.configPath);
+            if (ref.orbit.present) {
+                spacecraft::applyOrbit(vc,
+                    ref.orbit.centralBody, ref.orbit.epoch,
+                    ref.orbit.inclination, ref.orbit.raan,
+                    ref.orbit.eccentricity, ref.orbit.argPerigee,
+                    ref.orbit.meanAnomaly, ref.orbit.meanMotion);
+            }
             std::cout << "[Apeiron] Loaded spacecraft '" << vc.name << "'"
                       << (ref.player ? " [player]" : "")
                       << ": " << vc.model.thrusters.size() << " thrusters"

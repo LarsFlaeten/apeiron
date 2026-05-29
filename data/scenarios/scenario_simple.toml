@@ -34,6 +34,14 @@ epoch  = "2026-10-30T00:00:00"
 [[spacecraft]]
 config = "../spacecraft/orion/orion.toml"
 player = true
+orbit.central_body = "EARTH"
+orbit.epoch        = "2026-10-30T00:00:00"
+orbit.inclination  = 51.6
+orbit.raan         = 0.0
+orbit.eccentricity = 0.0
+orbit.arg_perigee  = 0.0
+orbit.mean_anomaly = 0.0
+orbit.mean_motion  = 15.49   # ~400 km circular LEO
 
 # ---------------------------------------------------------------------------
 

@@ -5,9 +5,24 @@
 #include <string>
 #include <vector>
 
+// Orbital elements for one spacecraft instance, as parsed from the scenario.
+// Units match the TOML: degrees for angles, rev/day for mean motion.
+struct OrbitSpec {
+    bool        present       = false;
+    std::string centralBody   = "EARTH";
+    std::string epoch;
+    double      inclination   = 0.0;   // deg
+    double      raan          = 0.0;   // deg
+    double      eccentricity  = 0.0;
+    double      argPerigee    = 0.0;   // deg
+    double      meanAnomaly   = 0.0;   // deg
+    double      meanMotion    = 0.0;   // rev/day
+};
+
 // Reference to one spacecraft listed in the scenario.
 struct SpacecraftRef {
-    std::filesystem::path configPath;   // absolute path to spacecraft TOML
+    std::filesystem::path configPath;  // absolute path to spacecraft TOML
+    OrbitSpec             orbit;       // initial state; present = true when supplied
     bool                  player = false;
 };
 

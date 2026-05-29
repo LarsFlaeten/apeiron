@@ -81,41 +81,8 @@ VehicleConfig loadVehicleConfig(const std::filesystem::path& tomlPath)
     if (auto* com = (*vt)["center_of_mass"].as_array())
         vc.centerOfMass = tomlVec3f(*com, "center_of_mass");
 
-    // ---- [orbit] — optional ----
-    if (const auto* orb = doc["orbit"].as_table()) {
-        const std::string epochStr = (*orb)["epoch"].value_or(std::string{});
-        if (epochStr.empty())
-            throw std::runtime_error("orbit.epoch missing in " + tomlPath.string());
-
-        vc.centralBody = (*orb)["central_body"].value_or(std::string{"EARTH"});
-
-        const int naifId = resolveNaifId(vc.centralBody);
-        const double   mu     = queryGM(naifId);
-
-        const double inc    = (*orb)["inclination"].value_or(0.0) * kDeg;
-        const double raan   = (*orb)["raan"].value_or(0.0)        * kDeg;
-        const double e      = (*orb)["eccentricity"].value_or(0.0);
-        const double argpe  = (*orb)["arg_perigee"].value_or(0.0) * kDeg;
-        const double M0     = (*orb)["mean_anomaly"].value_or(0.0) * kDeg;
-        const double n_revd = (*orb)["mean_motion"].value_or(0.0);   // rev/day
-
-        const double n_rads = n_revd * 2.0 * M_PI / 86400.0;
-        const double a      = std::cbrt(mu / (n_rads * n_rads));
-        const double h      = std::sqrt(mu * a * (1.0 - e * e));
-
-        astro::OrbitElements& oe = vc.orbitElements;
-        oe.h     = h;
-        oe.i     = inc;
-        oe.omega = raan;
-        oe.e     = e;
-        oe.w     = argpe;
-        oe.M0    = M0;
-        oe.epoch = astro::EphemerisTime::fromString(epochStr);
-        oe.mu    = mu;
-        oe.computeDerivedQuantities();
-
-        vc.hasOrbit = true;
-    }
+    // [orbit] is no longer part of spacecraft files — orbit comes from the
+    // scenario via applyOrbit(). Silently ignore any stale [orbit] section.
 
     // ---- [[thrusters]] — optional ----
     if (const auto* thr_arr = doc["thrusters"].as_array()) {
@@ -146,6 +113,47 @@ VehicleConfig loadVehicleConfig(const std::filesystem::path& tomlPath)
     }
 
     return vc;
+}
+
+void applyOrbit(VehicleConfig&     vc,
+                const std::string& centralBody,
+                const std::string& epochStr,
+                double             incDeg,
+                double             raanDeg,
+                double             eccentricity,
+                double             argPerigeeDeg,
+                double             meanAnomalyDeg,
+                double             meanMotionRevDay)
+{
+    if (epochStr.empty())
+        throw std::runtime_error("applyOrbit: epoch string is empty");
+
+    vc.centralBody = centralBody;
+
+    const int    naifId = resolveNaifId(centralBody);
+    const double mu     = queryGM(naifId);
+
+    const double inc   = incDeg        * kDeg;
+    const double raan  = raanDeg       * kDeg;
+    const double e     = eccentricity;
+    const double argpe = argPerigeeDeg * kDeg;
+    const double M0    = meanAnomalyDeg * kDeg;
+    const double n_rads = meanMotionRevDay * 2.0 * M_PI / 86400.0;
+    const double a      = std::cbrt(mu / (n_rads * n_rads));
+    const double h      = std::sqrt(mu * a * (1.0 - e * e));
+
+    astro::OrbitElements& oe = vc.orbitElements;
+    oe.h     = h;
+    oe.i     = inc;
+    oe.omega = raan;
+    oe.e     = e;
+    oe.w     = argpe;
+    oe.M0    = M0;
+    oe.epoch = astro::EphemerisTime::fromString(epochStr);
+    oe.mu    = mu;
+    oe.computeDerivedQuantities();
+
+    vc.hasOrbit = true;
 }
 
 astro::PosState vehicleStateAtEt(const VehicleConfig& vc,

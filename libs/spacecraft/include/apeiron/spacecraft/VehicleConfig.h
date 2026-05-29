@@ -11,7 +11,7 @@
 namespace spacecraft {
 
 // ---------------------------------------------------------------------------
-// VehicleConfig — complete description of one spacecraft loaded from TOML.
+// VehicleConfig — vehicle definition loaded from a spacecraft TOML.
 //
 // File format:
 //
@@ -22,20 +22,14 @@ namespace spacecraft {
 //   inertia_tensor = [34000.0, 120000.0, 120000.0]
 //   glb            = "spacecraft/orion/CM_SM06.glb"  # optional
 //
-//   [orbit]                     # optional; present for AI/passive craft
-//   epoch        = "2026-03-29T03:11:03"
-//   inclination  = 51.6344      # deg
-//   raan         = 336.2407     # deg
-//   eccentricity = 0.0006215
-//   arg_perigee  = 245.2164     # deg
-//   mean_anomaly = 114.8178     # deg
-//   mean_motion  = 15.48624340  # rev/day
-//
 //   [[thrusters]]               # zero or more; absent for passive craft
 //   id           = "main"
 //   type         = "main_engine"
 //   thrust_n     = 25700.0
 //   ...
+//
+// Orbit information is NOT stored in spacecraft files — it is supplied by the
+// scenario and applied via applyOrbit() after SPICE kernels are loaded.
 // ---------------------------------------------------------------------------
 
 struct VehicleConfig {
@@ -52,10 +46,24 @@ struct VehicleConfig {
     SpacecraftModel       model;           // thrusters; empty if no [[thrusters]] section
 };
 
-// Parse a unified spacecraft TOML.  Throws std::runtime_error on bad input.
+// Parse a spacecraft TOML (vehicle + thrusters only).
+// Throws std::runtime_error on bad input.
 VehicleConfig loadVehicleConfig(const std::filesystem::path& tomlPath);
 
-// Propagate VehicleConfig orbit elements to an ECLIPJ2000 state at et.
+// Apply scenario-supplied orbit parameters to a VehicleConfig.
+// Requires SPICE kernels to be loaded (queries GM via SPICE).
+// Throws std::runtime_error if centralBody is unknown or GM unavailable.
+void applyOrbit(VehicleConfig&     vc,
+                const std::string& centralBody,
+                const std::string& epochStr,
+                double             incDeg,
+                double             raanDeg,
+                double             eccentricity,
+                double             argPerigeeDeg,
+                double             meanAnomalyDeg,
+                double             meanMotionRevDay);
+
+// Propagate VehicleConfig orbit elements to an ECI (ECLIPJ2000) state at et.
 // Requires hasOrbit == true.
 astro::PosState vehicleStateAtEt(const VehicleConfig& vc,
                                   const astro::EphemerisTime& et);

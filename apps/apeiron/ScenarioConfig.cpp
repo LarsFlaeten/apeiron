@@ -96,6 +96,17 @@ ScenarioConfig ScenarioConfig::load(const std::filesystem::path& tomlPath)
             SpacecraftRef ref;
             ref.configPath = resolved;
             ref.player     = (*t)["player"].value_or(false);
+            if (const auto* orb = (*t)["orbit"].as_table()) {
+                ref.orbit.present      = true;
+                ref.orbit.centralBody  = (*orb)["central_body"].value_or(std::string{"EARTH"});
+                ref.orbit.epoch        = (*orb)["epoch"].value_or(std::string{});
+                ref.orbit.inclination  = (*orb)["inclination"].value_or(0.0);
+                ref.orbit.raan         = (*orb)["raan"].value_or(0.0);
+                ref.orbit.eccentricity = (*orb)["eccentricity"].value_or(0.0);
+                ref.orbit.argPerigee   = (*orb)["arg_perigee"].value_or(0.0);
+                ref.orbit.meanAnomaly  = (*orb)["mean_anomaly"].value_or(0.0);
+                ref.orbit.meanMotion   = (*orb)["mean_motion"].value_or(0.0);
+            }
             cfg.spacecraft.push_back(ref);
         }
     }

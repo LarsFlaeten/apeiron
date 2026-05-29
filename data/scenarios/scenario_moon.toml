@@ -1,0 +1,80 @@
+# Apeiron scenario — Orion at Gateway, NRHO
+#
+# Orion starts 1 km behind Gateway in the 9:2 NRHO.
+# Both are at perilune (~3,250 km from the Moon) at epoch.
+# Kernel load order: LSK first, then PCK, then SPK.
+
+[[kernels]]
+path = "../kernels/lsk/naif0012.tls"
+
+[[kernels]]
+path = "../kernels/pck/pck00011.tpc"
+
+[[kernels]]
+path = "../kernels/pck/gm_de440.tpc"
+
+[[kernels]]
+path = "../kernels/spk/de440s.bsp"
+
+# ---------------------------------------------------------------------------
+
+[observer]
+body   = "MOON"
+target = "EARTH"
+frame  = "ECLIPJ2000"
+
+[time]
+epoch  = "2033-01-01T00:00:00"
+
+# ---------------------------------------------------------------------------
+
+[[spacecraft]]
+config = "../spacecraft/orion/orion.toml"
+player = true
+orbit.central_body = "MOON"
+orbit.epoch        = "2033-01-01T00:00:00"
+orbit.inclination  = 90.0
+orbit.raan         = 0.0
+orbit.eccentricity = 0.9042
+orbit.arg_perigee  = 90.0
+orbit.mean_anomaly = 359.9996   # 0.0004° behind Gateway ≈ 1 km at perilune
+orbit.mean_motion  = 0.15385
+
+[[spacecraft]]
+config = "../spacecraft/gateway/gateway.toml"
+orbit.central_body = "MOON"
+orbit.epoch        = "2033-01-01T00:00:00"
+orbit.inclination  = 90.0
+orbit.raan         = 0.0
+orbit.eccentricity = 0.9042
+orbit.arg_perigee  = 90.0
+orbit.mean_anomaly = 0.0
+orbit.mean_motion  = 0.15385
+
+# ---------------------------------------------------------------------------
+
+[[bodies]]
+naif  = "SUN"
+color = [1.0, 0.92, 0.23]
+
+[[bodies]]
+naif  = "EARTH"
+color = [1.0, 1.0, 1.0]
+diffuse  = "../textures/earth/8k_earth_daymap.jpg"
+specular = "../textures/earth/8k_earth_specular_map.jpg"
+normals  = "../textures/earth/8k_earth_normal_map.jpg"
+clouds   = "../textures/earth/8k_earth_clouds.jpg"
+
+atmosphere.radius_km        = 6460.0
+atmosphere.rayleigh_rgb     = [5.802e-3, 13.558e-3, 33.1e-3]
+atmosphere.rayleigh_scale_h = 8.0
+atmosphere.mie_scattering   = 3.996e-3
+atmosphere.mie_extinction   = 4.440e-3
+atmosphere.mie_scale_h      = 1.2
+atmosphere.mie_g            = 0.76
+
+[[bodies]]
+naif  = "MOON"
+color = [1.0, 1.0, 1.0]
+diffuse      = "../textures/moon/8k_moon.jpg"
+displacement = "../textures/moon/lola_8k_height.png"

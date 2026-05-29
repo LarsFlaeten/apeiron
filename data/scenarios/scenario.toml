@@ -132,9 +132,33 @@ ring_outer_radius = 2.35
 [[spacecraft]]
 config = "../spacecraft/orion/orion.toml"
 player = true
+orbit.central_body = "EARTH"
+orbit.epoch        = "2026-03-29T03:11:03"
+orbit.inclination  = 51.6344
+orbit.raan         = 336.2407
+orbit.eccentricity = 0.0006215
+orbit.arg_perigee  = 245.2164
+orbit.mean_anomaly = 114.8157   # 0.0021° behind ISS ≈ 250 m at 400 km alt
+orbit.mean_motion  = 15.48624340
 
 [[spacecraft]]
 config = "../spacecraft/iss/iss.toml"
+orbit.central_body = "EARTH"
+orbit.epoch        = "2026-03-29T03:11:03"
+orbit.inclination  = 51.6344
+orbit.raan         = 336.2407
+orbit.eccentricity = 0.0006215
+orbit.arg_perigee  = 245.2164
+orbit.mean_anomaly = 114.8178
+orbit.mean_motion  = 15.48624340
 
 [[spacecraft]]
 config = "../spacecraft/gateway/gateway.toml"
+orbit.central_body = "MOON"
+orbit.epoch        = "2026-04-07T00:00:00"
+orbit.inclination  = 90.0
+orbit.raan         = 0.0
+orbit.eccentricity = 0.9042
+orbit.arg_perigee  = 90.0
+orbit.mean_anomaly = 0.0
+orbit.mean_motion  = 0.15385
