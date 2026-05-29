@@ -542,6 +542,9 @@ int main(int argc, char* argv[])
         // Type alias for readability.
         using RefBody = spacecraft::PhysicsWorld::RefBody;
         RefBody refBody = physicsWorld.refBody();
+        // True when the user manually selected a ref body via the OrbitalMFD REF button.
+        // Suppresses automatic SOI-driven ref switches; cleared on natural SOI transitions.
+        bool userPinnedRef = false;
 
         // Thruster parameters — adjustable from the Dev view.
         // Initialise from manifest if loaded, so the slider shows the real value.
@@ -1305,9 +1308,15 @@ int main(int argc, char* argv[])
                 auto soiEvt = physicsWorld.updateGravity(
                     scPtrs, spacecraft[playerIdx]->position(), currentEt);
                 if (soiEvt.changed) {
-                    refBody = soiEvt.newRefBody;
-                    dominantBodyName = refBody.name;
-                    orbitalMFD.setContext(refBody.name.c_str(), "");
+                    dominantBodyName = soiEvt.newRefBody.name;
+                    if (!userPinnedRef) {
+                        // Follow the physics SOI automatically.
+                        refBody = soiEvt.newRefBody;
+                        orbitalMFD.setContext(refBody.name.c_str(), "");
+                    }
+                    // Note: userPinnedRef stays set — the user keeps their chosen
+                    // display ref until they type a new one or the next natural
+                    // SOI transition into a body they haven't pinned.
                 }
             }
             // -----------------------------------------------------------------------
@@ -2276,9 +2285,12 @@ int main(int argc, char* argv[])
                     if (!pending.empty()) {
                         for (auto& c : pending)
                             c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                        if (physicsWorld.findBody(pending)) {
-                            physicsWorld.setDominantBody(pending);
-                            refBody = physicsWorld.refBody();
+                        if (const auto* gb = physicsWorld.findBody(pending)) {
+                            // Update the display ref without changing the physics
+                            // dominant body — allows inspecting any body's orbital
+                            // elements even when outside its SOI (e.g. hyperbolic approach).
+                            refBody = { gb->name, gb->gm, gb->radiusKm, gb->naifId };
+                            userPinnedRef = true;
                             orbitalMFD.setContext(refBody.name.c_str(), "");
                         }
                     }

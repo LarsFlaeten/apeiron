@@ -48,20 +48,56 @@ PhysicsWorld::PhysicsWorld(std::vector<BodySpec> bodySpecs,
     }
 
     // Compute Hill-sphere (SOI) radii once at startup.
-    // r_SOI ≈ a * (GM_body / GM_sun)^(2/5)
-    double gmSun = 0.0;
-    for (const auto& gb : m_bodies)
-        if (gb.name == "SUN") { gmSun = gb.gm; break; }
+    // r_SOI ≈ a * (GM_body / GM_parent)^(2/5)
+    // Parent is Earth for natural satellites (body inside Earth's SOI),
+    // Sun for everything else.
+    const astro::EphemerisTime t0(0.0);  // J2000 — good enough for static SOI
+
+    double gmSun   = 0.0;
+    double gmEarth = 0.0;
+    for (const auto& gb : m_bodies) {
+        if (gb.name == "SUN")   gmSun   = gb.gm;
+        if (gb.name == "EARTH") gmEarth = gb.gm;
+    }
+
+    // Sun position relative to Earth at J2000 (used for heliocentric distances).
+    glm::dvec3 sunEarthPos(0.0);
+    if (gmSun > 0.0) {
+        try {
+            astro::PosState s = m_eph.getState(10, t0);  // Sun NAIF ID = 10
+            sunEarthPos = glm::dvec3(s.r.x, s.r.y, s.r.z);
+        } catch (...) {}
+    }
+
+    // Earth SOI from Sun — used to classify natural satellites vs planets.
+    const double sunEarthDist = glm::length(sunEarthPos);
+    const double earthSoiKm = (gmSun > 0.0 && gmEarth > 0.0 && sunEarthDist > 0.0)
+        ? sunEarthDist * std::pow(gmEarth / gmSun, 2.0 / 5.0)
+        : 0.0;
 
     if (gmSun > 0.0) {
-        const astro::EphemerisTime t0(0.0);  // J2000 — good enough for static SOI
         for (auto& gb : m_bodies) {
-            if (gb.name == "SUN" || gb.gm <= 0.0) continue;
+            if (gb.name == "SUN" || gb.name == "EARTH" || gb.gm <= 0.0) continue;
             try {
                 astro::PosState s = m_eph.getState(gb.naifId, t0);
-                double a = glm::length(glm::dvec3(s.r.x, s.r.y, s.r.z));
+                const glm::dvec3 bodyEarthPos = glm::dvec3(s.r.x, s.r.y, s.r.z);
+                const double distFromEarth    = glm::length(bodyEarthPos);
+
+                double a, parentGm;
+                if (earthSoiKm > 0.0 && distFromEarth < earthSoiKm) {
+                    // Natural satellite (e.g. Moon): parent is Earth.
+                    a        = distFromEarth;
+                    parentGm = gmEarth;
+                } else {
+                    // Planet or distant body: parent is Sun.
+                    // Body-Sun distance = |body_earthPos - sun_earthPos|
+                    const double distFromSun = glm::length(bodyEarthPos - sunEarthPos);
+                    a        = (distFromSun > 0.0) ? distFromSun : distFromEarth;
+                    parentGm = gmSun;
+                }
+
                 if (a > 0.0)
-                    gb.soiKm = a * std::pow(gb.gm / gmSun, 2.0 / 5.0);
+                    gb.soiKm = a * std::pow(gb.gm / parentGm, 2.0 / 5.0);
             } catch (...) {}
         }
     }
