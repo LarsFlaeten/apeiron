@@ -298,17 +298,22 @@ int main(int argc, char* argv[])
         auto observerPos = observer.worldPosition(et);
         scene.update(et, observerPos);
 
-        // Earth radius for camera setup.
-        float earthRadius = 6371.0f;
-        for (auto& bi : bodyInfos)
-            if (bi.node->naifName() == "EARTH") { earthRadius = bi.radiusKm; break; }
+        // Observer body radius and GM — used for fallback orbit and camera setup.
+        float  observerBodyRadius = 6371.0f;
+        double observerBodyGm     = 398600.4418;
+        for (auto& bi : bodyInfos) {
+            if (bi.node->naifName() == cfg.observerBody) {
+                observerBodyRadius = bi.radiusKm;
+                break;
+            }
+        }
 
         // =================================================================
         // Spacecraft — physics only, no GPU resources
         // Coordinate system: Earth-centred ECLIPJ2000 (km, km/s).
         // =================================================================
 
-        // Earth's GM (km³/s²) — always needed for orbit calculations.
+        // Earth's GM (km³/s²) — kept as a named constant for any Earth-specific calculations.
         constexpr double kGM_Earth = 398600.4418;
 
         // Gravity bodies: all scenario bodies that have a GM in SPICE.
@@ -398,13 +403,16 @@ int main(int argc, char* argv[])
             }
         }
 
-        // Track which body currently dominates gravity for the player spacecraft.
-        // Start assuming Earth.
-        std::string dominantBodyName = "EARTH";
+        // Resolve observer body GM from gravBodies now that it's built.
+        for (const auto& gb : gravBodies)
+            if (gb.name == cfg.observerBody) { observerBodyGm = gb.gm; break; }
 
-        // Circular LEO at 400 km altitude (r = earthRadius + 400 km).
-        const double orbitRadius = static_cast<double>(earthRadius) + 400.0;
-        const double circularV   = std::sqrt(kGM_Earth / orbitRadius);
+        // Track which body currently dominates gravity for the player spacecraft.
+        std::string dominantBodyName = cfg.observerBody;
+
+        // Fallback circular orbit at 400 km above the observer body.
+        const double orbitRadius = static_cast<double>(observerBodyRadius) + 400.0;
+        const double circularV   = std::sqrt(observerBodyGm / orbitRadius);
 
         // ---- Load spacecraft configs from scenario ----
         // Convention: player craft is index 0; AI/passive craft follow in order.
@@ -491,9 +499,9 @@ int main(int argc, char* argv[])
             shipState.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
             shipState.R.w = glm::dvec3(0.0);
         } else {
-            // Fallback: circular 400 km equatorial LEO.
-            const double r0 = static_cast<double>(earthRadius) + 400.0;
-            const double v0 = std::sqrt(kGM_Earth / r0);
+            // Fallback: circular orbit 400 km above the observer body.
+            const double r0 = static_cast<double>(observerBodyRadius) + 400.0;
+            const double v0 = std::sqrt(observerBodyGm / r0);
             shipState.P.r = glm::dvec3(r0, 0.0, 0.0);
             shipState.P.v = glm::dvec3(0.0, v0, 0.0);
             shipState.R.q = glm::dquat(1.0, 0.0, 0.0, 0.0);
@@ -509,7 +517,8 @@ int main(int argc, char* argv[])
         // Attractors are set per-frame from gravBodies below.
 
         // Index of the spacecraft the player controls / camera follows.
-        const size_t playerIdx = 0;
+        // Not const — can be reassigned on docking handover or control transfer.
+        size_t playerIdx = 0;
 
         // ---- AI craft: create one physics object per non-player vehicle ----
         // Appended in vehicleConfig order so aiGltfs[ai] == spacecraft[ai+1].
@@ -542,7 +551,7 @@ int main(int argc, char* argv[])
 
         // MFD apps — updated and rendered every frame in Nav view.
         OrbitalMFD orbitalMFD;
-        orbitalMFD.setContext("EARTH", "ECLIPJ2000");
+        orbitalMFD.setContext(cfg.observerBody.c_str(), "ECLIPJ2000");
         // TGT list: all non-player spacecraft names (indices match spacecraft[]).
         {
             std::vector<std::string> tgtNames;
@@ -574,8 +583,11 @@ int main(int argc, char* argv[])
             double      radiusKm;  // equatorial
             SpiceInt    naifId;    // NAIF body id
         };
-        RefBody refBody{ "EARTH", kGM_Earth,
-                         static_cast<double>(earthRadius), 399 };
+        // Initialise from the scenario observer body; fall back to Earth constants.
+        RefBody refBody{ cfg.observerBody, observerBodyGm,
+                         static_cast<double>(observerBodyRadius), 399 };
+        for (const auto& gb : gravBodies)
+            if (gb.name == cfg.observerBody) { refBody.naifId = gb.naifId; break; }
 
         // Thruster parameters — adjustable from the Dev view.
         // Initialise from manifest if loaded, so the slider shows the real value.
@@ -1899,11 +1911,11 @@ int main(int argc, char* argv[])
             observerPos = observer.worldPosition(currentEt);
             scene.update(currentEt, observerPos);
 
-            // Cache Earth world position AFTER scene.update() so node positions are
-            // current — using a stale value here causes Earth to jump at large distances.
-            glm::dvec3 earthWorld(0.0);
+            // Cache the observer body's world position AFTER scene.update() so node
+            // positions are current — spacecraft positions are relative to this body.
+            glm::dvec3 refBodyWorld(0.0);
             for (auto& bi : bodyInfos)
-                if (bi.node->naifName() == "EARTH") { earthWorld = bi.node->worldPosition(); break; }
+                if (bi.node->naifName() == cfg.observerBody) { refBodyWorld = bi.node->worldPosition(); break; }
 
             // ---- Docking port proximity & matching logic ----
             // Runs every frame; keeps nav.dockPortIdx and nav.compatiblePortCount fresh.
@@ -2078,11 +2090,11 @@ int main(int argc, char* argv[])
                 // Recenter on the interpolated position — same point the camera sits at.
                 // Using the true physics position would leave a step-size-dependent offset
                 // between camera and origin, causing Earth to jump when time accel changes.
-                scene.origin().recenter(earthWorld + spacecraft[playerIdx]->position());
+                scene.origin().recenter(refBodyWorld + spacecraft[playerIdx]->position());
             } else if (viewMode == ViewMode::ShipInspect) {
                 // Recenter on the inspected object so its render-space position is always
                 // near the float origin — prevents precision jitter for far-away objects.
-                scene.origin().recenter(earthWorld + spacecraft[inspectIdx]->position());
+                scene.origin().recenter(refBodyWorld + spacecraft[inspectIdx]->position());
             } else if (selectedBodyIndex >= 0 && selectedBodyIndex < (int)bodyInfos.size()) {
                 scene.origin().recenter(
                     bodyInfos[selectedBodyIndex].node->worldPosition());
@@ -2104,7 +2116,7 @@ int main(int argc, char* argv[])
                 viewMode == ViewMode::MfdFull2) {
                 auto& ship = *spacecraft[playerIdx];
                 glm::vec3 shipRp = scene.origin().toRenderSpace(
-                    earthWorld + ship.position());
+                    refBodyWorld + ship.position());
 
                 glm::mat3 attRot3 = glm::mat3_cast(glm::fquat(ship.attitude()));
 
@@ -2149,7 +2161,7 @@ int main(int argc, char* argv[])
             if (viewMode == ViewMode::ShipInspect) {
                 auto& ship = *spacecraft[inspectIdx];
                 glm::vec3 shipRp = scene.origin().toRenderSpace(
-                    earthWorld + ship.position());
+                    refBodyWorld + ship.position());
 
                 // Accept drag (left-button) only when ImGui isn't consuming mouse,
                 // but always accept scroll so touchpad two-finger zoom works even
@@ -2793,7 +2805,7 @@ int main(int argc, char* argv[])
 
                 // ---- Helmet HUD overlay ----
                 navHUD.render(*spacecraft[playerIdx], spacecraft, nav,
-                              earthWorld, scene, camera, W, H, kSpacecraftNames, scPorts,
+                              refBodyWorld, scene, camera, W, H, kSpacecraftNames, scPorts,
                               refBody.name.c_str(), activeNavDv,
                               glm::dvec3(shipRelRef.v.x, shipRelRef.v.y, shipRelRef.v.z),
                               glm::dvec3(shipRelRef.r.x, shipRelRef.r.y, shipRelRef.r.z));
@@ -2850,7 +2862,7 @@ int main(int argc, char* argv[])
             // These duplicate a small amount of work from the spacecraft draw section
             // below, but keep the main draw code unchanged.
             glm::vec3 offSunDir = (sunIndex >= 0)
-                ? glm::normalize(sunRenderPos - scene.origin().toRenderSpace(earthWorld))
+                ? glm::normalize(sunRenderPos - scene.origin().toRenderSpace(refBodyWorld))
                 : glm::vec3(0.0f, 1.0f, 0.0f);
 
             // Helper: build VP + camPos for a named cam node on the player ship.
@@ -2858,7 +2870,7 @@ int main(int argc, char* argv[])
             glm::mat4 offOrion = glm::mat4(1.0f);
             {
                 auto& sc  = *spacecraft[playerIdx];
-                glm::vec3 rp = scene.origin().toRenderSpace(earthWorld + sc.position());
+                glm::vec3 rp = scene.origin().toRenderSpace(refBodyWorld + sc.position());
                 glm::mat3 ar = glm::mat3_cast(glm::fquat(sc.attitude()));
                 const glm::mat4 rf = glm::rotate(glm::mat4(1.0f),
                                                   glm::radians(90.0f),
@@ -2871,7 +2883,7 @@ int main(int argc, char* argv[])
             for (size_t ai = 0; ai < aiGltfs.size() && ai + 1 < spacecraft.size(); ++ai) {
                 if (!aiGltfs[ai]->isLoaded()) continue;
                 auto& sc  = *spacecraft[ai + 1];
-                glm::vec3 rp = scene.origin().toRenderSpace(earthWorld + sc.position());
+                glm::vec3 rp = scene.origin().toRenderSpace(refBodyWorld + sc.position());
                 glm::mat3 ar = glm::mat3_cast(glm::fquat(sc.attitude()));
                 offAi[ai] = glm::translate(glm::mat4(1.0f), rp)
                            * glm::mat4(ar)
@@ -2886,7 +2898,7 @@ int main(int argc, char* argv[])
                                   float slewYawDeg = 0.0f, float slewPitchDeg = 0.0f) {
                 if (!orionGltf.isLoaded() || nodeName.empty()) return;
                 auto& sc  = *spacecraft[playerIdx];
-                glm::vec3 rp = scene.origin().toRenderSpace(earthWorld + sc.position());
+                glm::vec3 rp = scene.origin().toRenderSpace(refBodyWorld + sc.position());
                 glm::mat3 ar = glm::mat3_cast(glm::fquat(sc.attitude()));
                 const glm::mat4 rf = glm::rotate(glm::mat4(1.0f),
                                                   glm::radians(90.0f),
@@ -3149,10 +3161,10 @@ int main(int argc, char* argv[])
             }
 
             // ---- Draw spacecraft ----
-            // Positions are in Earth-centred ECI (km); convert via earthWorld offset.
+            // Positions are observer-body-centred ECI (km); convert via refBodyWorld offset.
             {
                 glm::vec3 scSunDir = (sunIndex >= 0)
-                    ? glm::normalize(sunRenderPos - scene.origin().toRenderSpace(earthWorld))
+                    ? glm::normalize(sunRenderPos - scene.origin().toRenderSpace(refBodyWorld))
                     : glm::vec3(0.0f, 1.0f, 0.0f);
 
                 // Helper: draw a fallback emissive sphere for any spacecraft.
@@ -3170,7 +3182,7 @@ int main(int argc, char* argv[])
                 // ---- Orion (player) ----
                 {
                     auto& sc = *spacecraft[playerIdx];
-                    glm::dvec3 worldPos = earthWorld + sc.position();
+                    glm::dvec3 worldPos = refBodyWorld + sc.position();
                     glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
                     glm::mat3  attRot   = glm::mat3_cast(glm::fquat(sc.attitude()));
                     constexpr float kModelToKm = 1e-3f;
@@ -3200,7 +3212,7 @@ int main(int argc, char* argv[])
                 // ---- AI craft ----
                 for (size_t ai = 0; ai < aiGltfs.size() && ai + 1 < spacecraft.size(); ++ai) {
                     auto& sc = *spacecraft[ai + 1];
-                    glm::dvec3 worldPos = earthWorld + sc.position();
+                    glm::dvec3 worldPos = refBodyWorld + sc.position();
                     glm::vec3  rp       = scene.origin().toRenderSpace(worldPos);
                     glm::mat3  attRot   = glm::mat3_cast(glm::fquat(sc.attitude()));
                     constexpr float kScToKm = 1e-3f;
