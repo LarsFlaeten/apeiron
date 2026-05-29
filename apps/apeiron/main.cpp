@@ -428,22 +428,27 @@ int main(int argc, char* argv[])
             vehicleConfigs.push_back(std::move(vc));
         }
 
-        // Convenience aliases for the two primary vehicles.
+        // Convenience alias for the player vehicle.
         auto& playerVehicle = vehicleConfigs[playerVehicleIdx];
-        // First non-player vehicle (ISS or equivalent) — used for relative placement.
-        size_t aiVehicleIdx = (playerVehicleIdx == 0 && vehicleConfigs.size() > 1) ? 1 : 0;
-        auto& aiVehicle     = vehicleConfigs[aiVehicleIdx];
 
-        // ---- Non-player craft: propagate orbits to sim epoch ----
-        const size_t issIdx = 1;   // by convention first AI craft is index 1 in physics vector
-        bool hasAiCraft = (vehicleConfigs.size() > 1) && aiVehicle.hasOrbit;
+        // ---- Non-player craft: propagate all AI orbits to sim epoch ----
+        // issIdx = 1: first AI craft occupies physics slot 1 (ISS or equivalent).
+        // issR/V_init: first AI craft state, used for player co-elliptic placement.
+        const size_t issIdx = 1;
+        bool hasAiCraft = false;
         glm::dvec3 issR_init(0.0), issV_init(0.0);
-        if (hasAiCraft) {
-            astro::PosState st = spacecraft::vehicleStateAtEt(aiVehicle, et);
-            issR_init = glm::dvec3(st.r);
-            issV_init = glm::dvec3(st.v);
-            std::cout << "[Apeiron] " << aiVehicle.name << " initial position: "
-                      << issR_init.x << ", " << issR_init.y << ", " << issR_init.z << " km\n";
+        for (size_t vi = 0; vi < vehicleConfigs.size(); ++vi) {
+            if (vi == playerVehicleIdx) continue;
+            auto& vc = vehicleConfigs[vi];
+            if (!vc.hasOrbit) continue;
+            astro::PosState st = spacecraft::vehicleStateAtEt(vc, et);
+            std::cout << "[Apeiron] " << vc.name << " initial position: "
+                      << st.r.x << ", " << st.r.y << ", " << st.r.z << " km\n";
+            if (!hasAiCraft) {
+                issR_init = glm::dvec3(st.r);
+                issV_init = glm::dvec3(st.v);
+                hasAiCraft = true;
+            }
         }
 
         // ---- Player craft initial state ----
@@ -506,28 +511,33 @@ int main(int argc, char* argv[])
         // Index of the spacecraft the player controls / camera follows.
         const size_t playerIdx = 0;
 
-        // ---- AI craft: create physics object ----
-        if (vehicleConfigs.size() > 1 && aiVehicle.hasOrbit) {
-            glm::dvec3 T = glm::normalize(issV_init);
-            glm::dvec3 N = glm::normalize(glm::cross(issR_init, issV_init));
-            glm::dvec3 R = glm::cross(T, N);
-
-            astro::State issSt;
-            issSt.P.r = issR_init;
-            issSt.P.v = issV_init;
-            issSt.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
-            issSt.R.w = glm::dvec3(0.0);
-
-            const double issM = aiVehicle.massKg > 1.0f
-                ? static_cast<double>(aiVehicle.massKg) : 420000.0;
-            const glm::dmat3 issInertia = glm::length(aiVehicle.inertiaDiag) > 0.0
+        // ---- AI craft: create one physics object per non-player vehicle ----
+        // Appended in vehicleConfig order so aiGltfs[ai] == spacecraft[ai+1].
+        for (size_t vi = 0; vi < vehicleConfigs.size(); ++vi) {
+            if (vi == playerVehicleIdx) continue;
+            auto& vc = vehicleConfigs[vi];
+            astro::State st;
+            if (vc.hasOrbit) {
+                astro::PosState ps = spacecraft::vehicleStateAtEt(vc, et);
+                glm::dvec3 r = glm::dvec3(ps.r), v = glm::dvec3(ps.v);
+                glm::dvec3 T = glm::normalize(v);
+                glm::dvec3 N = glm::normalize(glm::cross(r, v));
+                glm::dvec3 R = glm::cross(T, N);
+                st.P.r = r;
+                st.P.v = v;
+                st.R.q = glm::quat_cast(glm::dmat3(T, -R, N));
+                st.R.w = glm::dvec3(0.0);
+            }
+            // Fallback mass/inertia: generic station-class values.
+            const double m = vc.massKg > 1.0f
+                ? static_cast<double>(vc.massKg) : 100000.0;
+            const glm::dmat3 inertia = glm::length(vc.inertiaDiag) > 0.0
                 ? glm::dmat3(
-                    glm::dvec3(aiVehicle.inertiaDiag.x, 0, 0),
-                    glm::dvec3(0, aiVehicle.inertiaDiag.y, 0),
-                    glm::dvec3(0, 0, aiVehicle.inertiaDiag.z))
-                : glm::dmat3(1.0e10);
-            spacecraft.push_back(std::make_unique<Spacecraft>(issM, issInertia, issSt));
-            // Attractors set per-frame.
+                    glm::dvec3(vc.inertiaDiag.x, 0, 0),
+                    glm::dvec3(0, vc.inertiaDiag.y, 0),
+                    glm::dvec3(0, 0, vc.inertiaDiag.z))
+                : glm::dmat3(1.0e9);
+            spacecraft.push_back(std::make_unique<Spacecraft>(m, inertia, st));
         }
 
         // MFD apps — updated and rendered every frame in Nav view.
@@ -2986,7 +2996,7 @@ int main(int argc, char* argv[])
                 if (orionGltf.isLoaded())
                     orionGltf.draw(renderer.currentCmd(), meshPipeline,
                                    offVP, offOrion, offSunDir, offCamPos);
-                for (size_t ai = 0; ai < aiGltfs.size(); ++ai)
+                for (size_t ai = 0; ai < aiGltfs.size() && ai + 1 < spacecraft.size(); ++ai)
                     if (aiGltfs[ai]->isLoaded())
                         aiGltfs[ai]->draw(renderer.currentCmd(), meshPipeline,
                                           offVP, offAi[ai], offSunDir, offCamPos);
@@ -3034,7 +3044,7 @@ int main(int argc, char* argv[])
                 if (orionGltf.isLoaded())
                     orionGltf.draw(renderer.currentCmd(), meshPipeline,
                                    dockVP, offOrion, offSunDir, dockCamPos);
-                for (size_t ai = 0; ai < aiGltfs.size(); ++ai)
+                for (size_t ai = 0; ai < aiGltfs.size() && ai + 1 < spacecraft.size(); ++ai)
                     if (aiGltfs[ai]->isLoaded())
                         aiGltfs[ai]->draw(renderer.currentCmd(), meshPipeline,
                                           dockVP, offAi[ai], offSunDir, dockCamPos);
