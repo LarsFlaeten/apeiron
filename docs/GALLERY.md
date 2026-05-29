@@ -14,6 +14,11 @@
 ![Orbital MFD at Mars](screenshots/mars_orbit2.png)
 *Orbital MFD showing stable circular orbit after capture*
 
+## Lunar — Gateway NRHO
+
+![Orion docked to Gateway](screenshots/Orion_gateway_moon_NRHO.png)
+*Orion hard-captured to Gateway in the Near Rectilinear Halo Orbit — Moon filling the background*
+
 ## Docking
 
 ![Docking approach to ISS](screenshots/DockingISS.png)
