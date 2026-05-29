@@ -1,7 +1,7 @@
 #pragma once
 
 #include "MFD.h"
-#include "Spacecraft.h"
+#include "apeiron/spacecraft/Spacecraft.h"
 #include "NavState.h"
 #include "DockingConstraint.h"
 #include "apeiron/render/GltfModel.h"

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "NavState.h"
-#include "Spacecraft.h"
+#include "apeiron/spacecraft/Spacecraft.h"
 #include "apeiron/render/GltfModel.h"
 
 #include <apeiron/render/Camera.h>

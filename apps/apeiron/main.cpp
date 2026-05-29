@@ -32,7 +32,8 @@
 #include "astro/Time.h"
 #include "astro/SpiceCore.h"
 #include "ScenarioConfig.h"
-#include "Spacecraft.h"
+#include "apeiron/spacecraft/PhysicsWorld.h"
+#include "apeiron/spacecraft/Spacecraft.h"
 #include "MFD.h"
 #include "NavMode.h"
 #include "NavConsole.h"
@@ -313,21 +314,11 @@ int main(int argc, char* argv[])
         // Coordinate system: Earth-centred ECLIPJ2000 (km, km/s).
         // =================================================================
 
-        // Earth's GM (km³/s²) — kept as a named constant for any Earth-specific calculations.
+        // Earth's GM (km³/s²) — kept for any Earth-specific calculations.
         constexpr double kGM_Earth = 398600.4418;
 
-        // Gravity bodies: all scenario bodies that have a GM in SPICE.
-        // Positions are updated from SPICE each frame; attractors are rebuilt then.
-        struct GravBody {
-            std::string name;
-            SpiceInt    naifId;
-            double      gm;        // km³/s²
-            double      radiusKm;  // equatorial radius (from scenario radii_naif)
-            double      soiKm;     // Hill-sphere radius (approx), km
-            glm::dvec3  posECI;    // geocentric ECLIPJ2000, km  (updated each frame)
-            glm::dvec3  prevPosECI;// posECI from the previous frame (for SOI check)
-        };
-        std::vector<GravBody> gravBodies;
+        // Build gravity body specs from scenario bodies that have a GM in SPICE.
+        std::vector<spacecraft::PhysicsWorld::BodySpec> gravBodySpecs;
         {
             for (auto& bi : bodyInfos) {
                 const std::string& name = bi.node->naifName();
@@ -337,52 +328,16 @@ int main(int argc, char* argv[])
                 double gm = 0.0;
                 try {
                     astro::Spice().getPlanetaryConstants(id, "GM", gm);
-                } catch (const astro::SpiceException&) {
-                    continue;  // body has no GM in the loaded kernels — skip
-                }
+                } catch (const astro::SpiceException&) { continue; }
                 if (gm <= 0.0) continue;
-                // Radius comes from bodyInfos which already applied radii_naif,
-                // so JUPITER BARYCENTER correctly carries Jupiter's physical radius.
-                gravBodies.push_back({ name, id, gm,
-                                       static_cast<double>(bi.radiusKm),
-                                       0.0, glm::dvec3(0.0), glm::dvec3(0.0) });
+                gravBodySpecs.push_back({ name, id, gm,
+                                          static_cast<double>(bi.radiusKm) });
             }
         }
-        // Compute Hill-sphere (SOI) radii for all non-Sun bodies.
-        // r_SOI = a * (GM_body / GM_sun)^(2/5)
-        // where a is approximated as the body's current heliocentric distance
-        // (we call SPICE once here at startup; good enough for static SOI radii).
-        {
-            double gmSun = 0.0;
-            for (const auto& gb : gravBodies)
-                if (gb.name == "SUN") { gmSun = gb.gm; break; }
-            if (gmSun > 0.0) {
-                static const astro::ReferenceFrame kEclip =
-                    astro::ReferenceFrame::createEclipJ2000();
-                const astro::EphemerisTime t0(0.0);  // J2000 epoch — good enough for SOI
-                for (auto& gb : gravBodies) {
-                    if (gb.name == "SUN" || gb.name == "EARTH") continue;
-                    try {
-                        astro::PosState s;
-                        astro::Spice().getRelativeGeometricState(
-                            static_cast<int>(gb.naifId), 10, t0, s, kEclip);
-                        double a = std::sqrt(s.r.x*s.r.x + s.r.y*s.r.y + s.r.z*s.r.z);
-                        gb.soiKm = a * std::pow(gb.gm / gmSun, 2.0 / 5.0);
-                    } catch (const astro::SpiceException&) {}
-                }
-                // Earth SOI (~924 000 km) — hard-code since Earth is always at ECI origin.
-                for (auto& gb : gravBodies) {
-                    if (gb.name != "EARTH") continue;
-                    try {
-                        astro::PosState s;
-                        astro::Spice().getRelativeGeometricState(399, 10, t0, s, kEclip);
-                        double a = std::sqrt(s.r.x*s.r.x + s.r.y*s.r.y + s.r.z*s.r.z);
-                        gb.soiKm = a * std::pow(gb.gm / gmSun, 2.0 / 5.0);
-                    } catch (const astro::SpiceException&) {}
-                    break;
-                }
-            }
-        }
+        spacecraft::SpiceEphemeris spiceEph;
+        spacecraft::PhysicsWorld physicsWorld(std::move(gravBodySpecs),
+                                              cfg.observerBody, spiceEph);
+        const auto& gravBodies = physicsWorld.gravBodies();
         // Bodies available for transfer planning — planets and barycenters only,
         // excluding the Sun.  Built once from bodyInfos; handed to MFDContext.
         // Filter: barycenters 1-9, or planet centres x99 (199-899).
@@ -576,18 +531,10 @@ int main(int argc, char* argv[])
                                    {"J2000",      eclToJ2000}});
         }
 
-        // Reference body for the OrbitalMFD — updated when the user types a new NAIF name.
-        struct RefBody {
-            std::string name;
-            double      mu;        // km³/s²
-            double      radiusKm;  // equatorial
-            SpiceInt    naifId;    // NAIF body id
-        };
-        // Initialise from the scenario observer body; fall back to Earth constants.
-        RefBody refBody{ cfg.observerBody, observerBodyGm,
-                         static_cast<double>(observerBodyRadius), 399 };
-        for (const auto& gb : gravBodies)
-            if (gb.name == cfg.observerBody) { refBody.naifId = gb.naifId; break; }
+        // Local copy of the active reference body — kept in sync with physicsWorld.
+        // Type alias for readability.
+        using RefBody = spacecraft::PhysicsWorld::RefBody;
+        RefBody refBody = physicsWorld.refBody();
 
         // Thruster parameters — adjustable from the Dev view.
         // Initialise from manifest if loaded, so the slider shows the real value.
@@ -610,9 +557,8 @@ int main(int argc, char* argv[])
         // across many thrusters → ~14 % each).  Default 5× → ~70 % allocation.
         double dockingTransBoost =      5.0;
 
-        // Physics fixed-step accumulator (100 Hz simulation).
-        constexpr double kPhysStep   = 0.01;  // seconds
-        double           physAccum   = 0.0;
+        // Physics step constants live in PhysicsWorld.
+        constexpr double kPhysStep = spacecraft::PhysicsWorld::kPhysStep;
 
         // =================================================================
         // GPU stack — destruction order is reverse of declaration order:
@@ -1346,93 +1292,15 @@ int main(int argc, char* argv[])
             auto currentEt = et + astro::TimeDelta(simElapsed);
 
             // ---- Per-frame gravity update ----------------------------------------
-            // Fetch geocentric positions of all gravity bodies from SPICE and rebuild
-            // attractors on every spacecraft.  Also determine the dominant body
-            // (highest GM/r² at the player position) for OrbitalMFD and autopilot.
             {
-                const double etVal = currentEt.getETValue();
-                auto& player = *spacecraft[playerIdx];
-
-                // Fetch positions: Earth is always at origin of our ECI frame.
-                // Other bodies: query geocentric state from SPICE in ECLIPJ2000 —
-                // the spacecraft integrator runs in ECLIPJ2000 (vehicleStateAtEt
-                // rotates J2000 equatorial → ECLIPJ2000), so attractor positions
-                // must be in the same frame.
-                static const astro::ReferenceFrame kEclipJ2000 =
-                    astro::ReferenceFrame::createEclipJ2000();
-                for (auto& gb : gravBodies) {
-                    // Save last frame's position before overwriting — used by the
-                    // SOI check below.  player.position() is from the previous
-                    // frame's end, so prevPosECI gives a consistent comparison
-                    // and prevents false SOI exits at high warp when a body's
-                    // ECI position shifts by hundreds of thousands of km per frame.
-                    gb.prevPosECI = gb.posECI;
-                    if (gb.name == "EARTH") {
-                        gb.posECI = glm::dvec3(0.0);
-                    } else {
-                        astro::PosState s;
-                        astro::Spice().getRelativeGeometricState(
-                            static_cast<int>(gb.naifId), 399,
-                            currentEt, s, kEclipJ2000);
-                        gb.posECI = glm::dvec3(s.r.x, s.r.y, s.r.z);
-                    }
-                }
-
-                // Dominant body: the body whose SOI the player is currently inside.
-                // Use prevPosECI (body position from LAST frame's end) rather than
-                // posECI (this frame's end), because player.position() is also the
-                // previous frame's end state.  At 1,000,000× a body moves ~400,000 km
-                // per frame; comparing against the current-frame position creates a
-                // spurious distance spike that can falsely trigger a SOI exit.
-                {
-                    glm::dvec3 playerPos = player.position();
-                    std::string bestName = "SUN";
-                    double      bestSoi  = 1e18;  // pick smallest SOI if nested
-                    for (const auto& gb : gravBodies) {
-                        if (gb.name == "SUN" || gb.soiKm <= 0.0) continue;
-                        glm::dvec3 rel = gb.prevPosECI - playerPos;
-                        double r = glm::length(rel);
-                        if (r < gb.soiKm && gb.soiKm < bestSoi) {
-                            bestSoi  = gb.soiKm;
-                            bestName = gb.name;
-                        }
-                    }
-
-                    if (bestName != dominantBodyName) {
-                        dominantBodyName = bestName;
-
-                        // Update OrbitalMFD reference body.
-                        // GM is already in gravBodies; fetch radius via astro helper.
-                        for (const auto& gb : gravBodies) {
-                            if (gb.name != dominantBodyName) continue;
-                            std::string upperName = dominantBodyName;
-                            for (auto& c : upperName) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                            refBody = { upperName, gb.gm, gb.radiusKm,
-                                        static_cast<SpiceInt>(gb.naifId) };
-                            orbitalMFD.setContext(refBody.name.c_str(), "");
-                            break;
-                        }
-                    }
-                }
-
-                // Rebuild attractors on all spacecraft.
-                // The integrator always runs in Earth-centred ECI, so the tidal
-                // (indirect) correction must always cancel Earth's acceleration
-                // toward each body — i.e. tidalRefPos is always (0,0,0) (Earth).
-                // The dominant-body tracking above is for display/autopilot only
-                // and must NOT influence the physics tidal reference.
-                {
-                    for (auto& sc : spacecraft) {
-                        sc->clearAttractors();
-                        for (const auto& gb : gravBodies) {
-                            astro::Attractor att;
-                            att.p           = gb.posECI;
-                            att.GM          = gb.gm;
-                            att.tidal       = (gb.name != "EARTH");
-                            att.tidalRefPos = glm::dvec3(0.0);  // always Earth = ECI origin
-                            sc->addAttractor(att);
-                        }
-                    }
+                std::vector<Spacecraft*> scPtrs;
+                for (auto& s : spacecraft) scPtrs.push_back(s.get());
+                auto soiEvt = physicsWorld.updateGravity(
+                    scPtrs, spacecraft[playerIdx]->position(), currentEt);
+                if (soiEvt.changed) {
+                    refBody = soiEvt.newRefBody;
+                    dominantBodyName = refBody.name;
+                    orbitalMFD.setContext(refBody.name.c_str(), "");
                 }
             }
             // -----------------------------------------------------------------------
@@ -1751,161 +1619,14 @@ int main(int argc, char* argv[])
             }
 
             // ---- Fixed-step spacecraft physics (simulation time) ----
-            // Accumulator runs in sim-seconds so the orbit scales with time acceleration.
-            // Step size grows at high time accel to keep steps/frame ≤ kMaxStepsPerFrame.
-            // No render interpolation: from a first-person bow camera at orbital altitude
-            // one physics step (< 100 m) subtends < 0.001° — completely invisible.
-            //
-            // Attractor position freshness: the outer SPICE query runs once per frame
-            // at currentEt (end-of-frame) which is fine for distant bodies (Sun,
-            // Earth, etc.) — a 1600 s step moves them < 0.03 % of their ECI distance.
-            // But for a close-orbit dominant body (e.g. Mars at 5 000 km), a 16 s
-            // sub-step moves the planet ~400 km — nearly 8 % of the orbit radius —
-            // which makes the gravity direction badly wrong.  Fix: re-query the
-            // dominant non-Earth body's position at each sub-step's midpoint and
-            // rebuild all attractors before the integration step.
             {
-                constexpr int kMaxStepsPerFrame = 100;
-                const double  simDt = static_cast<double>(frameDt) * simSecondsPerRealSecond;
-                const double  step  = std::max(kPhysStep, simDt / kMaxStepsPerFrame);
-
-                {
-                    static const astro::ReferenceFrame kEclipPhys =
-                        astro::ReferenceFrame::createEclipJ2000();
-
-                    // ---- Body-centric integration frame --------------------------------
-                    // When orbiting a non-Earth, non-Sun body (e.g. Mars), the ECI
-                    // sub-stepper accumulates energy errors because the dominant body
-                    // moves hundreds of km in ECI during a single step and its position
-                    // is frozen at the sub-step midpoint.  Earth orbit is exact because
-                    // Earth is always at the ECI origin.
-                    //
-                    // Fix: shift all spacecraft to the dominant-body-centric frame before
-                    // integration.  The dominant attractor is at (0,0,0) every sub-step —
-                    // no frozen-position error.  Tidal forces from distant bodies (Sun,
-                    // Moon) are computed correctly via att.tidal=true with tidalRefPos at
-                    // the body-frame origin.  After all sub-steps we shift back to ECI
-                    // using the dominant body's end-of-frame ECI position.
-                    bool useBodyFrame =
-                        (dominantBodyName != "SUN" && dominantBodyName != "EARTH");
-
-                    glm::dvec3 frameR0(0.0), frameV0(0.0);  // dominant body ECI at frame start
-                    glm::dvec3 frameR1(0.0), frameV1(0.0);  // dominant body ECI at frame end
-
-                    if (useBodyFrame) {
-                        const double etStartVal = currentEt.getETValue() - simDt;
-                        bool frameOk = false;
-                        for (const auto& gb : gravBodies) {
-                            if (gb.name != dominantBodyName) continue;
-                            try {
-                                astro::PosState s0, s1;
-                                astro::Spice().getRelativeGeometricState(
-                                    static_cast<int>(gb.naifId), 399,
-                                    astro::EphemerisTime(etStartVal), s0, kEclipPhys);
-                                astro::Spice().getRelativeGeometricState(
-                                    static_cast<int>(gb.naifId), 399,
-                                    currentEt, s1, kEclipPhys);
-                                frameR0  = glm::dvec3(s0.r.x, s0.r.y, s0.r.z);
-                                frameV0  = glm::dvec3(s0.v.x, s0.v.y, s0.v.z);
-                                frameR1  = glm::dvec3(s1.r.x, s1.r.y, s1.r.z);
-                                frameV1  = glm::dvec3(s1.v.x, s1.v.y, s1.v.z);
-                                frameOk  = true;
-                            } catch (...) {}
-                            break;
-                        }
-                        if (!frameOk) useBodyFrame = false;  // fall back to ECI on SPICE failure
-                    }
-
-                    // Transform free (non-docked) spacecraft to body-centric frame.
-                    if (useBodyFrame) {
-                        for (auto& sc : spacecraft) {
-                            if (sc->parentId()) continue;
-                            sc->setPosition(sc->position() - frameR0);
-                            sc->setVelocity(sc->velocity() - frameV0);
-                        }
-                    }
-
-                    // Helper: rebuild attractors.  When useBodyFrame=true the dominant
-                    // body sits at (0,0,0); perturbers get tidal=true so the integrator
-                    // subtracts their net acceleration on the dominant body, leaving only
-                    // the differential tidal force — correct for a body-centric frame.
-                    auto rebuildAttractors = [&](bool bodyFrame) {
-                        for (auto& sc : spacecraft) {
-                            sc->clearAttractors();
-                            for (const auto& gb : gravBodies) {
-                                astro::Attractor att;
-                                att.GM = gb.gm;
-                                if (bodyFrame) {
-                                    // Dominant body is pinned to the frame origin.
-                                    // gb.posECI is at currentEt (end of frame) but
-                                    // frameR0 is at frame start — using posECI-frameR0
-                                    // would place Mars ~400 km off-centre at 1000× warp.
-                                    const bool isDominant = (gb.name == dominantBodyName);
-                                    att.p           = isDominant ? glm::dvec3(0.0)
-                                                                 : gb.posECI - frameR0;
-                                    att.tidal       = !isDominant;
-                                    att.tidalRefPos = glm::dvec3(0.0);
-                                } else {
-                                    att.p           = gb.posECI;
-                                    att.tidal       = (gb.name != "EARTH");
-                                    att.tidalRefPos = glm::dvec3(0.0);
-                                }
-                                sc->addAttractor(att);
-                            }
-                        }
-                    };
-
-                    rebuildAttractors(useBodyFrame);
-
-                    // In body-centric mode the old per-sub-step SPICE queries are gone,
-                    // so sub-step count is no longer SPICE-bound.  Enforce a minimum of
-                    // kMinOrbitSteps sub-steps per Keplerian orbit to keep RKF78 energy
-                    // conservation tight at any warp factor.
-                    double physStep = step;
-                    if (useBodyFrame && refBody.mu > 0.0) {
-                        // spacecraft[playerIdx] has already been shifted to the
-                        // body-centric frame, so its position() IS the body-centric
-                        // radius — do NOT subtract frameR0 again.
-                        const double r0 = glm::length(spacecraft[playerIdx]->position());
-                        if (r0 > 1.0) {
-                            constexpr double kMinOrbitSteps = 100.0;
-                            const double T = 2.0 * M_PI
-                                           * std::sqrt(r0 * r0 * r0 / refBody.mu);
-                            physStep = std::min(physStep, T / kMinOrbitSteps);
-                            physStep = std::max(physStep, kPhysStep);
-                        }
-                    }
-
-                    physAccum += simDt;
-                    while (physAccum >= physStep) {
-                        // Pre-step: apply spring-damper forces before integration.
-                        dockingConstraint.update(physStep);
-                        for (auto& sc : spacecraft)
-                            if (!sc->parentId())
-                                sc->update(physStep, currentEt);
-                        // Post-step: enforce rigid lock AFTER parent has integrated so
-                        // docked child tracks parent's new position.
-                        dockingConstraint.enforcePostStep();
-                        physAccum -= physStep;
-                    }
-
-                    if (useBodyFrame) {
-                        // Transform all spacecraft (parents and docked children) back to ECI
-                        // using the dominant body's end-of-frame position.
-                        for (auto& sc : spacecraft) {
-                            sc->setPosition(sc->position() + frameR1);
-                            sc->setVelocity(sc->velocity() + frameV1);
-                        }
-                        // Update dominant body posECI to end-of-frame value so orbit
-                        // display and next-frame SOI detection use a consistent position.
-                        for (auto& gb : gravBodies) {
-                            if (gb.name != dominantBodyName) continue;
-                            gb.posECI = frameR1;
-                            break;
-                        }
-                        rebuildAttractors(false);  // restore ECI attractors
-                    }
-                }
+                const double simDt = static_cast<double>(frameDt) * simSecondsPerRealSecond;
+                std::vector<Spacecraft*> scPtrs;
+                for (auto& s : spacecraft) scPtrs.push_back(s.get());
+                physicsWorld.integrate(
+                    simDt, currentEt, scPtrs,
+                    [&](double dt) { dockingConstraint.update(dt); },
+                    [&](double)    { dockingConstraint.enforcePostStep(); });
             }
 
             observerPos = observer.worldPosition(currentEt);
@@ -2442,14 +2163,10 @@ int main(int argc, char* argv[])
                         // Restore the saved reference body so the OrbitalMFD shows
                         // the same body the user had selected at save time.
                         if (!sd.refBodyName.empty()) {
-                            for (const auto& gb : gravBodies) {
-                                if (gb.name != sd.refBodyName) continue;
-                                refBody = { sd.refBodyName, gb.gm, gb.radiusKm,
-                                            static_cast<SpiceInt>(gb.naifId) };
-                                dominantBodyName = sd.refBodyName;
-                                orbitalMFD.setContext(refBody.name.c_str(), "");
-                                break;
-                            }
+                            physicsWorld.setDominantBody(sd.refBodyName);
+                            refBody = physicsWorld.refBody();
+                            dominantBodyName = refBody.name;
+                            orbitalMFD.setContext(refBody.name.c_str(), "");
                         }
                         scenarioStatusMsg = "Loaded.";
                     } else {
@@ -2552,12 +2269,10 @@ int main(int argc, char* argv[])
                     if (!pending.empty()) {
                         for (auto& c : pending)
                             c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                        for (const auto& gb : gravBodies) {
-                            if (gb.name != pending) continue;
-                            refBody = { pending, gb.gm, gb.radiusKm,
-                                        static_cast<SpiceInt>(gb.naifId) };
+                        if (physicsWorld.findBody(pending)) {
+                            physicsWorld.setDominantBody(pending);
+                            refBody = physicsWorld.refBody();
                             orbitalMFD.setContext(refBody.name.c_str(), "");
-                            break;
                         }
                     }
                 }

@@ -1,4 +1,4 @@
-#include "Spacecraft.h"
+#include "apeiron/spacecraft/Spacecraft.h"
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -25,6 +25,11 @@ void Spacecraft::addAttractor(const astro::Attractor& a)
 void Spacecraft::clearAttractors()
 {
     m_ode.clearAttractors();
+}
+
+const std::vector<astro::Attractor>& Spacecraft::attractors() const
+{
+    return m_ode.getAttractors();
 }
 
 void Spacecraft::setBodyForce(const glm::dvec3& forceN)

@@ -41,6 +41,19 @@ if(Catch2_FOUND)
 
     catch_discover_tests(spacecraft_tests)
 
+    # ---- PhysicsWorld unit tests (no SPICE kernels required) ----
+    add_executable(physics_world_tests
+        test_physics_world.cpp
+    )
+
+    target_link_libraries(physics_world_tests
+        PRIVATE
+            Catch2::Catch2WithMain
+            spacecraft
+    )
+
+    catch_discover_tests(physics_world_tests)
+
 else()
     message(STATUS "Catch2 not found — skipping tests. Install via vcpkg to enable.")
 endif()

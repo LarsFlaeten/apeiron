@@ -32,7 +32,6 @@ find_package(PkgConfig QUIET)
 add_executable(apeiron
     main.cpp
     ScenarioConfig.cpp
-    Spacecraft.cpp
     DockingConstraint.cpp
     MFD.cpp
     MFDMenu.cpp

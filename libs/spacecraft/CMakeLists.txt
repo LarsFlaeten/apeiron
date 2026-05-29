@@ -1,4 +1,6 @@
 add_library(spacecraft STATIC
+    src/Spacecraft.cpp
+    src/PhysicsWorld.cpp
     src/SpacecraftModel.cpp
     src/ManifestLoader.cpp
     src/VehicleConfig.cpp
@@ -21,9 +23,9 @@ find_package(glm CONFIG REQUIRED)
 target_link_libraries(spacecraft
     PUBLIC
         glm::glm
+        astro
     PRIVATE
         tomlplusplus::tomlplusplus
-        astro
 )
 
 target_compile_features(spacecraft PUBLIC cxx_std_23)

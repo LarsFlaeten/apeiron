@@ -10,6 +10,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <optional>
 #include <cstddef>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // Spacecraft
@@ -37,9 +38,10 @@ public:
                const glm::dmat3& inertiaKgM2,
                const astro::State& initialState);
 
-    // Add / clear gravitational attractors (position in km, GM in km³/s²).
+    // Add / clear / inspect gravitational attractors (position in km, GM in km³/s²).
     void addAttractor(const astro::Attractor& a);
     void clearAttractors();
+    const std::vector<astro::Attractor>& attractors() const;
 
     // Set instantaneous applied force/torque (body frame, SI units).
     // Call once per frame before the physics sub-step loop.  Both default to zero.

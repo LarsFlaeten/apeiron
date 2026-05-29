@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Spacecraft.h"
+#include "apeiron/spacecraft/Spacecraft.h"
 #include "TransferMFD.h"
 
 #include <glm/glm.hpp>
