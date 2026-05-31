@@ -281,6 +281,7 @@ void NavHUD::render(const Spacecraft&                              ship,
 
         // ---- Target box with distance label ----
         // When a specific docking port is selected, aim at the port instead of CoM.
+        // Port data is also used by the corridor below; compute once and reuse.
         {
             glm::vec3 tgtRp;
             double    distM;
@@ -291,7 +292,6 @@ void NavHUD::render(const Spacecraft&                              ship,
                 const auto& ports = scPorts[static_cast<size_t>(nav.dockTgtIdx)];
                 if (nav.dockPortIdx < static_cast<int>(ports.size())) {
                     const auto& port = ports[nav.dockPortIdx];
-                    // Port world pos = tgt render pos + tgt attitude * port offset (m→km)
                     glm::vec3 tgtCoMRp = scene.origin().toRenderSpace(earthWorld + tgt.position());
                     glm::mat3 tgtRot   = glm::mat3_cast(glm::fquat(tgt.attitude()));
                     tgtRp = tgtCoMRp + tgtRot * (port.posM * 1e-3f);
@@ -330,6 +330,83 @@ void NavHUD::render(const Spacecraft&                              ship,
                         edge.pos.y + edge.dir.y * 14.0f - 6.0f
                     };
                     dl->AddText(textPos, kCyan, buf);
+                }
+            }
+        }
+
+        // ---- Docking corridor ----
+        // Shown when a specific port is selected. Five square gates at 100, 60, 30, 10, 3 m
+        // along the port's outward approach axis, connected by faint tunnel lines.
+        // Color reflects lateral offset from the approach axis: green / amber / red.
+        if (nav.dockPortIdx >= 0 &&
+            nav.dockTgtIdx < static_cast<int>(scPorts.size())) {
+            const auto& cports = scPorts[static_cast<size_t>(nav.dockTgtIdx)];
+            if (nav.dockPortIdx < static_cast<int>(cports.size())) {
+                const auto& cp = cports[static_cast<size_t>(nav.dockPortIdx)];
+
+                // Port position and axes in float render space (km).
+                glm::vec3 coMRp  = scene.origin().toRenderSpace(earthWorld + tgt.position());
+                glm::mat3 rotF   = glm::mat3_cast(glm::fquat(tgt.attitude()));
+                glm::vec3 portRp = coMRp + rotF * (cp.posM * 1e-3f);
+                glm::vec3 axX    = glm::normalize(rotF * cp.axisX);   // outward approach
+                glm::vec3 axZraw = glm::normalize(rotF * cp.axisZ);
+                glm::vec3 axY    = glm::normalize(glm::cross(axZraw, axX));
+                glm::vec3 axZ    = glm::normalize(glm::cross(axX, axY));
+
+                // Lateral offset of ship from approach axis (double precision).
+                glm::dmat3 rotD   = glm::mat3_cast(tgt.attitude());
+                glm::dvec3 portKm = tgt.position() + rotD * glm::dvec3(cp.posM) * 1e-3;
+                glm::dvec3 axXd   = glm::dvec3(axX);
+                glm::dvec3 sepD   = ship.position() - portKm;
+                glm::dvec3 latVec = sepD - glm::dot(sepD, axXd) * axXd;
+                double lateralM   = glm::length(latVec) * 1000.0;
+
+                // Color: green = on-axis (<1 m lateral), amber = near-axis (<3 m), red = off-axis.
+                const ImU32 colGate   = (lateralM < 1.0) ? IM_COL32(  0, 220,  80, 210)
+                                      : (lateralM < 3.0) ? IM_COL32(220, 180,   0, 210)
+                                      :                    IM_COL32(220,  60,   0, 210);
+                const ImU32 colTunnel = (lateralM < 1.0) ? IM_COL32(  0, 220,  80,  80)
+                                      : (lateralM < 3.0) ? IM_COL32(220, 180,   0,  80)
+                                      :                    IM_COL32(220,  60,   0,  80);
+
+                // Gate distances from port (m); half-width 3 m → km for render space.
+                static constexpr float kDists[] = { 100.0f, 60.0f, 30.0f, 10.0f, 3.0f };
+                static constexpr int   kNG      = 5;
+                static constexpr float kHWkm    = 3.0f * 1e-3f;
+
+                // Project all four corners of each gate.
+                struct Gate { ImVec2 c[4]; float w[4]; } gates[kNG];
+                for (int gi = 0; gi < kNG; ++gi) {
+                    glm::vec3 ctr = portRp + axX * (kDists[gi] * 1e-3f);
+                    glm::vec3 ws[4] = {
+                        ctr + axY * kHWkm + axZ * kHWkm,
+                        ctr - axY * kHWkm + axZ * kHWkm,
+                        ctr - axY * kHWkm - axZ * kHWkm,
+                        ctr + axY * kHWkm - axZ * kHWkm,
+                    };
+                    for (int ci = 0; ci < 4; ++ci) {
+                        auto p = project(vp, ws[ci], W, H);
+                        gates[gi].c[ci] = {p.sx, p.sy};
+                        gates[gi].w[ci] = p.w;
+                    }
+                }
+
+                // Tunnel lines: connect corresponding corners of adjacent gates.
+                for (int gi = 0; gi < kNG - 1; ++gi)
+                    for (int ci = 0; ci < 4; ++ci)
+                        if (gates[gi].w[ci] > 0.0f && gates[gi + 1].w[ci] > 0.0f)
+                            dl->AddLine(gates[gi].c[ci], gates[gi + 1].c[ci],
+                                        colTunnel, 1.0f);
+
+                // Gate squares (innermost gate slightly thicker).
+                for (int gi = 0; gi < kNG; ++gi) {
+                    if (gates[gi].w[0] <= 0.0f || gates[gi].w[1] <= 0.0f ||
+                        gates[gi].w[2] <= 0.0f || gates[gi].w[3] <= 0.0f)
+                        continue;
+                    float thick = (gi == kNG - 1) ? 2.5f : 1.5f;
+                    for (int ci = 0; ci < 4; ++ci)
+                        dl->AddLine(gates[gi].c[ci], gates[gi].c[(ci + 1) % 4],
+                                    colGate, thick);
                 }
             }
         }
