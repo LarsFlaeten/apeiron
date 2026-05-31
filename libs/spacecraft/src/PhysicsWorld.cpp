@@ -69,11 +69,19 @@ PhysicsWorld::PhysicsWorld(std::vector<BodySpec> bodySpecs,
         } catch (...) {}
     }
 
-    // Earth SOI from Sun — used to classify natural satellites vs planets.
+    // Earth SOI from Sun — used both to give Earth a finite SOI and to classify
+    // natural satellites (inside Earth SOI) vs planets (outside Earth SOI).
     const double sunEarthDist = glm::length(sunEarthPos);
     const double earthSoiKm = (gmSun > 0.0 && gmEarth > 0.0 && sunEarthDist > 0.0)
         ? sunEarthDist * std::pow(gmEarth / gmSun, 2.0 / 5.0)
         : 0.0;
+
+    // Assign Earth's SOI so ships in Earth orbit are correctly detected as
+    // dominant-body = EARTH rather than defaulting to SUN.
+    if (earthSoiKm > 0.0) {
+        for (auto& gb : m_bodies)
+            if (gb.name == "EARTH") { gb.soiKm = earthSoiKm; break; }
+    }
 
     if (gmSun > 0.0) {
         for (auto& gb : m_bodies) {
@@ -82,6 +90,10 @@ PhysicsWorld::PhysicsWorld(std::vector<BodySpec> bodySpecs,
                 astro::PosState s = m_eph.getState(gb.naifId, t0);
                 const glm::dvec3 bodyEarthPos = glm::dvec3(s.r.x, s.r.y, s.r.z);
                 const double distFromEarth    = glm::length(bodyEarthPos);
+
+                // Seed posECI / prevPosECI so the very first updateGravity call
+                // uses real body positions rather than the zero-initialized default.
+                gb.posECI = gb.prevPosECI = bodyEarthPos;
 
                 double a, parentGm;
                 if (earthSoiKm > 0.0 && distFromEarth < earthSoiKm) {
