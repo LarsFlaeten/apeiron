@@ -73,15 +73,18 @@ TEST_CASE("PhysicsWorld SOI radii match Hill-sphere formula", "[physics_world]")
     FakeEphemeris eph;
     spacecraft::PhysicsWorld pw(makeSpecs(), "EARTH", eph);
 
-    // EARTH: getState(399) always returns zero (Earth IS the ECI origin), so
-    // PhysicsWorld cannot compute Earth's SOI via IEphemeris — soiKm stays 0.
+    // EARTH SOI: derived from Sun position (FakeEphemeris returns Sun at 149597870.7 km).
+    // r_SOI_earth = a_earth_sun * (GM_earth / GM_sun)^(2/5)
+    const double aEarthSun    = 149597870.7;
+    const double earthSoiCalc = aEarthSun * std::pow(kGmEarth / kGmSun, 2.0 / 5.0);
     auto* earth = pw.findBody("EARTH");
     REQUIRE(earth != nullptr);
-    CHECK(earth->soiKm == 0.0);
+    CHECK_THAT(earth->soiKm, Catch::Matchers::WithinRel(earthSoiCalc, 1e-6));
 
-    // Moon SOI: a_moon = 384400 km (from FakeEphemeris at t=0)
+    // Moon SOI: a_moon = 384400 km from Earth; Moon orbits Earth so parent is Earth.
+    // r_SOI = a * (GM_moon / GM_earth)^(2/5)
     const double aMoon   = 384400.0;
-    const double soiCalc = aMoon * std::pow(kGmMoon / kGmSun, 2.0 / 5.0);
+    const double soiCalc = aMoon * std::pow(kGmMoon / kGmEarth, 2.0 / 5.0);
     auto* moon = pw.findBody("MOON");
     REQUIRE(moon != nullptr);
     CHECK_THAT(moon->soiKm, Catch::Matchers::WithinRel(soiCalc, 1e-6));
@@ -107,16 +110,20 @@ TEST_CASE("PhysicsWorld SOI transition fires once and latches", "[physics_world]
     FakeEphemeris eph;
     spacecraft::PhysicsWorld pw(makeSpecs(), "EARTH", eph);
 
-    // Place player inside Moon SOI (~66167 km from Earth)
-    // Moon is initially at (384400, 0, 0). Use a position inside moon's SOI.
+    // Moon is at (384400, 0, 0) in FakeEphemeris.
+    // Moon SOI ≈ 66183 km (Earth-parent formula).
+    // posECI is seeded from the ephemeris at construction so the very first
+    // updateGravity call already uses the real Moon position.
     auto* moon = pw.findBody("MOON");
     REQUIRE(moon != nullptr);
 
-    // Run one updateGravity so Moon posECI is populated.
+    // Run one updateGravity with player at Earth centre — well outside Moon SOI.
+    // Should NOT trigger a transition.
     const astro::EphemerisTime t0(0.0);
     auto evt0 = pw.updateGravity({}, glm::dvec3(0.0), t0);
+    CHECK(evt0.changed == false);
 
-    // Place player at Moon position (inside Moon SOI)
+    // Place player at Moon position (distance 0 from Moon → inside Moon SOI).
     glm::dvec3 moonPos(384400.0, 0.0, 0.0);
 
     auto evt1 = pw.updateGravity({}, moonPos, t0);
