@@ -45,6 +45,7 @@
 #include "OffscreenCam.h"
 #include "CamMFD.h"
 #include "TransferMFD.h"
+#include "CislunarMFD.h"
 #include "MapMFD.h"
 #include "SimSave.h"
 #include "MFDMenu.h"
@@ -1167,6 +1168,8 @@ int main(int argc, char* argv[])
         TransferMFD transferMFD;
         transferMFD.setEpoch(et);
 
+        CislunarMFD cislunarMFD;
+
         MapMFD mapMFD;
         OBCMFD obcMFD;
 
@@ -1174,8 +1177,9 @@ int main(int argc, char* argv[])
         mfdMenu.addApp(&orbitalMFD,  "ORB");
         mfdMenu.addApp(&dockingMFD,  "DOCK");
         mfdMenu.addApp(&camMFD,      "CAM");
-        mfdMenu.addApp(&transferMFD, "XFER");
-        mfdMenu.addApp(&mapMFD,      "MAP");
+        mfdMenu.addApp(&transferMFD,  "XFER");
+        mfdMenu.addApp(&cislunarMFD,  "LUNAR");
+        mfdMenu.addApp(&mapMFD,       "MAP");
         mfdMenu.addApp(&obcMFD,      "OBC");
 
         MFDPanel mfdFullPanel;
@@ -1264,7 +1268,10 @@ int main(int argc, char* argv[])
             // Cap time accel during an automated burn to 10× so the attitude
             // controller remains stable and C3 cutoff is not overshot badly.
             {
-                const double burnCap = transferMFD.maxSimSpeed();
+                double burnCap = transferMFD.maxSimSpeed();
+                const double lunarCap = cislunarMFD.maxSimSpeed();
+                if (lunarCap > 0.0 && (burnCap <= 0.0 || lunarCap < burnCap))
+                    burnCap = lunarCap;
                 if (burnCap > 0.0) {
                     simSpeedTarget          = std::min(simSpeedTarget,          burnCap);
                     simSecondsPerRealSecond = std::min(simSecondsPerRealSecond, burnCap);
@@ -1415,7 +1422,8 @@ int main(int argc, char* argv[])
                         const bool mainEngineKey =
                             (spaceDown && !shiftHeld)
                             || transferMFD.requestMainEngine()
-                            || transferMFD.requestTcmMainEngine();
+                            || transferMFD.requestTcmMainEngine()
+                            || cislunarMFD.requestMainEngine();
                         if (mainEngineKey) {
                             desired[0] += mainEngineThrust;
                             mainEngineOn = true;
@@ -2391,6 +2399,7 @@ int main(int argc, char* argv[])
                 orbitalMFD.update(mfdCtx);
                 mapMFD.update(mfdCtx);
                 transferMFD.update(mfdCtx);   // calls tickTcm + tickBplane internally
+                cislunarMFD.update(mfdCtx);
                 obcMFD.update(mfdCtx);
 
                 // 4. Resolve pending TGT input.

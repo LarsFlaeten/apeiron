@@ -1,5 +1,6 @@
 #pragma once
 
+#include <glm/glm.hpp>
 #include <vector>
 #include <functional>
 
@@ -23,6 +24,15 @@ struct PorkchopParams {
 
     int nDep = 60;    // grid columns (departure dates)
     int nTof = 60;    // grid rows    (TOF values)
+
+    // Optional departure-state override.
+    // When true, departureR/V are used directly instead of querying SPICE for
+    // the departure body.  Required for cislunar TLI where the departure point
+    // is the ship in its parking orbit, not a planet centre (which would return
+    // the degenerate (0,0,0) when departureBody == centralBody).
+    bool       useDepartureOverride = false;
+    glm::dvec3 departureR { 0.0 };   // km,   relative to centralBody
+    glm::dvec3 departureV { 0.0 };   // km/s, relative to centralBody
 };
 
 // ---------------------------------------------------------------------------

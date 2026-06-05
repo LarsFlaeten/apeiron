@@ -59,11 +59,18 @@ PorkchopData computePorkchop(const PorkchopParams& paramsIn,
         const double etDep = out.depET(iDep);
         const astro::EphemerisTime etDepT(etDep);
 
-        // Position + velocity of departure body at departure ET.
+        // Position + velocity at departure.
+        // Override: use the caller-supplied state (e.g. ship parking orbit for
+        // cislunar TLI) instead of the departure body centre from SPICE.
         astro::PosState dep;
-        astro::Spice().getRelativeGeometricState(
-            out.params.departureBody, out.params.centralBody, etDepT, dep,
-            kEclipJ2000);
+        if (out.params.useDepartureOverride) {
+            dep.r = out.params.departureR;
+            dep.v = out.params.departureV;
+        } else {
+            astro::Spice().getRelativeGeometricState(
+                out.params.departureBody, out.params.centralBody, etDepT, dep,
+                kEclipJ2000);
+        }
 
         for (int iTof = 0; iTof < nTof; ++iTof) {
             const double tofSec = out.tofS(iTof);
