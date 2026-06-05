@@ -163,9 +163,14 @@ void CislunarMFD::resolveSelected()
     m_detail.depET    = depET;
     m_detail.arrET    = arrET;
     m_detail.tofSec   = tofSec;
+    // dv1: TLI ΔV magnitude (km/s) — what the engine must deliver.
+    // c3:  vis-viva orbital energy at departure, v²−2μ/r.
+    //      Negative for cislunar (sub-escape elliptic). BurnController cuts off
+    //      when the live v²−2μ/r rises to this value.
+    const double rDep = glm::length(depR);
     m_detail.dv1      = static_cast<float>(glm::length(vDep - depV));
     m_detail.dv2      = static_cast<float>(glm::length(vArr - moonArrV));
-    m_detail.c3       = static_cast<float>(glm::dot(vDep - depV, vDep - depV));
+    m_detail.c3       = static_cast<float>(glm::dot(vDep, vDep) - 2.0 * kGmEarth / rDep);
     m_detail.depPos   = depR;
     m_detail.arrPos   = moonArrR;
     m_detail.vDep     = vDep;
@@ -273,24 +278,18 @@ double CislunarMFD::computeTliIgnitionET() const
     double     sma     = p_orb / (1.0 - ecc * ecc);
     if (sma <= 0.0) return 0.0;
 
-    // Departure v∞ geocentric (= Lambert velocity − ship velocity at override).
-    glm::dvec3 vInf     = m_detail.vDep - m_detail.vDepBody;
-    double     vInfMag  = glm::length(vInf);
-    if (vInfMag < 1e-6) return 0.0;
+    // Burn TA: point where parking orbit velocity is aligned with the required
+    // departure velocity vDep (projected onto the orbit plane).
+    //
+    // Cislunar transfers are sub-escape elliptic relative to Earth (C3 < 0),
+    // so there is no departure hyperbola and no asymptote angle to subtract.
+    // The optimal prograde burn point is simply where the orbit's tangent
+    // direction matches vDep.
+    glm::dvec3 vDepProj    = m_detail.vDep - glm::dot(m_detail.vDep, hHat) * hHat;
+    double     vDepProjMag = glm::length(vDepProj);
+    if (vDepProjMag < 1e-9) return 0.0;
 
-    // Eccentricity of departure hyperbola.
-    const double e_hyp  = 1.0 + static_cast<double>(m_detail.c3) * rPark / mu;
-    const double nu_inf = std::acos(-1.0 / e_hyp);  // asymptote TA
-
-    // Project v∞ onto orbit plane.
-    glm::dvec3 vInfProj    = vInf - glm::dot(vInf, hHat) * hHat;
-    double     vInfProjMag = glm::length(vInfProj);
-    if (vInfProjMag < 1e-9) return 0.0;
-
-    // Burn TA: asymptote direction = burn TA + nu_inf.
-    double phi_target = std::atan2(glm::dot(vInfProj, qDir),
-                                   glm::dot(vInfProj, periDir));
-    double burnTA = phi_target - nu_inf;
+    double burnTA = std::atan2(glm::dot(vDepProj, qDir), glm::dot(vDepProj, periDir));
     while (burnTA >  std::numbers::pi) burnTA -= 2.0 * std::numbers::pi;
     while (burnTA < -std::numbers::pi) burnTA += 2.0 * std::numbers::pi;
 
@@ -310,12 +309,10 @@ double CislunarMFD::computeTliIgnitionET() const
     if (dM < 0.0) dM += 2.0 * std::numbers::pi;
     double timeToBurn = dM / (2.0 * std::numbers::pi) * orbPeriod;
 
-    // Burn duration (centred on burn TA).
-    const double vCirc    = std::sqrt(mu / rPark);
-    const double vPeri    = std::sqrt(static_cast<double>(m_detail.c3) + 2.0 * mu / rPark);
-    const double dvTLI    = vPeri - vCirc;
-    const double accel    = (m_shipMass > 1.0) ? m_mainThrustN / m_shipMass : 0.97;
-    const double burnDur  = dvTLI * 1000.0 / accel;
+    // Burn duration centred on burn TA.  Use stored dv1 (TLI ΔV) directly.
+    const double dvTLI   = static_cast<double>(m_detail.dv1);
+    const double accel   = (m_shipMass > 1.0) ? m_mainThrustN / m_shipMass : 0.97;
+    const double burnDur = dvTLI * 1000.0 / accel;
 
     return m_currentET + timeToBurn - burnDur * 0.5;
 }
@@ -443,10 +440,9 @@ void CislunarMFD::onLeft(int slot)
                     plan.retrogradeBurn = false;
                     plan.slewOnArm      = true;
                     if (m_eventQueue) {
-                        // Replace the rough departure-epoch estimate with the
-                        // orbit-accurate ignition time.
+                        // Remove the rough departure-epoch estimate; BurnController
+                        // schedules its own "TLI-IGN" countdown from the exact ignitionET.
                         m_eventQueue->cancelByName("TLI");
-                        m_eventQueue->schedule("TLI", ignET);
                     }
                     m_burnCtrl.arm(plan, m_autopilot, m_eventQueue);
                 }
@@ -983,24 +979,23 @@ void CislunarMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     double taDeg_now  = ta_now * 180.0 / std::numbers::pi;
     if (taDeg_now < 0.0) taDeg_now += 360.0;
 
-    // ---- V∞ ----
-    glm::dvec3 vInf    = m_detail.vDep - m_detail.vDepBody;
-    double     vInfMag = glm::length(vInf);
-    if (vInfMag < 1e-6) {
-        dl->AddText({origin.x+4, origin.y+4}, kDim, "Zero V-inf"); return;
-    }
-    glm::dvec3 vInfHat = vInf / vInfMag;
+    // ---- Departure velocity direction ----
+    // For cislunar, the relevant direction is vDep (the required geocentric departure
+    // velocity from Lambert), not a heliocentric v∞.  The orbit plane should contain
+    // this direction to minimise the combined TLI + plane-change ΔV cost.
+    const double dvTLI = static_cast<double>(m_detail.dv1);
+    glm::dvec3 vDepHat = glm::normalize(m_detail.vDep);
 
-    // ---- Target plane (contains V∞) ----
-    glm::dvec3 hProj   = hHat - glm::dot(hHat, vInfHat) * vInfHat;
+    // ---- Target plane (contains vDep) ----
+    glm::dvec3 hProj   = hHat - glm::dot(hHat, vDepHat) * vDepHat;
     double     hProjL  = glm::length(hProj);
     glm::dvec3 hTarget = (hProjL > 1e-9) ? hProj/hProjL
-                       : glm::normalize(glm::cross(vInfHat, glm::dvec3(0,0,1)));
+                       : glm::normalize(glm::cross(vDepHat, glm::dvec3(0,0,1)));
 
     double inc_tgt  = std::acos(std::clamp(hTarget.z, -1.0, 1.0)) * 180.0/std::numbers::pi;
     double raan_tgt = std::atan2(hTarget.x, -hTarget.y) * 180.0/std::numbers::pi;
     if (raan_tgt < 0.0) raan_tgt += 360.0;
-    double planeErr = std::asin(std::clamp(std::abs(glm::dot(vInfHat, hHat)), 0.0, 1.0))
+    double planeErr = std::asin(std::clamp(std::abs(glm::dot(vDepHat, hHat)), 0.0, 1.0))
                       * 180.0 / std::numbers::pi;
 
     // ---- AN / DN ----
@@ -1034,16 +1029,15 @@ void CislunarMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         }
     }
 
-    // ---- Burn TA (asymptote alignment) ----
-    const double rPark   = kREarth + kParkAlts[m_parkIdx];
-    const double e_hyp   = 1.0 + static_cast<double>(m_detail.c3) * rPark / mu;
-    const double nu_inf  = std::acos(-1.0 / e_hyp);
-    glm::dvec3 vInfProj  = vInf - glm::dot(vInf, hHat) * hHat;
-    double vInfProjMag   = glm::length(vInfProj);
+    // ---- Burn TA — where orbit velocity aligns with vDep ----
+    // Cislunar trajectory is sub-escape elliptic (C3 < 0); no departure hyperbola,
+    // no asymptote angle.  Optimal burn point: orbit tangent ∥ vDep projected.
+    const double rPark = kREarth + kParkAlts[m_parkIdx];
+    glm::dvec3 vDepProj  = m_detail.vDep - glm::dot(m_detail.vDep, hHat) * hHat;
+    double vDepProjMag   = glm::length(vDepProj);
     double burnTA=0.0, burnTADeg=0.0;
-    if (vInfProjMag > 1e-9) {
-        double phi_tgt = std::atan2(glm::dot(vInfProj,qDir), glm::dot(vInfProj,periDir));
-        burnTA = phi_tgt - nu_inf;
+    if (vDepProjMag > 1e-9) {
+        burnTA = std::atan2(glm::dot(vDepProj,qDir), glm::dot(vDepProj,periDir));
         while (burnTA >  std::numbers::pi) burnTA -= 2.0*std::numbers::pi;
         while (burnTA < -std::numbers::pi) burnTA += 2.0*std::numbers::pi;
         burnTADeg = burnTA*180.0/std::numbers::pi; if(burnTADeg<0.0) burnTADeg+=360.0;
@@ -1052,9 +1046,10 @@ void CislunarMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     double altBurn = rBurn - kREarth;
     glm::dvec3 burnPos = rBurn*(std::cos(burnTA)*periDir + std::sin(burnTA)*qDir);
 
+    // Post-burn speed at rPark from vis-viva: v = sqrt(C3 + 2μ/r).
+    // C3 is negative (elliptic) but C3 + 2μ/r is positive.
     const double vCirc = std::sqrt(mu/rPark);
-    const double vPeri = std::sqrt(static_cast<double>(m_detail.c3) + 2.0*mu/rPark);
-    const double dvTMI = vPeri - vCirc;
+    const double vPeri = std::sqrt(std::max(0.0, static_cast<double>(m_detail.c3) + 2.0*mu/rPark));
 
     // ---- Burn timing ----
     double timeToBurnPoint=0.0, orbPeriod=0.0;
@@ -1071,7 +1066,7 @@ void CislunarMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     }
 
     const double accelMs2    = (m_shipMass > 1.0) ? m_mainThrustN / m_shipMass : 0.97;
-    const double burnDuration = dvTMI * 1000.0 / accelMs2;
+    const double burnDuration = dvTLI * 1000.0 / accelMs2;
     const double timeToStartBurn = timeToBurnPoint - burnDuration * 0.5;
 
     // ---- Live remaining ΔV ----
@@ -1105,8 +1100,8 @@ void CislunarMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             diag.addMarker(dnPos, IM_COL32(255,100,100,230), "DN");
         }
         diag.addMarker(burnPos, kYellow, "B");
-        if (vInfProjMag > 1e-9)
-            diag.addArrow({0.0,0.0,0.0}, vInfHat, 22.0f, kOrange);
+        if (vDepProjMag > 1e-9)
+            diag.addArrow({0.0,0.0,0.0}, vDepHat, 22.0f, kOrange);
 
         OrbitDiagram::CentralBody cb;
         cb.radiusKm=kREarth; cb.rimColour=IM_COL32(60,140,255,200);
@@ -1157,7 +1152,7 @@ void CislunarMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         add(kDim,  "NOW  %.10s",nowStr.c_str());
         add(kGreen,"DEP  %.10s  (%s)",depStr.c_str(),tp);
     }
-    add(kCyan,"V∞ %.3f km/s  C3 %.1f km²/s²",vInfMag,m_detail.c3);
+    add(kCyan,"TLI ΔV %.3f km/s  C3 %.2f km²/s²", dvTLI, m_detail.c3);
     sep();
 
     // Current orbit.
@@ -1190,7 +1185,7 @@ void CislunarMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     // Burn.
     add(kCyan,  "BURN  TA %.1f  Alt %.0f km",burnTADeg,altBurn);
     add(kDim,   "TLI  alt %.0f km  [ALT]",kParkAlts[m_parkIdx]);
-    add(kYellow," dV-TLI %.3f km/s  (Vp %.3f  Vc %.3f)",dvTMI,vPeri,vCirc);
+    add(kYellow," dV-TLI %.3f km/s  (Vp %.3f  Vc %.3f)",dvTLI,vPeri,vCirc);
     {
         char bBurn[12],bStart[12],bToBurn[12];
         fmtHMS(burnDuration,bBurn,sizeof(bBurn));
@@ -1203,7 +1198,7 @@ void CislunarMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     sep();
     {
         char bRem[12]; fmtHMS(burnRemaining,bRem,sizeof(bRem));
-        ImU32 dvCol = (dvRemaining<0.001)?kGreen:(dvRemaining<dvTMI*0.1)?kYellow:kOrange;
+        ImU32 dvCol = (dvRemaining<0.001)?kGreen:(dvRemaining<dvTLI*0.1)?kYellow:kOrange;
         add(dvCol,"dV-REMAINING %.3f km/s  (%s)",dvRemaining,bRem);
         if (dvRemaining<0.001) add(kGreen," BURN COMPLETE");
     }
