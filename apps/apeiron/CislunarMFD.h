@@ -31,6 +31,10 @@
 //   Left  4: PC     toggle plane-change ΔV contour overlay
 //   Left  5: RST    reset window to now+90d, default TOF, recompute
 //   Right 0: COMP   recompute (or INFO when a cell is selected)
+//   Right 1: WIN<   halve departure window span
+//   Right 2: WIN>   double departure window span
+//   Right 3: RNG<   halve TOF span
+//   Right 4: RNG>   double TOF span
 //
 // Page 1 buttons:
 //   Left  3: ALT    cycle parking orbit altitude

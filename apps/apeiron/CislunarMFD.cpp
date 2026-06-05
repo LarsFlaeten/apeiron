@@ -364,8 +364,14 @@ const char* CislunarMFD::rightLabel(int slot) const
 {
     switch (m_page) {
     case 0:
-        if (slot == 0) return (m_selDep >= 0 && m_selTof >= 0 && m_hasData) ? "INFO" : "COMP";
-        return "";
+        switch (slot) {
+        case 0: return (m_selDep >= 0 && m_selTof >= 0 && m_hasData) ? "INFO" : "COMP";
+        case 1: return "WIN<";
+        case 2: return "WIN>";
+        case 3: return "RNG<";
+        case 4: return "RNG>";
+        default: return "";
+        }
     case 1:
         if (slot == 4) return "BURN";
         return "";
@@ -465,7 +471,44 @@ void CislunarMFD::onLeft(int slot)
 void CislunarMFD::onRight(int slot)
 {
     switch (m_page) {
-    case 0:
+    case 0: {
+        // Window / TOF scaling (slots 1-4) — keep midpoint, scale span.
+        const double depMid  = (m_params.t0 + m_params.t1) * 0.5;
+        const double tofMid  = (m_params.tofMin + m_params.tofMax) * 0.5;
+        double       depHalf = (m_params.t1 - m_params.t0) * 0.5;
+        double       tofHalf = (m_params.tofMax - m_params.tofMin) * 0.5;
+        if (slot == 1) {
+            depHalf = std::max(depHalf * 0.5, 1.5 * kDay);   // min ~3-day window
+            m_params.t0 = depMid - depHalf;
+            m_params.t1 = depMid + depHalf;
+            break;
+        }
+        if (slot == 2) {
+            depHalf *= 2.0;
+            m_params.t0 = depMid - depHalf;
+            m_params.t1 = depMid + depHalf;
+            break;
+        }
+        if (slot == 3) {
+            tofHalf = std::max(tofHalf * 0.5, 3.0 * 3600.0); // min ~6-hour span
+            m_params.tofMin = tofMid - tofHalf;
+            m_params.tofMax = tofMid + tofHalf;
+            if (m_params.tofMin < 3600.0) {
+                m_params.tofMax -= m_params.tofMin - 3600.0;
+                m_params.tofMin  = 3600.0;
+            }
+            break;
+        }
+        if (slot == 4) {
+            tofHalf *= 2.0;
+            m_params.tofMin = tofMid - tofHalf;
+            m_params.tofMax = tofMid + tofHalf;
+            if (m_params.tofMin < 3600.0) {
+                m_params.tofMax -= m_params.tofMin - 3600.0;
+                m_params.tofMin  = 3600.0;
+            }
+            break;
+        }
         if (slot == 0) {
             if (m_selDep >= 0 && m_selTof >= 0 && m_hasData) {
                 resolveSelected();
@@ -490,6 +533,7 @@ void CislunarMFD::onRight(int slot)
             }
         }
         break;
+    }  // end case 0
     case 1:
         if (slot == 4) m_page = 2;
         break;
