@@ -148,9 +148,9 @@ void CislunarMFD::resolveSelected()
     const double tofSec = m_data.tofS(m_selTof);
     const double arrET  = depET + tofSec;
 
-    // Departure state: ship's current parking orbit (same override used for grid).
-    const glm::dvec3 depR = m_params.departureR;
-    const glm::dvec3 depV = m_params.departureV;
+    // COMP-time parking orbit state (departure override used for porkchop grid).
+    const glm::dvec3 compR = m_params.departureR;
+    const glm::dvec3 compV = m_params.departureV;
 
     // Moon geocentric state at arrival.
     astro::PosState moonArr;
@@ -162,9 +162,49 @@ void CislunarMFD::resolveSelected()
     glm::dvec3 moonArrR(moonArr.r.x, moonArr.r.y, moonArr.r.z);
     glm::dvec3 moonArrV(moonArr.v.x, moonArr.v.y, moonArr.v.z);
 
+    // Step 1 — initial Lambert solve from COMP position.
     glm::dvec3 vDep, vArr;
-    if (!spacecraft::solveLambert(kGmEarth, depR, moonArrR, tofSec, true, vDep, vArr))
+    if (!spacecraft::solveLambert(kGmEarth, compR, moonArrR, tofSec, true, vDep, vArr))
         return;
+
+    // Step 2 — iterate to find the actual burn point.
+    // The burn happens where the parking-orbit prograde direction aligns with vDep.
+    // That position differs from compR (where COMP was pressed), so re-solving Lambert
+    // from the burn point gives a more accurate planned arc and burn parameters.
+    glm::dvec3 burnR = compR;  // will be updated by iteration
+    {
+        const glm::dvec3 h    = glm::cross(compR, compV);
+        const double     hMag = glm::length(h);
+        if (hMag > 1e-6) {
+            const glm::dvec3 hHat   = h / hMag;
+            const glm::dvec3 ev     = glm::cross(compV, h) / kGmEarth - glm::normalize(compR);
+            const double     ecc    = glm::length(ev);
+            const glm::dvec3 periDir = (ecc > 1e-6) ? glm::normalize(ev) : glm::normalize(compR);
+            const glm::dvec3 qDir    = glm::cross(hHat, periDir);
+            const double     p_orb  = hMag * hMag / kGmEarth;
+
+            for (int k = 0; k < 3; ++k) {
+                // Burn TA: prograde(-sinν,cosν) ∥ vDep_proj → ν = atan2(-vDep_p, vDep_q)
+                glm::dvec3 proj = vDep - glm::dot(vDep, hHat) * hHat;
+                if (glm::length(proj) < 1e-9) break;
+                const double burnTA = std::atan2(-glm::dot(proj, periDir),
+                                                  glm::dot(proj, qDir));
+                const double rBurn  = p_orb / (1.0 + ecc * std::cos(burnTA));
+                burnR = rBurn * (std::cos(burnTA) * periDir + std::sin(burnTA) * qDir);
+
+                glm::dvec3 vDep_new, vArr_new;
+                if (!spacecraft::solveLambert(kGmEarth, burnR, moonArrR, tofSec,
+                                              true, vDep_new, vArr_new))
+                    break;
+                vDep = vDep_new;
+                vArr = vArr_new;
+            }
+        }
+    }
+
+    // Ship velocity at the burn point (circular parking orbit speed in vDep direction).
+    const double vCircBurn = std::sqrt(kGmEarth / glm::length(burnR));
+    const glm::dvec3 depV  = glm::normalize(vDep) * vCircBurn;
 
     m_detail.valid    = true;
     m_detail.depET    = depET;
@@ -174,11 +214,11 @@ void CislunarMFD::resolveSelected()
     // c3:  vis-viva orbital energy at departure, v²−2μ/r.
     //      Negative for cislunar (sub-escape elliptic). BurnController cuts off
     //      when the live v²−2μ/r rises to this value.
-    const double rDep = glm::length(depR);
+    const double rDep = glm::length(burnR);
     m_detail.dv1      = static_cast<float>(glm::length(vDep - depV));
     m_detail.dv2      = static_cast<float>(glm::length(vArr - moonArrV));
     m_detail.c3       = static_cast<float>(glm::dot(vDep, vDep) - 2.0 * kGmEarth / rDep);
-    m_detail.depPos   = depR;
+    m_detail.depPos   = burnR;   // actual burn point, not COMP position
     m_detail.arrPos   = moonArrR;
     m_detail.vDep     = vDep;
     m_detail.vArr     = vArr;
@@ -296,7 +336,9 @@ double CislunarMFD::computeTliIgnitionET() const
     double     vDepProjMag = glm::length(vDepProj);
     if (vDepProjMag < 1e-9) return 0.0;
 
-    double burnTA = std::atan2(glm::dot(vDepProj, qDir), glm::dot(vDepProj, periDir));
+    // Correct burn TA: prograde at ν in circular orbit = (-sinν, cosν) in (periDir,qDir).
+    // Align with vDep: (-sinν,cosν) ∥ (vDep_p,vDep_q) → ν = atan2(-vDep_p, vDep_q).
+    double burnTA = std::atan2(-glm::dot(vDepProj, periDir), glm::dot(vDepProj, qDir));
     while (burnTA >  std::numbers::pi) burnTA -= 2.0 * std::numbers::pi;
     while (burnTA < -std::numbers::pi) burnTA += 2.0 * std::numbers::pi;
 
@@ -1407,12 +1449,21 @@ void CislunarMFD::renderCoast(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     if (diagH > 40) {
         OrbitDiagram diag;
         diag.setCentralBody({kREarth, IM_COL32(80,120,220,200)});
+        // Show actual trajectory only — the stale planned arc is misleading
+        // once the burn is done and the real departure position differs slightly.
         if (glm::length(m_shipR)>100.0)
-            diag.addOrbit(m_shipR,m_shipV,kGmEarth,IM_COL32(200,200,80,180),"",false,true);
-        if (m_detail.valid)
-            diag.addOrbit(m_detail.depPos,m_detail.vDep,kGmEarth,
-                         IM_COL32(80,180,80,120),"TLI",false,false);
-        diag.addMarker(m_detail.arrPos,IM_COL32(200,200,200,220),"M");
+            diag.addOrbit(m_shipR,m_shipV,kGmEarth,IM_COL32(200,200,80,200),"COAST",false,true);
+        // Live Moon position (more useful than planned arrival marker).
+        try {
+            astro::PosState moonNow;
+            astro::Spice().getRelativeGeometricState(301,399,
+                astro::EphemerisTime(m_currentET),moonNow,kEclipJ2000);
+            glm::dvec3 mPos(moonNow.r.x,moonNow.r.y,moonNow.r.z);
+            diag.addMarker(mPos, IM_COL32(200,200,200,220), "M");
+        } catch (...) {
+            if (m_detail.valid)
+                diag.addMarker(m_detail.arrPos,IM_COL32(200,200,200,160),"M?");
+        }
         diag.render(dl,{origin.x,y},{size.x,diagH},&m_coastViewRot);
     }
 }
