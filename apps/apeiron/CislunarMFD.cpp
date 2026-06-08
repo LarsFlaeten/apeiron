@@ -98,6 +98,7 @@ void CislunarMFD::compute()
     m_hasData   = false;
     m_error.clear();
 
+    // Fixed Earth-Moon configuration — always refreshed.
     m_params.centralBody          = 399;
     m_params.arrivalBody          = 301;
     m_params.departureBody        = 399;
@@ -105,12 +106,18 @@ void CislunarMFD::compute()
     m_params.useDepartureOverride = true;
     m_params.departureR           = m_shipR;
     m_params.departureV           = m_shipV;
-    m_params.t0                   = m_currentET;
-    m_params.t1                   = m_currentET + 90.0 * kDay;
-    if (m_params.tofMin <= 0.0) m_params.tofMin = 3.0 * kDay;
-    if (m_params.tofMax <= 0.0) m_params.tofMax = 8.0 * kDay;
-    m_params.nDep = 90;
-    m_params.nTof = 40;
+    m_params.nDep                 = 90;
+    m_params.nTof                 = 40;
+
+    // Range — initialise only on first use (t1 == 0.0 means never set).
+    // WIN</>  RNG</>  zoom-box  RST all write m_params directly; compute()
+    // must not clobber those values.
+    if (m_params.t1 == 0.0) {
+        m_params.t0     = m_currentET;
+        m_params.t1     = m_currentET + 90.0 * kDay;
+        m_params.tofMin = 3.0 * kDay;
+        m_params.tofMax = 8.0 * kDay;
+    }
 
     try {
         m_data    = spacecraft::computePorkchop(m_params);
@@ -402,17 +409,20 @@ void CislunarMFD::onLeft(int slot)
     switch (m_page) {
     case 0:
         switch (slot) {
-        case 0: m_params.t0 -= 15.0*kDay; m_params.t1 -= 15.0*kDay; break;
-        case 1: m_params.t0 += 15.0*kDay; m_params.t1 += 15.0*kDay; break;
-        case 2: m_params.tofMin = std::max(1.0*kDay, m_params.tofMin - 6.0*3600.0); break;
-        case 3: m_params.tofMax = std::min(30.0*kDay, m_params.tofMax + 6.0*3600.0); break;
+        case 0: m_params.t0 -= 15.0*kDay; m_params.t1 -= 15.0*kDay; compute(); break;
+        case 1: m_params.t0 += 15.0*kDay; m_params.t1 += 15.0*kDay; compute(); break;
+        case 2: m_params.tofMin = std::max(1.0*kDay, m_params.tofMin - 6.0*3600.0); compute(); break;
+        case 3: m_params.tofMax = std::min(30.0*kDay, m_params.tofMax + 6.0*3600.0); compute(); break;
         case 4: m_showPC = !m_showPC; break;
         case 5:
+            // RST: explicitly reset range (also forces t1 != 0 so compute() won't
+            // re-init from current ET on subsequent calls after a zoom).
             m_params.t0     = m_currentET;
             m_params.t1     = m_currentET + 90.0*kDay;
             m_params.tofMin = 3.0*kDay;
             m_params.tofMax = 8.0*kDay;
-            m_hasData = false; m_detail = {};
+            m_detail = {};
+            compute();
             break;
         default: break;
         }
@@ -478,26 +488,26 @@ void CislunarMFD::onRight(int slot)
         double       depHalf = (m_params.t1 - m_params.t0) * 0.5;
         double       tofHalf = (m_params.tofMax - m_params.tofMin) * 0.5;
         if (slot == 1) {
-            depHalf = std::max(depHalf * 0.5, 1.5 * kDay);   // min ~3-day window
+            depHalf = std::max(depHalf * 0.5, 1.5 * kDay);
             m_params.t0 = depMid - depHalf;
             m_params.t1 = depMid + depHalf;
-            break;
+            compute(); break;
         }
         if (slot == 2) {
             depHalf *= 2.0;
             m_params.t0 = depMid - depHalf;
             m_params.t1 = depMid + depHalf;
-            break;
+            compute(); break;
         }
         if (slot == 3) {
-            tofHalf = std::max(tofHalf * 0.5, 3.0 * 3600.0); // min ~6-hour span
+            tofHalf = std::max(tofHalf * 0.5, 3.0 * 3600.0);
             m_params.tofMin = tofMid - tofHalf;
             m_params.tofMax = tofMid + tofHalf;
             if (m_params.tofMin < 3600.0) {
                 m_params.tofMax -= m_params.tofMin - 3600.0;
                 m_params.tofMin  = 3600.0;
             }
-            break;
+            compute(); break;
         }
         if (slot == 4) {
             tofHalf *= 2.0;
@@ -507,7 +517,7 @@ void CislunarMFD::onRight(int slot)
                 m_params.tofMax -= m_params.tofMin - 3600.0;
                 m_params.tofMin  = 3600.0;
             }
-            break;
+            compute(); break;
         }
         if (slot == 0) {
             if (m_selDep >= 0 && m_selTof >= 0 && m_hasData) {
@@ -802,15 +812,85 @@ void CislunarMFD::renderWindow(ImDrawList* dl, ImVec2 origin, ImVec2 size)
         }
     }
 
-    // Hover / click.
+    // Hover / left-click (point select) / right-drag (zoom box).
     const ImVec2 mp = ImGui::GetMousePos();
     const bool inGrid = mp.x>=gx0&&mp.x<gx1&&mp.y>=gy0&&mp.y<gy1;
     int hDep=-1, hTof=-1;
     if (inGrid) {
         hDep = std::clamp(static_cast<int>((mp.x-gx0)/cellW), 0, nDep-1);
         hTof = std::clamp(nTof-1-static_cast<int>((mp.y-gy0)/cellH), 0, nTof-1);
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) { m_selDep=hDep; m_selTof=hTof; }
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !m_zoomActive)
+            { m_selDep=hDep; m_selTof=hTof; }
     }
+
+    // Right-drag zoom box: start when right button is pressed inside grid.
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && inGrid) {
+        m_zoomStart  = mp;
+        m_zoomActive = true;
+    }
+    if (m_zoomActive) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+            // Draw the selection rectangle while dragging.
+            ImVec2 lo = { std::min(m_zoomStart.x, mp.x), std::min(m_zoomStart.y, mp.y) };
+            ImVec2 hi = { std::max(m_zoomStart.x, mp.x), std::max(m_zoomStart.y, mp.y) };
+            dl->AddRectFilled(lo, hi, IM_COL32(255, 230, 80, 35));
+            dl->AddRect      (lo, hi, IM_COL32(255, 230, 80, 220), 0.0f, 0, 1.5f);
+            // Axis labels inside the box edges so the user knows the exact range.
+            auto screenToET  = [&](float sx) {
+                return m_data.params.t0 + (sx - gx0) / gw * (m_data.params.t1 - m_data.params.t0);
+            };
+            auto screenToTof = [&](float sy) {
+                // y inverted: top of grid = max TOF
+                return m_data.params.tofMin + (1.0 - (sy - gy0) / gh)
+                       * (m_data.params.tofMax - m_data.params.tofMin);
+            };
+            double et0 = screenToET(lo.x), et1 = screenToET(hi.x);
+            double tf0 = screenToTof(hi.y), tf1 = screenToTof(lo.y); // hi.y = lower TOF
+            std::string s0 = astro::EphemerisTime(et0).toISOUTCString(0);
+            std::string s1 = astro::EphemerisTime(et1).toISOUTCString(0);
+            int h0 = static_cast<int>(tf0/3600.0+0.5), h1 = static_cast<int>(tf1/3600.0+0.5);
+            char lbl[48];
+            std::snprintf(lbl, sizeof(lbl), "%.7s-%.7s  %dh-%dh",
+                          s0.c_str(), s1.c_str(), h0, h1);
+            ImVec2 tsz = ImGui::CalcTextSize(lbl);
+            float lx = lo.x + (hi.x - lo.x - tsz.x) * 0.5f;
+            float ly = lo.y + 2.0f;
+            if (lx < gx0) lx = gx0;
+            dl->AddRectFilled({lx-1,ly-1},{lx+tsz.x+1,ly+tsz.y+1},IM_COL32(0,0,0,160));
+            dl->AddText({lx, ly}, IM_COL32(255,230,80,230), lbl);
+        } else {
+            // Button released — apply zoom if box is large enough (> 5 px in both axes).
+            m_zoomActive = false;
+            const float dx = std::abs(mp.x - m_zoomStart.x);
+            const float dy = std::abs(mp.y - m_zoomStart.y);
+            if (dx > 5.0f && dy > 5.0f && m_hasData) {
+                const float x0 = std::clamp(std::min(m_zoomStart.x, mp.x), gx0, gx1);
+                const float x1 = std::clamp(std::max(m_zoomStart.x, mp.x), gx0, gx1);
+                const float y0 = std::clamp(std::min(m_zoomStart.y, mp.y), gy0, gy1);
+                const float y1 = std::clamp(std::max(m_zoomStart.y, mp.y), gy0, gy1);
+
+                const double tSpan = m_data.params.t1 - m_data.params.t0;
+                const double tfSpan = m_data.params.tofMax - m_data.params.tofMin;
+
+                double newT0    = m_data.params.t0 + (x0 - gx0) / gw * tSpan;
+                double newT1    = m_data.params.t0 + (x1 - gx0) / gw * tSpan;
+                // y axis: top = max TOF, bottom = min TOF
+                double newTofMax = m_data.params.tofMin + (1.0 - (y0 - gy0) / gh) * tfSpan;
+                double newTofMin = m_data.params.tofMin + (1.0 - (y1 - gy0) / gh) * tfSpan;
+
+                newTofMin = std::max(newTofMin, 3600.0);
+                if (newTofMax <= newTofMin) newTofMax = newTofMin + 3600.0;
+
+                m_params.t0     = newT0;
+                m_params.t1     = newT1;
+                m_params.tofMin = newTofMin;
+                m_params.tofMax = newTofMax;
+                m_selDep = -1; m_selTof = -1;  // clear selection in new view
+                compute();
+            }
+        }
+    }
+
     if (m_selDep>=0&&m_selTof>=0) {
         float sx=gx0+(m_selDep+0.5f)*cellW, sy=gy0+(nTof-1-m_selTof+0.5f)*cellH;
         dl->AddLine({sx-5,sy},{sx+5,sy},kWhite,1.0f);

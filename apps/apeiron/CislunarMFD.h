@@ -156,6 +156,10 @@ private:
     glm::dvec3 m_shipMoonV { 0.0 };
     bool       m_inMoonSoi = false;
 
+    // Zoom-box state for porkchop page (right-drag to draw).
+    ImVec2 m_zoomStart  { 0.0f, 0.0f };
+    bool   m_zoomActive = false;
+
     glm::dmat3 m_windowViewRot { 1.0 };
     glm::dmat3 m_planViewRot   { 1.0 };
     glm::dmat3 m_burnViewRot   { 1.0 };
