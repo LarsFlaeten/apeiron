@@ -64,6 +64,10 @@ public:
 
     bool requestMainEngine() const { return m_burnCtrl.requestMainEngine() || m_loiBurnCtrl.requestMainEngine(); }
 
+    // TCM course-correction vector (geocentric, km/s). Zero when not coasting
+    // or when the correction is negligible. Fed to the nav-console TCM autopilot.
+    glm::dvec3 getTcmDv() const { return m_tcmValid ? m_tcmDv : glm::dvec3(0.0); }
+
     double maxSimSpeed() const {
         const double a = m_burnCtrl.maxSimSpeed();
         const double b = m_loiBurnCtrl.maxSimSpeed();

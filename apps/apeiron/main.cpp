@@ -1339,14 +1339,17 @@ int main(int argc, char* argv[])
             // (or whenever Pe < 50,000 km) so shift-G stays locked on the approach
             // correction without a jarring mid-course jump.
             const glm::dvec3 activeNavDv = [&]() -> glm::dvec3 {
+                // CislunarMFD coast TCM takes priority when it has a valid correction.
+                const glm::dvec3 cislunarTcm = cislunarMFD.getTcmDv();
+                if (glm::length(cislunarTcm) > 1e-9)
+                    return cislunarTcm;
+
                 glm::dvec3 bpl        = transferMFD.getBplaneDv();
                 double     peNow      = transferMFD.getBplanePeCurrentKm();
                 double     progress   = transferMFD.getTransferProgress();
                 const bool lateApproach = (progress >= 0.97);
-                // Switch to B-plane when bpl is non-zero.  tickBplane() is gated
-                // to the arrival SOI, so bpl is zero during heliocentric transit
-                // and automatically non-zero once inside the SOI.
                 const bool bplUsable  = (glm::length(bpl) > 1e-9);
+                (void)peNow; (void)lateApproach;
                 return bplUsable ? bpl : transferMFD.getTcmDv();
             }();
             {
