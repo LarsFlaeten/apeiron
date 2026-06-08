@@ -86,6 +86,40 @@ void CislunarMFD::update(const MFDContext& ctx)
     m_burnCtrl.tick(m_currentET, m_shipR, m_shipV);
     if (m_inMoonSoi)
         m_loiBurnCtrl.tick(m_currentET, m_shipMoonR, m_shipMoonV);
+
+    // TCM: re-solve Lambert from current geocentric state to Moon at planned
+    // arrival ET.  Valid during coast (TLI done, outside Moon SOI, TOF > 1 h).
+    m_tcmValid = false;
+    if (m_detail.valid && !m_inMoonSoi
+            && m_burnCtrl.phase() != BurnPhase::Armed
+            && m_burnCtrl.phase() != BurnPhase::PreIgnition
+            && m_burnCtrl.phase() != BurnPhase::Executing) {
+        const double tofRem = m_detail.arrET - m_currentET;
+        if (tofRem > 3600.0 && glm::length(m_shipR) > 100.0) {
+            try {
+                astro::PosState moonArr;
+                astro::Spice().getRelativeGeometricState(
+                    301, 399, astro::EphemerisTime(m_detail.arrET),
+                    moonArr, kEclipJ2000);
+                glm::dvec3 moonArrR(moonArr.r.x, moonArr.r.y, moonArr.r.z);
+                glm::dvec3 vReq, vArr;
+                if (spacecraft::solveLambert(kGmEarth, m_shipR, moonArrR,
+                                              tofRem, true, vReq, vArr)) {
+                    m_tcmDv   = vReq - m_shipV;
+                    m_tcmValid = true;
+                }
+            } catch (...) {}
+        }
+    }
+
+    // Keep the OBC "TLI-IGN" event synchronised with the live burn-point
+    // calculation as the ship orbits.  updateIgnitionET only re-schedules
+    // when the shift exceeds 30 s, so calling it every frame is safe.
+    if (m_burnCtrl.phase() == BurnPhase::Armed && m_detail.valid) {
+        const double ignET = computeTliIgnitionET();
+        if (ignET > m_currentET)
+            m_burnCtrl.updateIgnitionET(ignET, m_eventQueue);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1203,7 +1237,7 @@ void CislunarMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     double vDepProjMag   = glm::length(vDepProj);
     double burnTA=0.0, burnTADeg=0.0;
     if (vDepProjMag > 1e-9) {
-        burnTA = std::atan2(glm::dot(vDepProj,qDir), glm::dot(vDepProj,periDir));
+        burnTA = std::atan2(-glm::dot(vDepProj,periDir), glm::dot(vDepProj,qDir));
         while (burnTA >  std::numbers::pi) burnTA -= 2.0*std::numbers::pi;
         while (burnTA < -std::numbers::pi) burnTA += 2.0*std::numbers::pi;
         burnTADeg = burnTA*180.0/std::numbers::pi; if(burnTADeg<0.0) burnTADeg+=360.0;
@@ -1384,87 +1418,178 @@ void CislunarMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 // ---------------------------------------------------------------------------
 void CislunarMFD::renderCoast(ImDrawList* dl, ImVec2 origin, ImVec2 size)
 {
-    const ImU32 kGreen  = IM_COL32(  0, 210,  75, 210);
-    const ImU32 kDim    = IM_COL32(  0, 140,  50, 140);
-    const ImU32 kYellow = IM_COL32(255, 220,   0, 230);
-    const ImU32 kCyan   = IM_COL32(  0, 200, 220, 220);
-    const ImU32 kOrange = IM_COL32(255, 140,   0, 220);
+    const ImU32 kGreen   = IM_COL32(  0, 210,  75, 210);
+    const ImU32 kDim     = IM_COL32(  0, 140,  50, 140);
+    const ImU32 kYellow  = IM_COL32(255, 220,   0, 230);
+    const ImU32 kCyan    = IM_COL32(  0, 200, 220, 220);
+    const ImU32 kOrange  = IM_COL32(255, 140,   0, 220);
+    const ImU32 kBacking = IM_COL32(  0,   0,   0, 175);
 
-    const float pad   = 4.0f;
+    const float pad   = 3.0f;
     const float lineH = 11.0f;
-    float y = origin.y + pad;
-    const float cx = origin.x + pad;
 
-    auto txt = [&](ImU32 col, const char* fmt, ...) {
-        char buf[80]; va_list ap; va_start(ap,fmt);
-        std::vsnprintf(buf,sizeof(buf),fmt,ap); va_end(ap);
-        ImVec2 tsz=ImGui::CalcTextSize(buf);
-        dl->AddRectFilled({cx-1,y-1},{cx+tsz.x+2,y+tsz.y+1},IM_COL32(0,0,0,160),2.0f);
-        dl->AddText({cx,y},col,buf); y+=lineH;
-    };
-
-    txt(kGreen,"COAST  EARTH -> MOON");
-    y += 4;
-
-    if (!m_detail.valid) { txt(kDim,"No plan loaded"); return; }
-
-    std::string depStr=astro::EphemerisTime(m_detail.depET).toISOUTCString(0);
-    std::string arrStr=astro::EphemerisTime(m_detail.arrET).toISOUTCString(0);
-    txt(kCyan,"DEP  %.10s",depStr.c_str());
-    txt(kCyan,"ARR  %.10s",arrStr.c_str());
-
-    double progress = (m_detail.tofSec > 0.0)
-        ? (m_currentET - m_detail.depET) / m_detail.tofSec : -1.0;
-
-    if (progress >= 0.0 && progress <= 1.5) {
-        char tp[16];
-        fmtTplus(m_detail.arrET - m_currentET, tp, sizeof(tp));
-        txt(kYellow,"Progress %.1f%%  (%s to arr)", progress*100.0, tp);
+    if (!m_detail.valid) {
+        dl->AddText({origin.x+pad, origin.y+pad}, kDim, "No plan loaded");
+        return;
     }
 
+    // --- Live Moon state ---
+    glm::dvec3 moonPos(0.0), moonVel(0.0);
+    bool moonOk = false;
     try {
-        astro::PosState moonNow;
+        astro::PosState ms;
         astro::Spice().getRelativeGeometricState(301,399,
-            astro::EphemerisTime(m_currentET), moonNow, kEclipJ2000);
-        glm::dvec3 mp(moonNow.r.x,moonNow.r.y,moonNow.r.z);
-        txt(kGreen,"Dist Moon  %.0f km",glm::length(m_shipR-mp));
+            astro::EphemerisTime(m_currentET), ms, kEclipJ2000);
+        moonPos = glm::dvec3(ms.r.x,ms.r.y,ms.r.z);
+        moonVel = glm::dvec3(ms.v.x,ms.v.y,ms.v.z);
+        moonOk = true;
     } catch (...) {}
 
-    y += 4;
-    if (m_inMoonSoi) txt(kOrange,"IN MOON SOI  -> LOI");
-    else txt(kDim,"Outside Moon SOI");
-
-    // Progress bar.
-    if (progress >= 0.0) {
-        float barX0=cx, barY0=y+4, barW=size.x-2*pad, barH=6.0f;
-        float fill=std::clamp(static_cast<float>(progress),0.0f,1.0f)*barW;
-        dl->AddRectFilled({barX0,barY0},{barX0+barW,barY0+barH},IM_COL32(40,40,40,200));
-        dl->AddRectFilled({barX0,barY0},{barX0+fill,barY0+barH},IM_COL32(0,200,80,200));
-        dl->AddRect      ({barX0,barY0},{barX0+barW,barY0+barH},IM_COL32(80,80,80,160));
-        y = barY0+barH+4;
-    }
-
-    // Coast orbit diagram.
-    const float diagH = origin.y+size.y-y-4;
-    if (diagH > 40) {
+    // ---- Orbit diagram (full area) — drawn first so text overlays on top ----
+    {
         OrbitDiagram diag;
         diag.setCentralBody({kREarth, IM_COL32(80,120,220,200)});
-        // Show actual trajectory only — the stale planned arc is misleading
-        // once the burn is done and the real departure position differs slightly.
-        if (glm::length(m_shipR)>100.0)
-            diag.addOrbit(m_shipR,m_shipV,kGmEarth,IM_COL32(200,200,80,200),"COAST",false,true);
-        // Live Moon position (more useful than planned arrival marker).
-        try {
-            astro::PosState moonNow;
-            astro::Spice().getRelativeGeometricState(301,399,
-                astro::EphemerisTime(m_currentET),moonNow,kEclipJ2000);
-            glm::dvec3 mPos(moonNow.r.x,moonNow.r.y,moonNow.r.z);
-            diag.addMarker(mPos, IM_COL32(200,200,200,220), "M");
-        } catch (...) {
-            if (m_detail.valid)
-                diag.addMarker(m_detail.arrPos,IM_COL32(200,200,200,160),"M?");
+
+        // Actual ship trajectory.
+        if (glm::length(m_shipR) > 100.0)
+            diag.addOrbit(m_shipR,m_shipV,kGmEarth,
+                         IM_COL32(200,200,80,200),"",false,true);
+
+        // Moon orbit ring + current Moon position.
+        if (moonOk) {
+            diag.addOrbit(moonPos,moonVel,kGmEarth,
+                         IM_COL32(160,160,160,100),"",false,false);  // dim ring
+            diag.addMarker(moonPos,IM_COL32(220,220,220,240),"M");
         }
-        diag.render(dl,{origin.x,y},{size.x,diagH},&m_coastViewRot);
+
+        // Planned Moon arrival position.
+        if (m_detail.valid)
+            diag.addMarker(m_detail.arrPos,IM_COL32(100,200,255,180),"T");
+
+        // TCM correction arrow from ship position.
+        if (m_tcmValid && glm::length(m_tcmDv) > 1e-4)
+            diag.addArrow(m_shipR, glm::normalize(m_tcmDv), 20.0f,
+                         IM_COL32(255,160,0,220));
+
+        diag.render(dl, origin, size, &m_coastViewRot);
+    }
+
+    // ---- Text overlay ----
+    struct Line { ImU32 col; char txt[80]; };
+    std::vector<Line> lines;
+    auto add = [&](ImU32 col, const char* fmt, ...) {
+        Line l; l.col = col;
+        va_list ap; va_start(ap,fmt);
+        std::vsnprintf(l.txt,sizeof(l.txt),fmt,ap); va_end(ap);
+        lines.push_back(l);
+    };
+    auto sep = [&]() { add(0,""); };
+
+    // Header.
+    add(kGreen,"COAST  EARTH -> MOON");
+    sep();
+
+    // Progress and T-minus.
+    {
+        double progress = (m_detail.tofSec > 0.0)
+            ? (m_currentET - m_detail.depET) / m_detail.tofSec : -1.0;
+        double tofRem = m_detail.arrET - m_currentET;
+        char tp[20];
+        if (tofRem >= 0.0) {
+            // Format as "Xd HH:MM" or "HH:MM:SS"
+            int days = static_cast<int>(tofRem / kDay);
+            int rem  = static_cast<int>(tofRem) % static_cast<int>(kDay);
+            int hh   = rem / 3600; rem %= 3600;
+            int mm   = rem / 60;   int ss = rem % 60;
+            if (days > 0) std::snprintf(tp,sizeof(tp),"%dd %02d:%02d",days,hh,mm);
+            else          std::snprintf(tp,sizeof(tp),"%02d:%02d:%02d",hh,mm,ss);
+        } else {
+            std::snprintf(tp,sizeof(tp),"PAST");
+        }
+        if (progress >= 0.0 && progress <= 1.5)
+            add(kCyan,"Progress  %.1f%%  T-arr %s",progress*100.0,tp);
+        else
+            add(kCyan,"T-arr %s",tp);
+    }
+
+    // Distance and closure rate to Moon.
+    if (moonOk) {
+        glm::dvec3 rel = m_shipR - moonPos;
+        double distKm  = glm::length(rel);
+        glm::dvec3 relV = m_shipV - moonVel;
+        double closure = (distKm > 1.0)
+            ? -glm::dot(rel, relV) / distKm   // positive = approaching
+            : 0.0;
+        add(kGreen,"Dist Moon  %.0f km",distKm);
+        ImU32 clCol = (closure > 0.0) ? kGreen : kOrange;
+        add(clCol,"Closure    %+.3f km/s  (%s)",
+            closure, closure > 0.0 ? "approaching" : "receding");
+    }
+    sep();
+
+    // TCM course error.
+    add(kCyan,"COURSE ERROR (TCM)");
+    if (m_tcmValid) {
+        double dvMag = glm::length(m_tcmDv) * 1000.0;  // m/s
+        ImU32 dvCol = (dvMag < 1.0)  ? kGreen
+                    : (dvMag < 10.0) ? kYellow : kOrange;
+        add(dvCol," dV  %.1f m/s",dvMag);
+        if (dvMag > 0.5) {
+            // Direction relative to prograde.
+            double vMag = glm::length(m_shipV);
+            double radial = (vMag > 1e-6)
+                ? glm::dot(m_tcmDv, m_shipV) / vMag * 1000.0 : 0.0;
+            double lateral = std::sqrt(std::max(0.0,
+                dvMag*dvMag - radial*radial));
+            add(dvCol," radial %+.1f  lateral %.1f m/s",radial,lateral);
+        }
+    } else {
+        add(m_inMoonSoi ? kDim : kGreen,
+            m_inMoonSoi ? " In Moon SOI — use LOI page"
+                        : " On target (< 1 h TOF or computing)");
+    }
+    sep();
+
+    if (m_inMoonSoi)
+        add(kOrange,"IN MOON SOI — proceed to LOI");
+
+    // Progress bar.
+    {
+        double progress = (m_detail.tofSec > 0.0)
+            ? (m_currentET - m_detail.depET) / m_detail.tofSec : -1.0;
+        if (progress >= 0.0) {
+            add(0,"");  // spacer before bar
+        }
+    }
+
+    // Measure max text width.
+    float maxW = 0.0f;
+    for (auto& l : lines)
+        if (l.col) maxW = std::max(maxW, ImGui::CalcTextSize(l.txt).x);
+
+    float bx0 = origin.x + pad, by0 = origin.y + pad;
+    float bx1 = bx0 + maxW + pad*2.0f;
+    float by1 = by0 + static_cast<float>(lines.size()) * lineH + pad;
+    dl->AddRectFilled({bx0,by0},{bx1,by1},kBacking,3.0f);
+
+    float tx = bx0+pad, ty = by0+pad*0.5f;
+    for (auto& l : lines) {
+        if (l.col) dl->AddText({tx,ty},l.col,l.txt);
+        ty += lineH;
+    }
+
+    // Progress bar below the text block.
+    {
+        double progress = (m_detail.tofSec > 0.0)
+            ? (m_currentET - m_detail.depET) / m_detail.tofSec : -1.0;
+        if (progress >= 0.0) {
+            float barY = by1 + 4.0f;
+            float barW = size.x - 2*pad;
+            float fill = std::clamp(static_cast<float>(progress),0.0f,1.0f)*barW;
+            dl->AddRectFilled({bx0,barY},{bx0+barW,barY+6},IM_COL32(40,40,40,200));
+            dl->AddRectFilled({bx0,barY},{bx0+fill, barY+6},IM_COL32(0,200,80,200));
+            dl->AddRect      ({bx0,barY},{bx0+barW,barY+6},IM_COL32(80,80,80,160));
+        }
     }
 }
 

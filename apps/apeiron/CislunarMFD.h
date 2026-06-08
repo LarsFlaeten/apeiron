@@ -151,6 +151,11 @@ private:
     double m_mainThrustN = 25700.0;
     double m_shipMass    = 26500.0;
 
+    // ---- Coast TCM state ----
+    // Re-solved every frame from current geocentric state to planned Moon arrival.
+    glm::dvec3 m_tcmDv    { 0.0 };   // km/s correction vector (geocentric)
+    bool       m_tcmValid = false;
+
     // ---- LOI approach state (Moon-centric) ----
     glm::dvec3 m_shipMoonR { 0.0 };
     glm::dvec3 m_shipMoonV { 0.0 };
