@@ -2139,7 +2139,8 @@ int main(int argc, char* argv[])
                         st.angularVelocity = sc->angularVelocity();
                         sd.spacecraft.push_back(st);
                     }
-                    sd.plan = transferMFD.getPlan();
+                    sd.plan         = transferMFD.getPlan();
+                    sd.cislunarPlan = cislunarMFD.getPlan();
                     for (const auto& ev : obcEventQueue.events()) {
                         SimSaveData::SavedEvent se;
                         se.name        = ev.name;
@@ -2171,6 +2172,8 @@ int main(int argc, char* argv[])
                         }
                         if (sd.plan.valid)
                             transferMFD.restorePlan(sd.plan);
+                        if (sd.cislunarPlan.valid)
+                            cislunarMFD.restorePlan(sd.cislunarPlan);
                         {
                             std::vector<ScheduledEvent> restored;
                             for (const auto& se : sd.events) {

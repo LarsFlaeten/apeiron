@@ -173,6 +173,42 @@ void CislunarMFD::compute()
 // ---------------------------------------------------------------------------
 // resolveSelected — recompute Lambert for the selected porkchop cell
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+CislunarPlanSnapshot CislunarMFD::getPlan() const
+{
+    CislunarPlanSnapshot snap;
+    snap.valid    = m_hasData;
+    snap.params   = m_params;      // includes departureR/V override, t0/t1, tofMin/Max
+    snap.selDep   = m_selDep;
+    snap.selTof   = m_selTof;
+    snap.parkIdx  = m_parkIdx;
+    snap.loiPeIdx = m_loiPeIdx;
+    return snap;
+}
+
+void CislunarMFD::restorePlan(const CislunarPlanSnapshot& snap)
+{
+    if (!snap.valid) return;
+    m_params   = snap.params;
+    m_parkIdx  = snap.parkIdx;
+    m_loiPeIdx = snap.loiPeIdx;
+
+    // Recompute porkchop grid from saved parameters (blocking, same as COMP).
+    // m_params already has the correct t0/t1/tofMin/tofMax; compute() will not
+    // reset them because t1 != 0.
+    compute();
+
+    // Restore selected cell and resolve detail.
+    m_selDep = snap.selDep;
+    m_selTof = snap.selTof;
+    if (m_hasData && m_selDep >= 0 && m_selTof >= 0) {
+        resolveSelected();
+        if (m_detail.valid)
+            m_page = 1;   // drop onto the plan page so the user sees the restored state
+    }
+}
+
+// ---------------------------------------------------------------------------
 void CislunarMFD::resolveSelected()
 {
     m_detail = {};

@@ -1,4 +1,5 @@
 #include "SimSave.h"
+#include "CislunarMFD.h"
 
 #include <toml++/toml.hpp>
 #include <filesystem>
@@ -85,6 +86,52 @@ static void planFromToml(const toml::table& tp, TransferPlanSnapshot& snap)
 }
 
 // ---------------------------------------------------------------------------
+// Helpers: build / parse a [cislunar_plan] table.
+// ---------------------------------------------------------------------------
+static toml::table cislunarPlanToToml(const CislunarPlanSnapshot& snap)
+{
+    toml::table tp;
+    const auto& p = snap.params;
+    tp.insert("t0",      p.t0);
+    tp.insert("t1",      p.t1);
+    tp.insert("tof_min", p.tofMin);
+    tp.insert("tof_max", p.tofMax);
+    tp.insert("n_dep",   p.nDep);
+    tp.insert("n_tof",   p.nTof);
+    tp.insert("dep_r",   vec3ToToml(p.departureR));
+    tp.insert("dep_v",   vec3ToToml(p.departureV));
+    tp.insert("sel_dep", snap.selDep);
+    tp.insert("sel_tof", snap.selTof);
+    tp.insert("park_idx",   snap.parkIdx);
+    tp.insert("loi_pe_idx", snap.loiPeIdx);
+    return tp;
+}
+
+static void cislunarPlanFromToml(const toml::table& tp, CislunarPlanSnapshot& snap)
+{
+    snap.valid = true;
+    auto& p = snap.params;
+    p.t0     = tp["t0"]     .value_or(0.0);
+    p.t1     = tp["t1"]     .value_or(0.0);
+    p.tofMin = tp["tof_min"].value_or(0.0);
+    p.tofMax = tp["tof_max"].value_or(0.0);
+    p.nDep   = tp["n_dep"]  .value_or(90);
+    p.nTof   = tp["n_tof"]  .value_or(40);
+    // Fixed for cislunar — always Earth-Moon.
+    p.centralBody          = 399;
+    p.arrivalBody          = 301;
+    p.departureBody        = 399;
+    p.muCentral            = 398600.4418;
+    p.useDepartureOverride = true;
+    p.departureR = tomlToVec3(tp["dep_r"].as_array());
+    p.departureV = tomlToVec3(tp["dep_v"].as_array());
+    snap.selDep   = tp["sel_dep"]   .value_or(-1);
+    snap.selTof   = tp["sel_tof"]   .value_or(-1);
+    snap.parkIdx  = tp["park_idx"]  .value_or(1);
+    snap.loiPeIdx = tp["loi_pe_idx"].value_or(0);
+}
+
+// ---------------------------------------------------------------------------
 bool saveSimState(const std::string& path, const SimSaveData& data)
 {
     try {
@@ -116,6 +163,10 @@ bool saveSimState(const std::string& path, const SimSaveData& data)
         // ---- [transfer_plan] ----
         if (data.plan.valid)
             root.insert("transfer_plan", planToToml(data.plan));
+
+        // ---- [cislunar_plan] ----
+        if (data.cislunarPlan.valid)
+            root.insert("cislunar_plan", cislunarPlanToToml(data.cislunarPlan));
 
         // ---- [[events]] ----
         if (!data.events.empty()) {
@@ -180,6 +231,11 @@ bool loadSimState(const std::string& path, SimSaveData& data)
         data.plan = {};
         if (auto* tp = tbl["transfer_plan"].as_table())
             planFromToml(*tp, data.plan);
+
+        // ---- [cislunar_plan] ----
+        data.cislunarPlan = {};
+        if (auto* tp = tbl["cislunar_plan"].as_table())
+            cislunarPlanFromToml(*tp, data.cislunarPlan);
 
         // ---- [[events]] ----
         data.events.clear();

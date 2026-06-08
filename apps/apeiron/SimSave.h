@@ -2,6 +2,7 @@
 
 #include "apeiron/spacecraft/Spacecraft.h"
 #include "TransferMFD.h"
+#include "CislunarMFD.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -40,7 +41,8 @@ struct SimSaveData
     };
     std::vector<ScState> spacecraft;  // same order as main.cpp spacecraft[]
 
-    TransferPlanSnapshot plan;        // plan.valid=false if no plan was active
+    TransferPlanSnapshot  plan;         // plan.valid=false if no plan was active
+    CislunarPlanSnapshot  cislunarPlan; // cislunarPlan.valid=false if no plan was active
 
     // Scheduled OBC events — empty if none were active at save time.
     struct SavedEvent {

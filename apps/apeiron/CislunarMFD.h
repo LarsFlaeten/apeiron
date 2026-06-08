@@ -15,6 +15,20 @@
 #include <limits>
 
 // ---------------------------------------------------------------------------
+// Serialisable snapshot — saved/restored with the scenario.
+// The porkchop grid is recomputed on restore; only the parameters and
+// selected-cell indices need to be persisted.
+// ---------------------------------------------------------------------------
+struct CislunarPlanSnapshot {
+    bool                       valid     = false;
+    spacecraft::PorkchopParams params;    // includes departureR/V override
+    int                        selDep    = -1;
+    int                        selTof    = -1;
+    int                        parkIdx   = 1;
+    int                        loiPeIdx  = 0;
+};
+
+// ---------------------------------------------------------------------------
 // CislunarMFD — Earth-Moon transfer planning display.
 //
 // Page 0 — Window   porkchop plot (departure × TOF, 90 day × 3–8 day)
@@ -61,6 +75,9 @@ public:
     const char* name() const override { return "LUNAR"; }
 
     void update(const MFDContext& ctx);
+
+    CislunarPlanSnapshot getPlan() const;
+    void                 restorePlan(const CislunarPlanSnapshot& snap);
 
     bool requestMainEngine() const { return m_burnCtrl.requestMainEngine() || m_loiBurnCtrl.requestMainEngine(); }
 
