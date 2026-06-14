@@ -2333,6 +2333,9 @@ int main(int argc, char* argv[])
                 mfdCtx.solarSystemBodies = transferBodies;
 
                 // Ship state relative to reference body.
+                // Also compute the geocentric position of the reference body
+                // so non-player spacecraft can be expressed in the same frame.
+                glm::dvec3 refBodyGeoR(0.0), refBodyGeoV(0.0); // zero = ref IS Earth
                 {
                     astro::PosState rel(ship.position(), ship.velocity());
                     if (refBody.naifId != 399) {
@@ -2343,13 +2346,28 @@ int main(int argc, char* argv[])
                             astro::Spice().getRelativeGeometricState(
                                 static_cast<int>(refBody.naifId), 399,
                                 currentEt, refState, kEclipRef);
+                            refBodyGeoR = glm::dvec3(refState.r.x, refState.r.y, refState.r.z);
+                            refBodyGeoV = glm::dvec3(refState.v.x, refState.v.y, refState.v.z);
                             rel = astro::PosState(
-                                ship.position() - glm::dvec3(refState.r.x, refState.r.y, refState.r.z),
-                                ship.velocity() - glm::dvec3(refState.v.x, refState.v.y, refState.v.z));
+                                ship.position() - refBodyGeoR,
+                                ship.velocity() - refBodyGeoV);
                         } catch (...) {}
                     }
                     mfdCtx.shipRelRef = rel;
                     shipRelRef        = rel;   // expose to navHUD below
+                }
+
+                // Non-player spacecraft states relative to the reference body.
+                {
+                    mfdCtx.actors.clear();
+                    for (int ai = 0; ai < static_cast<int>(spacecraft.size()); ++ai) {
+                        if (ai == playerIdx) continue;
+                        ActorState a;
+                        a.name      = vehicleConfigs[ai].name;
+                        a.posRelRef = spacecraft[ai]->position() - refBodyGeoR;
+                        a.velRelRef = spacecraft[ai]->velocity() - refBodyGeoV;
+                        mfdCtx.actors.push_back(a);
+                    }
                 }
 
                 // Body-fixed orientation, rotation rate, sun direction.

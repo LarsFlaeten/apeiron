@@ -35,6 +35,16 @@ struct BodyEntry {
     int         naifId = 0; // SPICE integer NAIF code
 };
 
+// One entry per non-player spacecraft alive in the simulation.
+// Position and velocity are relative to the current reference body,
+// in ECLIPJ2000 (km / km/s) — same frame as MFDContext::shipRelRef.
+// Built each frame by main.cpp; consumed by rendezvous-type MFDs.
+struct ActorState {
+    std::string name;          // display name from VehicleConfig (e.g. "Gateway")
+    glm::dvec3  posRelRef { 0.0 }; // position  relative to ref body (km)
+    glm::dvec3  velRelRef { 0.0 }; // velocity  relative to ref body (km/s)
+};
+
 struct MFDContext {
     // ---- Time ---------------------------------------------------------------
     astro::EphemerisTime currentEt;    // canonical simulation ET
@@ -77,4 +87,9 @@ struct MFDContext {
     // ---- Bodies available for transfer planning (populated from scenario) ---
     // Excludes Sun and moons; contains planets and barycenters only.
     std::vector<BodyEntry> solarSystemBodies;
+
+    // ---- Other spacecraft in the simulation (non-player, all types) ---------
+    // Position/velocity relative to the current reference body (same frame as
+    // shipRelRef).  Rebuilt each frame by main.cpp.  Used by RendezvousMFD.
+    std::vector<ActorState> actors;
 };
