@@ -1812,12 +1812,13 @@ void CislunarMFD::renderLOI(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     y += 4;
 
     if (m_inMoonSoi) {
-        double rNow=glm::length(m_shipMoonR), vNow=glm::length(m_shipMoonV);
-        double C3  = vNow*vNow - 2.0*kGmMoon/rNow;
+        double rNow = glm::length(m_shipMoonR), vNow = glm::length(m_shipMoonV);
+        double C3   = vNow*vNow - 2.0*kGmMoon/rNow;
+        const double loiIgnET = computeLoiIgnitionET();
         txt(kCyan,"IN SOI  r=%.0f km  v=%.3f km/s",rNow,vNow);
 
         if (C3 > 0.0) {
-            // Compute live approach Pe from angular momentum.
+            // Compute live approach Pe and LOI ΔV from angular momentum.
             glm::dvec3 hv = glm::cross(m_shipMoonR, m_shipMoonV);
             double hMag = glm::length(hv);
             double p    = hMag*hMag/kGmMoon;
@@ -1827,12 +1828,11 @@ void CislunarMFD::renderLOI(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             txt(kGreen, "Hyp Pe  %.0f km  (alt +%.0f km)",rPeActual,rPeActual-kRMoon);
             txt(kOrange,"LOI ΔV (live)  %.3f km/s",dvLOILive);
 
-            // Time-to-Pe, T-to-IGN, burn duration — same as TransferMFD arrival page.
-            const double loiIgnET = computeLoiIgnitionET();
-            const double accel    = (m_shipMass > 1.0) ? m_mainThrustN/m_shipMass : 0.97;
-            const double burnDur  = dvLOILive * 1000.0 / accel;
+            // Time-to-Pe, burn duration, T-to-IGN — same as TransferMFD arrival page.
+            const double accel   = (m_shipMass > 1.0) ? m_mainThrustN/m_shipMass : 0.97;
+            const double burnDur = dvLOILive * 1000.0 / accel;
 
-            // Recompute tToPe via hyperbolic anomaly (mirrors computeLoiIgnitionET logic).
+            // tToPe via hyperbolic anomaly.
             double tToPe = std::numeric_limits<double>::quiet_NaN();
             {
                 const double rv2  = glm::dot(m_shipMoonR, m_shipMoonV);
@@ -1840,9 +1840,8 @@ void CislunarMFD::renderLOI(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                                          - rv2*m_shipMoonV) / kGmMoon;
                 const double ecc2 = glm::length(eVec2);
                 if (ecc2 > 1.0 + 1e-9) {
-                    const double energy2 = 0.5*vNow*vNow - kGmMoon/rNow;
-                    const double absA2   = kGmMoon / (2.0*std::abs(energy2));
-                    const double cosNu2  = std::clamp(
+                    const double absA2 = kGmMoon / (2.0*std::abs(0.5*vNow*vNow - kGmMoon/rNow));
+                    const double cosNu2 = std::clamp(
                         glm::dot(eVec2/ecc2, m_shipMoonR/rNow), -1.0, 1.0);
                     double nu2 = std::acos(cosNu2);
                     if (rv2 < 0.0) nu2 = -nu2;
@@ -1851,21 +1850,20 @@ void CislunarMFD::renderLOI(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                     if (std::isfinite(argF2) && std::abs(argF2) < 1.0-1e-9 && absA2 > 1.0) {
                         const double F2  = 2.0*std::atanh(argF2);
                         const double Mh2 = ecc2*std::sinh(F2) - F2;
-                        const double n2  = std::sqrt(kGmMoon/(absA2*absA2*absA2));
-                        tToPe = -(Mh2/n2);
+                        tToPe = -(Mh2 / std::sqrt(kGmMoon/(absA2*absA2*absA2)));
                     }
                 }
             }
 
             y += 2;
             if (std::isfinite(tToPe)) {
-                char bufTpe[16], bufIgn[16], bufBurn[16];
+                char bufTpe[16], bufBurn[16];
                 fmtTplus(tToPe,   bufTpe,  sizeof(bufTpe));
                 fmtHMS  (burnDur, bufBurn, sizeof(bufBurn));
-                const ImU32 tPeCol = (tToPe >= 0.0) ? kCyan : kOrange;
-                txt(tPeCol,  "T-to-Pe   %s", bufTpe);
+                txt((tToPe >= 0.0) ? kCyan : kOrange, "T-to-Pe   %s", bufTpe);
                 txt(kYellow, "Burn time %s  (%.3f km/s)", bufBurn, dvLOILive);
                 if (loiIgnET > m_currentET) {
+                    char bufIgn[16];
                     fmtTplus(loiIgnET - m_currentET, bufIgn, sizeof(bufIgn));
                     txt(kCyan, "T-to-IGN  %s  (Pe - 0.5 burn)", bufIgn);
                 } else if (tToPe > 0.0) {
@@ -1873,21 +1871,27 @@ void CislunarMFD::renderLOI(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                 }
             }
         }
+
         y += 4;
 
-        // Burn controller status.
-        const auto ph = m_loiBurnCtrl.phase();
-        if (ph != BurnPhase::Idle) {
-            static const char* kPhN[]={"","ARMED","PRE-IGN","EXEC","DONE"};
-            const ImU32 phCol=(ph==BurnPhase::Executing)?kRed:kYellow;
-            txt(phCol,"LOI: %s",kPhN[static_cast<int>(ph)]);
-            if (ph==BurnPhase::Armed||ph==BurnPhase::PreIgnition) {
-                char hms[16]; fmtHMS(m_loiBurnCtrl.timeToIgnition(m_currentET),hms,sizeof(hms));
-                txt(kYellow,"T-IGN  %s",hms);
+        // Arm status — T-ign from BurnController (matches live ignitionET set by
+        // updateIgnitionET each frame). Retro slew auto-asserted at T-60 s.
+        {
+            const auto ph = m_loiBurnCtrl.phase();
+            if (ph == BurnPhase::Armed || ph == BurnPhase::PreIgnition) {
+                char bufCd[16];
+                fmtTplus(m_loiBurnCtrl.plan().ignitionET - m_currentET, bufCd, sizeof(bufCd));
+                txt(kCyan,  "LOI ARMED  T-ign %s", bufCd);
+                txt(kDim,   " retro at T-60s  [DSARM] to cancel");
+            } else if (ph == BurnPhase::Executing) {
+                txt(kRed,   "LOI EXECUTING");
+            } else if (ph == BurnPhase::Complete) {
+                txt(kGreen, "LOI COMPLETE");
+            } else if (loiIgnET > m_currentET) {
+                txt(kDim,   "[ARM] to arm LOI autopilot");
             }
-        } else {
-            txt(kDim,"[ARM on right to execute]");
         }
+        y += 4;
     } else {
         txt(kDim,"Outside Moon SOI");
         txt(kDim,"Transit in progress...");
