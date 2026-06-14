@@ -871,6 +871,26 @@ void CislunarMFD::onRight(int slot)
                 plan.slewOnArm      = false;
                 if (m_eventQueue) m_eventQueue->cancelByName("LOI");
                 m_loiBurnCtrl.arm(plan, m_autopilot, m_eventQueue);
+
+                // Schedule approach TCMs between now and LOI ignition.
+                // ≥12 h: F1 at midpoint, F2 halfway between F1 and IGN.
+                //  6-12 h: F1 only.
+                // <6 h: none (too close to bother).
+                if (m_eventQueue && plan.ignitionET > m_currentET) {
+                    m_eventQueue->cancelByPrefix("TCM-");
+                    const double T = plan.ignitionET - m_currentET;
+                    constexpr double k6h  = 6.0  * 3600.0;
+                    constexpr double k12h = 12.0 * 3600.0;
+                    if (T >= k12h) {
+                        m_eventQueue->schedule("TCM-F1", m_currentET + T * 0.50,
+                                               false, m_currentET);
+                        m_eventQueue->schedule("TCM-F2", m_currentET + T * 0.75,
+                                               false, m_currentET);
+                    } else if (T >= k6h) {
+                        m_eventQueue->schedule("TCM-F1", m_currentET + T * 0.50,
+                                               false, m_currentET);
+                    }
+                }
             }
         }
         break;
