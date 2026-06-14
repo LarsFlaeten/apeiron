@@ -190,6 +190,7 @@ private:
     glm::dvec3 m_shipMoonR    { 0.0 };
     glm::dvec3 m_shipMoonV    { 0.0 };
     bool       m_inMoonSoi    = false;
+    double     m_moonPeCurrent = std::numeric_limits<double>::quiet_NaN(); // km alt, from B-plane
     bool       m_wasInMoonSoi = false;  // previous-frame SOI state for edge detection
     bool       m_soiEntryPending = false; // one-shot: consumed by main to drop to 1×
 

@@ -81,6 +81,8 @@ void CislunarMFD::update(const MFDContext& ctx)
         if (m_inMoonSoi) {
             m_shipMoonR = m_shipR - moonPos;
             m_shipMoonV = m_shipV - moonVel;
+        } else {
+            m_moonPeCurrent = std::numeric_limits<double>::quiet_NaN();
         }
         // Rising edge — announce and flag for main.cpp to drop to 1×.
         if (m_inMoonSoi && !m_wasInMoonSoi) {
@@ -119,22 +121,71 @@ void CislunarMFD::update(const MFDContext& ctx)
         }
     }
 
-    // Inside Moon SOI: expose retrograde LOI direction as TCM vector so the
-    // nav-console autopilot can orient the ship for the LOI burn.
+    // Inside Moon SOI (hyperbolic approach): B-plane targeting correction
+    // to achieve the desired lunar periapsis altitude.
+    // Same lever-arm formula used by TransferMFD::tickBplane():
+    //   δv = -v∞/(r·Ŝ) · δB,  where δB is the B-plane correction vector.
     if (m_inMoonSoi && m_loiBurnCtrl.phase() != BurnPhase::Armed
             && m_loiBurnCtrl.phase() != BurnPhase::PreIgnition
             && m_loiBurnCtrl.phase() != BurnPhase::Executing
             && m_loiBurnCtrl.phase() != BurnPhase::Complete) {
-        const double vNow = glm::length(m_shipMoonV);
-        const double rNow = glm::length(m_shipMoonR);
-        if (vNow > 0.01 && rNow > 1.0) {
-            const double C3 = vNow*vNow - 2.0*kGmMoon/rNow;
-            if (C3 > 0.0) {
-                const double rPe      = kRMoon + kLoiPeAlts[m_loiPeIdx];
-                const double dvLOI    = std::sqrt(C3 + 2.0*kGmMoon/rPe)
-                                      - std::sqrt(kGmMoon/rPe);
-                m_tcmDv   = -glm::normalize(m_shipMoonV) * dvLOI;
-                m_tcmValid = true;
+        const glm::dvec3& r  = m_shipMoonR;
+        const glm::dvec3& v  = m_shipMoonV;
+        const double rMag    = glm::length(r);
+        const double vSq     = glm::dot(v, v);
+        if (rMag > 1.0 && vSq > 0.0) {
+            const double vInfSq = vSq - 2.0*kGmMoon/rMag;
+            if (vInfSq > 0.0) {
+                const double vInf  = std::sqrt(vInfSq);
+                const glm::dvec3 hVec = glm::cross(r, v);
+                const double h     = glm::length(hVec);
+                if (h > 1e-6) {
+                    // Current periapsis via B-plane impact parameter.
+                    const double b     = h / vInf;
+                    const double alpha = kGmMoon / vInfSq;
+                    // (rPeActual cached for display on coast page)
+                    m_moonPeCurrent = -alpha + std::sqrt(alpha*alpha + b*b) - kRMoon;
+
+                    const double rPeTarget = kRMoon + kLoiPeAlts[m_loiPeIdx];
+                    const double bTarget   = std::sqrt(rPeTarget*rPeTarget
+                                             + 2.0*kGmMoon*rPeTarget/vInfSq);
+
+                    // Incoming asymptote direction from eccentricity vector.
+                    const double rv   = glm::dot(r, v);
+                    const glm::dvec3 eVec = ((vSq - kGmMoon/rMag)*r - rv*v) / kGmMoon;
+                    const double ecc  = glm::length(eVec);
+                    glm::dvec3 sHat;
+                    if (ecc > 1.0 + 1e-6) {
+                        const glm::dvec3 eHat = eVec / ecc;
+                        const glm::dvec3 hHat = hVec / h;
+                        const glm::dvec3 qHat = glm::cross(hHat, eHat);
+                        const double sinA = std::sqrt(std::max(0.0, 1.0 - 1.0/(ecc*ecc)));
+                        sHat = eHat/ecc + sinA*qHat;
+                    } else {
+                        sHat = glm::normalize(v);
+                    }
+
+                    // B-plane basis.
+                    const glm::dvec3 hHat = hVec / h;
+                    const glm::dvec3 zEcl(0.0, 0.0, 1.0);
+                    glm::dvec3 tRaw = glm::cross(sHat, zEcl);
+                    const glm::dvec3 tHat = (glm::length(tRaw) > 1e-6)
+                        ? glm::normalize(tRaw)
+                        : glm::normalize(glm::cross(sHat, glm::dvec3(1.0, 0.0, 0.0)));
+                    const glm::dvec3 rHatBpl = glm::cross(sHat, tHat);
+
+                    // FREE inclination mode: keep current B-direction, only change magnitude.
+                    const double phi = std::atan2(glm::dot(hHat, tHat),
+                                                  -glm::dot(hHat, rHatBpl));
+                    const glm::dvec3 dB = (bTarget - b) * std::cos(phi) * tHat
+                                        + (bTarget - b) * std::sin(phi) * rHatBpl;
+
+                    const double rDotS = glm::dot(r, sHat);
+                    if (rDotS < 0.0) {  // inbound leg only
+                        m_tcmDv   = -(vInf / rDotS) * dB;
+                        m_tcmValid = true;
+                    }
+                }
             }
         }
     }
@@ -1590,12 +1641,12 @@ void CislunarMFD::renderCoast(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     }
     sep();
 
-    // TCM course error / LOI orientation.
-    add(kCyan, m_inMoonSoi ? "LOI BURN (retrograde)" : "COURSE ERROR (TCM)");
+    // TCM course error.
+    add(kCyan, m_inMoonSoi ? "APPROACH CORRECTION" : "COURSE ERROR (TCM)");
     if (m_tcmValid) {
         double dvMag = glm::length(m_tcmDv) * 1000.0;  // m/s
-        ImU32 dvCol = (dvMag < 1.0)  ? kGreen
-                    : (dvMag < 10.0) ? kYellow : kOrange;
+        ImU32 dvCol = (dvMag < 5.0)  ? kGreen
+                    : (dvMag < 50.0) ? kYellow : kOrange;
         add(dvCol," dV  %.1f m/s",dvMag);
         if (!m_inMoonSoi && dvMag > 0.5) {
             // Direction relative to geocentric prograde.
@@ -1606,10 +1657,16 @@ void CislunarMFD::renderCoast(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                 dvMag*dvMag - radial*radial));
             add(dvCol," radial %+.1f  lateral %.1f m/s",radial,lateral);
         }
-        if (m_inMoonSoi)
-            add(kDim," (point retrograde, then arm LOI)");
+        if (m_inMoonSoi && !std::isnan(m_moonPeCurrent)) {
+            ImU32 peCol = (m_moonPeCurrent > 0.0) ? kGreen : kOrange;
+            add(peCol," Pe now %+.0f km  →  tgt +%.0f km",
+                m_moonPeCurrent, kLoiPeAlts[m_loiPeIdx]);
+        }
     } else {
-        add(kGreen," On target (< 1 h TOF or computing)");
+        if (m_inMoonSoi)
+            add(kGreen," Pe on target — arm LOI");
+        else
+            add(kGreen," On target (< 1 h TOF or computing)");
     }
     sep();
 
