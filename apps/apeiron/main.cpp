@@ -1286,6 +1286,13 @@ int main(int argc, char* argv[])
                 transferMFD.scheduleFineApproachTcms();
             }
 
+            // Drop to 1× on Moon SOI entry during cislunar coast so the pilot
+            // can switch to the LOI page and arm the capture burn.
+            if (cislunarMFD.consumeSoiEntry()) {
+                simSpeedTarget          = 1.0;
+                simSecondsPerRealSecond = 1.0;
+            }
+
             // Drop to 1× on TCM warning rising edge; pilot can speed up freely after.
             if (transferMFD.consumeTcmWarnDrop()) {
                 simSpeedTarget          = 1.0;

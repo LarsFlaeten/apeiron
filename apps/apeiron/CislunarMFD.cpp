@@ -2,6 +2,7 @@
 #include "OrbitDiagram.h"
 
 #include "apeiron/spacecraft/Autopilot.h"
+#include "VoiceAnnouncer.h"
 
 #include <astro/SpiceCore.h>
 #include <astro/ReferenceFrame.h>
@@ -81,6 +82,12 @@ void CislunarMFD::update(const MFDContext& ctx)
             m_shipMoonR = m_shipR - moonPos;
             m_shipMoonV = m_shipV - moonVel;
         }
+        // Rising edge — announce and flag for main.cpp to drop to 1×.
+        if (m_inMoonSoi && !m_wasInMoonSoi) {
+            obc::speak("Entered Moon sphere of influence.");
+            m_soiEntryPending = true;
+        }
+        m_wasInMoonSoi = m_inMoonSoi;
     } catch (...) {}
 
     m_burnCtrl.tick(m_currentET, m_shipR, m_shipV);
@@ -109,6 +116,26 @@ void CislunarMFD::update(const MFDContext& ctx)
                     m_tcmValid = true;
                 }
             } catch (...) {}
+        }
+    }
+
+    // Inside Moon SOI: expose retrograde LOI direction as TCM vector so the
+    // nav-console autopilot can orient the ship for the LOI burn.
+    if (m_inMoonSoi && m_loiBurnCtrl.phase() != BurnPhase::Armed
+            && m_loiBurnCtrl.phase() != BurnPhase::PreIgnition
+            && m_loiBurnCtrl.phase() != BurnPhase::Executing
+            && m_loiBurnCtrl.phase() != BurnPhase::Complete) {
+        const double vNow = glm::length(m_shipMoonV);
+        const double rNow = glm::length(m_shipMoonR);
+        if (vNow > 0.01 && rNow > 1.0) {
+            const double C3 = vNow*vNow - 2.0*kGmMoon/rNow;
+            if (C3 > 0.0) {
+                const double rPe      = kRMoon + kLoiPeAlts[m_loiPeIdx];
+                const double dvLOI    = std::sqrt(C3 + 2.0*kGmMoon/rPe)
+                                      - std::sqrt(kGmMoon/rPe);
+                m_tcmDv   = -glm::normalize(m_shipMoonV) * dvLOI;
+                m_tcmValid = true;
+            }
         }
     }
 
@@ -1563,15 +1590,15 @@ void CislunarMFD::renderCoast(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     }
     sep();
 
-    // TCM course error.
-    add(kCyan,"COURSE ERROR (TCM)");
+    // TCM course error / LOI orientation.
+    add(kCyan, m_inMoonSoi ? "LOI BURN (retrograde)" : "COURSE ERROR (TCM)");
     if (m_tcmValid) {
         double dvMag = glm::length(m_tcmDv) * 1000.0;  // m/s
         ImU32 dvCol = (dvMag < 1.0)  ? kGreen
                     : (dvMag < 10.0) ? kYellow : kOrange;
         add(dvCol," dV  %.1f m/s",dvMag);
-        if (dvMag > 0.5) {
-            // Direction relative to prograde.
+        if (!m_inMoonSoi && dvMag > 0.5) {
+            // Direction relative to geocentric prograde.
             double vMag = glm::length(m_shipV);
             double radial = (vMag > 1e-6)
                 ? glm::dot(m_tcmDv, m_shipV) / vMag * 1000.0 : 0.0;
@@ -1579,10 +1606,10 @@ void CislunarMFD::renderCoast(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                 dvMag*dvMag - radial*radial));
             add(dvCol," radial %+.1f  lateral %.1f m/s",radial,lateral);
         }
+        if (m_inMoonSoi)
+            add(kDim," (point retrograde, then arm LOI)");
     } else {
-        add(m_inMoonSoi ? kDim : kGreen,
-            m_inMoonSoi ? " In Moon SOI — use LOI page"
-                        : " On target (< 1 h TOF or computing)");
+        add(kGreen," On target (< 1 h TOF or computing)");
     }
     sep();
 

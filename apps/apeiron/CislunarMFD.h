@@ -85,6 +85,15 @@ public:
     // or when the correction is negligible. Fed to the nav-console TCM autopilot.
     glm::dvec3 getTcmDv() const { return m_tcmValid ? m_tcmDv : glm::dvec3(0.0); }
 
+    // Returns true once on the rising edge of Moon SOI entry, then resets.
+    // main.cpp uses this to drop time-acceleration to 1× so the pilot can
+    // arm the LOI burn.
+    bool consumeSoiEntry() {
+        const bool v = m_soiEntryPending;
+        m_soiEntryPending = false;
+        return v;
+    }
+
     double maxSimSpeed() const {
         const double a = m_burnCtrl.maxSimSpeed();
         const double b = m_loiBurnCtrl.maxSimSpeed();
@@ -178,9 +187,11 @@ private:
     bool       m_tcmValid = false;
 
     // ---- LOI approach state (Moon-centric) ----
-    glm::dvec3 m_shipMoonR { 0.0 };
-    glm::dvec3 m_shipMoonV { 0.0 };
-    bool       m_inMoonSoi = false;
+    glm::dvec3 m_shipMoonR    { 0.0 };
+    glm::dvec3 m_shipMoonV    { 0.0 };
+    bool       m_inMoonSoi    = false;
+    bool       m_wasInMoonSoi = false;  // previous-frame SOI state for edge detection
+    bool       m_soiEntryPending = false; // one-shot: consumed by main to drop to 1×
 
     // Zoom-box state for porkchop page (right-drag to draw).
     ImVec2 m_zoomStart  { 0.0f, 0.0f };
