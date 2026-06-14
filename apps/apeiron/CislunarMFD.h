@@ -168,6 +168,15 @@ private:
     static constexpr double kLoiPeAlts[] = { 100.0, 200.0, 500.0, 1000.0 };
     int m_loiPeIdx = 0;  // default 100 km
 
+    // LOI insertion inclination presets (ecliptic, deg). -1 = FREE (Pe only).
+    static constexpr double kLoiIncDeg[] =
+        { -1.0, 0.0, 30.0, 60.0, 90.0, 120.0, 150.0, 180.0 };
+    static constexpr const char* kLoiIncName[] =
+        { "FREE", "PRO 0", "30", "60", "POL 90", "120", "150", "RET 180" };
+    int    m_loiIncIdx          = 0;   // 0 = FREE
+    double m_insertionIncDeg    = 0.0; // current predicted insertion inclination (deg, ecliptic)
+    double m_minAchievableIncDeg = 0.0;
+
     static constexpr double kGmEarth = 398600.4418; // km³/s²
     static constexpr double kGmMoon  = 4902.800118;  // km³/s²
     static constexpr double kREarth  = 6371.0;       // km

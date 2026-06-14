@@ -175,11 +175,49 @@ void CislunarMFD::update(const MFDContext& ctx)
                         : glm::normalize(glm::cross(sHat, glm::dvec3(1.0, 0.0, 0.0)));
                     const glm::dvec3 rHatBpl = glm::cross(sHat, tHat);
 
-                    // FREE inclination mode: keep current B-direction, only change magnitude.
-                    const double phi = std::atan2(glm::dot(hHat, tHat),
-                                                  -glm::dot(hHat, rHatBpl));
-                    const glm::dvec3 dB = (bTarget - b) * std::cos(phi) * tHat
-                                        + (bTarget - b) * std::sin(phi) * rHatBpl;
+                    // Predicted insertion inclination from current orbit normal.
+                    m_insertionIncDeg = std::acos(std::clamp(
+                        glm::dot(hHat, zEcl), -1.0, 1.0)) * 180.0 / M_PI;
+
+                    // B-plane phase angle of current orbit.
+                    const double phiCurrent = std::atan2(glm::dot(hHat, tHat),
+                                                         -glm::dot(hHat, rHatBpl));
+
+                    // Target phase angle from inclination preset.
+                    double phiTarget;
+                    if (m_loiIncIdx <= 0 || kLoiIncDeg[m_loiIncIdx] < 0.0) {
+                        phiTarget = phiCurrent;  // FREE: keep direction, only change |B|
+                        m_minAchievableIncDeg = 0.0;
+                    } else {
+                        const double incTgtRad = kLoiIncDeg[m_loiIncIdx] * M_PI / 180.0;
+                        const double cosInc    = std::cos(incTgtRad);
+                        const double a         = glm::dot(tHat,    zEcl);
+                        const double c         = glm::dot(rHatBpl, zEcl);
+                        const double amp       = std::sqrt(a*a + c*c);
+                        m_minAchievableIncDeg  = std::acos(std::clamp(amp, 0.0, 1.0)) * 180.0 / M_PI;
+                        if (amp < 1e-9) {
+                            phiTarget = phiCurrent;
+                        } else {
+                            auto wrapPi = [](double x) {
+                                while (x >  M_PI) x -= 2.0*M_PI;
+                                while (x < -M_PI) x += 2.0*M_PI;
+                                return x;
+                            };
+                            const double arg  = std::clamp(cosInc / amp, -1.0, 1.0);
+                            const double base = std::atan2(c, a);
+                            const double phi0 = wrapPi(base + std::asin(arg));
+                            const double phi1 = wrapPi(base + M_PI - std::asin(arg));
+                            phiTarget = (std::abs(wrapPi(phi0 - phiCurrent))
+                                      <= std::abs(wrapPi(phi1 - phiCurrent))) ? phi0 : phi1;
+                        }
+                    }
+
+                    const double btCurrent = b * std::cos(phiCurrent);
+                    const double brCurrent = b * std::sin(phiCurrent);
+                    const double btTarget  = bTarget * std::cos(phiTarget);
+                    const double brTarget  = bTarget * std::sin(phiTarget);
+                    const glm::dvec3 dB = (btTarget - btCurrent) * tHat
+                                        + (brTarget - brCurrent) * rHatBpl;
 
                     const double rDotS = glm::dot(r, sHat);
                     if (rDotS < 0.0) {  // inbound leg only
@@ -609,6 +647,8 @@ const char* CislunarMFD::leftLabel(int slot) const
         if (slot == 4) return "BACK";
         return "";
     case 4:  // LOI
+        if (slot == 0) return "INC<";
+        if (slot == 1) return "INC>";
         if (slot == 3) return "PE";
         if (slot == 4) return "BACK";
         return "";
@@ -719,10 +759,14 @@ void CislunarMFD::onLeft(int slot)
     case 3:
         if (slot == 4) m_page = 2;
         break;
-    case 4:
+    case 4: {
+        const int nInc = static_cast<int>(std::size(kLoiIncDeg));
+        if (slot == 0) m_loiIncIdx = (m_loiIncIdx + nInc - 1) % nInc;
+        if (slot == 1) m_loiIncIdx = (m_loiIncIdx + 1) % nInc;
         if (slot == 3) m_loiPeIdx = (m_loiPeIdx + 1) % static_cast<int>(std::size(kLoiPeAlts));
         if (slot == 4) m_page = 3;
         break;
+    }
     default: break;
     }
 }
@@ -1827,6 +1871,17 @@ void CislunarMFD::renderLOI(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             double dvLOILive = std::sqrt(C3+2.0*kGmMoon/rPe) - std::sqrt(kGmMoon/rPe);
             txt(kGreen, "Hyp Pe  %.0f km  (alt +%.0f km)",rPeActual,rPeActual-kRMoon);
             txt(kOrange,"LOI ΔV (live)  %.3f km/s",dvLOILive);
+
+            // Inclination (ecliptic).
+            txt(kCyan,  "Inc now  %.1f°  (ecl)",m_insertionIncDeg);
+            if (m_loiIncIdx == 0) {
+                txt(kDim,    "Inc tgt  FREE (Pe only)  [INC]");
+            } else {
+                const double tgt = kLoiIncDeg[m_loiIncIdx];
+                txt(kYellow, "Inc tgt  %s = %.0f°  [INC]", kLoiIncName[m_loiIncIdx], tgt);
+                if (m_minAchievableIncDeg > 0.1 && tgt < m_minAchievableIncDeg - 0.5)
+                    txt(kOrange,"  Min achievable  %.1f°", m_minAchievableIncDeg);
+            }
 
             // Time-to-Pe, burn duration, T-to-IGN — same as TransferMFD arrival page.
             const double accel   = (m_shipMass > 1.0) ? m_mainThrustN/m_shipMass : 0.97;
