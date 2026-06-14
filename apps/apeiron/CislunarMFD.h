@@ -119,6 +119,7 @@ private:
     void computePlaneGrid();
 
     double computeTliIgnitionET() const;
+    double computeLoiIgnitionET() const; // live Pe time from Moon-centric hyperbolic anomaly
 
     static ImU32 dvColor(float t);
 

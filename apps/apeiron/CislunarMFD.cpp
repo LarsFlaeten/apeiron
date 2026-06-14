@@ -198,6 +198,14 @@ void CislunarMFD::update(const MFDContext& ctx)
         if (ignET > m_currentET)
             m_burnCtrl.updateIgnitionET(ignET, m_eventQueue);
     }
+
+    // Keep "LOI-IGN" synchronised to the live hyperbolic periapsis time.
+    if (m_inMoonSoi && (m_loiBurnCtrl.phase() == BurnPhase::Armed
+                     || m_loiBurnCtrl.phase() == BurnPhase::PreIgnition)) {
+        const double ignET = computeLoiIgnitionET();
+        if (ignET > m_currentET)
+            m_loiBurnCtrl.updateIgnitionET(ignET, m_eventQueue);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -515,6 +523,56 @@ double CislunarMFD::computeTliIgnitionET() const
 }
 
 // ---------------------------------------------------------------------------
+// computeLoiIgnitionET — Pe passage time from current Moon-centric hyperbolic
+// state, minus half the LOI burn duration.  Same algorithm as TransferMFD's
+// tickApproach().  Returns 0 if the geometry is degenerate or past Pe.
+// ---------------------------------------------------------------------------
+double CislunarMFD::computeLoiIgnitionET() const
+{
+    if (!m_inMoonSoi) return 0.0;
+    const double rMag = glm::length(m_shipMoonR);
+    const double vSq  = glm::dot(m_shipMoonV, m_shipMoonV);
+    if (rMag < 1.0 || vSq < 1e-12) return 0.0;
+
+    const double vInfSq = vSq - 2.0*kGmMoon/rMag;
+    if (vInfSq <= 0.0) return 0.0;   // already captured; LOI page handles it
+
+    const double rv   = glm::dot(m_shipMoonR, m_shipMoonV);
+    const glm::dvec3 eVec = ((vSq - kGmMoon/rMag)*m_shipMoonR - rv*m_shipMoonV) / kGmMoon;
+    const double ecc  = glm::length(eVec);
+    if (ecc <= 1.0 + 1e-9) return 0.0;
+
+    const double energy = 0.5*vSq - kGmMoon/rMag;
+    const double absA   = kGmMoon / (2.0*std::abs(energy));
+
+    // True anomaly → hyperbolic anomaly → time from Pe.
+    const double cosNu = std::clamp(glm::dot(eVec/ecc, m_shipMoonR/rMag), -1.0, 1.0);
+    double nu = std::acos(cosNu);
+    if (rv < 0.0) nu = -nu;   // approaching Pe: nu < 0
+
+    const double k    = std::sqrt((ecc - 1.0) / (ecc + 1.0));
+    const double argF = k * std::tan(nu * 0.5);
+    if (!std::isfinite(argF) || std::abs(argF) >= 1.0 - 1e-9) return 0.0;
+    const double F    = 2.0 * std::atanh(argF);
+    if (!std::isfinite(F) || absA < 1.0) return 0.0;
+
+    const double M_h    = ecc * std::sinh(F) - F;
+    const double n      = std::sqrt(kGmMoon / (absA*absA*absA));
+    const double tToPe  = -(M_h / n);   // > 0 approaching, < 0 past Pe
+
+    // LOI burn duration from live v∞.
+    const double rPe      = kRMoon + kLoiPeAlts[m_loiPeIdx];
+    const double vAtPe    = std::sqrt(vInfSq + 2.0*kGmMoon/rPe);
+    const double vCirc    = std::sqrt(kGmMoon/rPe);
+    const double dvLOI    = std::max(0.0, vAtPe - vCirc);
+    const double accel    = (m_shipMass > 1.0) ? m_mainThrustN/m_shipMass : 0.97;
+    const double burnDur  = dvLOI * 1000.0 / accel;
+
+    const double tIgn = tToPe - burnDur * 0.5;
+    return (tIgn > -burnDur) ? m_currentET + tIgn : 0.0;
+}
+
+// ---------------------------------------------------------------------------
 // Button labels
 // ---------------------------------------------------------------------------
 const char* CislunarMFD::leftLabel(int slot) const
@@ -759,7 +817,7 @@ void CislunarMFD::onRight(int slot)
 
                 BurnPlan plan;
                 plan.name           = "LOI";
-                plan.ignitionET     = m_detail.arrET; // refined when in SOI
+                plan.ignitionET     = computeLoiIgnitionET(); // Pe time from live hyperbolic state
                 plan.c3Required     = -kGmMoon / rPe;
                 plan.depBodyMu      = kGmMoon;
                 plan.dvMagnitude    = dvLOI;
@@ -1767,6 +1825,52 @@ void CislunarMFD::renderLOI(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             double dvLOILive = std::sqrt(C3+2.0*kGmMoon/rPe) - std::sqrt(kGmMoon/rPe);
             txt(kGreen, "Hyp Pe  %.0f km  (alt +%.0f km)",rPeActual,rPeActual-kRMoon);
             txt(kOrange,"LOI ΔV (live)  %.3f km/s",dvLOILive);
+
+            // Time-to-Pe, T-to-IGN, burn duration — same as TransferMFD arrival page.
+            const double loiIgnET = computeLoiIgnitionET();
+            const double accel    = (m_shipMass > 1.0) ? m_mainThrustN/m_shipMass : 0.97;
+            const double burnDur  = dvLOILive * 1000.0 / accel;
+
+            // Recompute tToPe via hyperbolic anomaly (mirrors computeLoiIgnitionET logic).
+            double tToPe = std::numeric_limits<double>::quiet_NaN();
+            {
+                const double rv2  = glm::dot(m_shipMoonR, m_shipMoonV);
+                const glm::dvec3 eVec2 = ((vNow*vNow - kGmMoon/rNow)*m_shipMoonR
+                                         - rv2*m_shipMoonV) / kGmMoon;
+                const double ecc2 = glm::length(eVec2);
+                if (ecc2 > 1.0 + 1e-9) {
+                    const double energy2 = 0.5*vNow*vNow - kGmMoon/rNow;
+                    const double absA2   = kGmMoon / (2.0*std::abs(energy2));
+                    const double cosNu2  = std::clamp(
+                        glm::dot(eVec2/ecc2, m_shipMoonR/rNow), -1.0, 1.0);
+                    double nu2 = std::acos(cosNu2);
+                    if (rv2 < 0.0) nu2 = -nu2;
+                    const double k2    = std::sqrt((ecc2-1.0)/(ecc2+1.0));
+                    const double argF2 = k2 * std::tan(nu2*0.5);
+                    if (std::isfinite(argF2) && std::abs(argF2) < 1.0-1e-9 && absA2 > 1.0) {
+                        const double F2  = 2.0*std::atanh(argF2);
+                        const double Mh2 = ecc2*std::sinh(F2) - F2;
+                        const double n2  = std::sqrt(kGmMoon/(absA2*absA2*absA2));
+                        tToPe = -(Mh2/n2);
+                    }
+                }
+            }
+
+            y += 2;
+            if (std::isfinite(tToPe)) {
+                char bufTpe[16], bufIgn[16], bufBurn[16];
+                fmtTplus(tToPe,   bufTpe,  sizeof(bufTpe));
+                fmtHMS  (burnDur, bufBurn, sizeof(bufBurn));
+                const ImU32 tPeCol = (tToPe >= 0.0) ? kCyan : kOrange;
+                txt(tPeCol,  "T-to-Pe   %s", bufTpe);
+                txt(kYellow, "Burn time %s  (%.3f km/s)", bufBurn, dvLOILive);
+                if (loiIgnET > m_currentET) {
+                    fmtTplus(loiIgnET - m_currentET, bufIgn, sizeof(bufIgn));
+                    txt(kCyan, "T-to-IGN  %s  (Pe - 0.5 burn)", bufIgn);
+                } else if (tToPe > 0.0) {
+                    txt(kOrange,"T-to-IGN  OVERDUE — arm LOI now");
+                }
+            }
         }
         y += 4;
 
