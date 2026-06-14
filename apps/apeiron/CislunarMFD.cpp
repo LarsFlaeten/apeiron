@@ -125,9 +125,10 @@ void CislunarMFD::update(const MFDContext& ctx)
     // to achieve the desired lunar periapsis altitude.
     // Same lever-arm formula used by TransferMFD::tickBplane():
     //   δv = -v∞/(r·Ŝ) · δB,  where δB is the B-plane correction vector.
-    if (m_inMoonSoi && m_loiBurnCtrl.phase() != BurnPhase::Armed
-            && m_loiBurnCtrl.phase() != BurnPhase::PreIgnition
-            && m_loiBurnCtrl.phase() != BurnPhase::Executing
+    // B-plane correction is valid even while LOI is Armed — the approach
+    // Pe fix and the capture burn are independent maneuvers.  Only suppress
+    // during the actual burn and after completion.
+    if (m_inMoonSoi && m_loiBurnCtrl.phase() != BurnPhase::Executing
             && m_loiBurnCtrl.phase() != BurnPhase::Complete) {
         const glm::dvec3& r  = m_shipMoonR;
         const glm::dvec3& v  = m_shipMoonV;
