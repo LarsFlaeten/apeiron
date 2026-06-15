@@ -438,6 +438,57 @@ void OrbitalMFD::update(const astro::PosState&     state,
     }
     // Current spacecraft direction (used for ship dot on circular orbits).
     m_shipDir3D = (r > 1.0e-6) ? glm::normalize(s.r) : m_periDir3D;
+
+    // --- AN/DN nodes w.r.t. target orbit plane ---
+    // AN = where ship orbit crosses target plane going "up" (same convention as TransferMFD).
+    m_hasNodes = false;
+    if (m_hasTgt && !isHyp && T > 0.0 && h > 1.0e-10) {
+        const glm::dvec3 anVec = glm::cross(m_tgtNormDir, m_normDir3D);
+        const double anLen = glm::length(anVec);
+        if (anLen > 1.0e-6) {
+            m_hasNodes = true;
+            const glm::dvec3 anDir = anVec / anLen;
+
+            double ta_AN = std::atan2(glm::dot(anDir, m_qDir3D),
+                                      glm::dot(anDir, m_periDir3D));
+            double ta_DN = ta_AN + kPi;
+            // normalise to [0, 2π)
+            auto norm2pi = [](double x) {
+                while (x <  0.0)      x += kTwoPi;
+                while (x >= kTwoPi)   x -= kTwoPi;
+                return x;
+            };
+            ta_AN = norm2pi(ta_AN);
+            ta_DN = norm2pi(ta_DN);
+
+            m_taToDeg_AN = ta_AN * kRad2Deg;
+            m_taToDeg_DN = ta_DN * kRad2Deg;
+
+            const double slr = a * (1.0 - e * e);
+            const double rAN = slr / (1.0 + e * std::cos(ta_AN));
+            const double rDN = slr / (1.0 + e * std::cos(ta_DN));
+            m_anPos3D = rAN * (std::cos(ta_AN) * m_periDir3D + std::sin(ta_AN) * m_qDir3D);
+            m_dnPos3D = rDN * (std::cos(ta_DN) * m_periDir3D + std::sin(ta_DN) * m_qDir3D);
+
+            // Time to AN and DN via mean anomaly (elliptic only)
+            if (trueValid && e < 0.9998) {
+                const double n     = kTwoPi / T;
+                double M_now = astro::OrbitElements::meanAnomalyFromTrueAnomaly(nu, e);
+                double M_AN  = astro::OrbitElements::meanAnomalyFromTrueAnomaly(ta_AN, e);
+                double M_DN  = astro::OrbitElements::meanAnomalyFromTrueAnomaly(ta_DN, e);
+                if (M_now < 0.0) M_now += kTwoPi;
+                if (M_AN  < 0.0) M_AN  += kTwoPi;
+                if (M_DN  < 0.0) M_DN  += kTwoPi;
+                double dAN = M_AN - M_now; if (dAN < 0.0) dAN += kTwoPi;
+                double dDN = M_DN - M_now; if (dDN < 0.0) dDN += kTwoPi;
+                m_tToANSec = dAN / n;
+                m_tToDNSec = dDN / n;
+            } else {
+                m_tToANSec = std::numeric_limits<double>::quiet_NaN();
+                m_tToDNSec = std::numeric_limits<double>::quiet_NaN();
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -521,6 +572,12 @@ void OrbitalMFD::renderDiagram(ImDrawList* dl, ImVec2 diagOrigin, float diagSize
 
     // Spacecraft marker.
     diag.addMarker(shipPos, kColShip, "");
+
+    // AN/DN node markers (only for elliptic ship orbit with target set).
+    if (m_hasNodes) {
+        diag.addMarker(m_anPos3D, IM_COL32(100, 255, 100, 230), "AN");
+        diag.addMarker(m_dnPos3D, IM_COL32(255, 100, 100, 230), "DN");
+    }
 
     diag.render(dl, diagOrigin, {diagSize, diagSize}, &m_diagViewRot);
 }
@@ -780,6 +837,28 @@ void OrbitalMFD::render(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             else
                 rowTgtStr("T", "---");
         }
+    }
+
+    // ---- AN/DN node block (below both columns, when nodes exist) ----
+    if (m_hasNodes) {
+        static const ImU32 kColAN = IM_COL32(100, 255, 100, 230);
+        static const ImU32 kColDN = IM_COL32(255, 100, 100, 230);
+
+        const float yNode = std::max(dy, dy2) + 2.0f;
+        const float nodeW = colW * 2.0f;
+        dl->AddLine({ origin.x, yNode - 1.0f },
+                    { origin.x + nodeW, yNode - 1.0f }, kColDivider, 0.5f);
+
+        char bufAN[16], bufDN[16];
+        fmtTime(m_tToANSec, bufAN, sizeof(bufAN));
+        fmtTime(m_tToDNSec, bufDN, sizeof(bufDN));
+
+        char lineAN[48], lineDN[48];
+        std::snprintf(lineAN, sizeof(lineAN), "AN  %.1f\xc2\xb0  T+ %s", m_taToDeg_AN, bufAN);
+        std::snprintf(lineDN, sizeof(lineDN), "DN  %.1f\xc2\xb0  T+ %s", m_taToDeg_DN, bufDN);
+
+        dl->AddText({ origin.x + pad, yNode }, kColAN, lineAN);
+        dl->AddText({ origin.x + pad, yNode + lineH }, kColDN, lineDN);
     }
 }
 

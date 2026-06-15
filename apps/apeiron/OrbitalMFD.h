@@ -181,4 +181,13 @@ private:
     glm::dvec3 m_tgtNormDir {0.0, 0.0, 1.0};
     glm::dvec3 m_tgtQDir    {0.0, 1.0, 0.0};
     glm::dvec3 m_tgtShipDir {1.0, 0.0, 0.0};
+
+    // --- AN/DN node geometry (ship orbit vs target orbit plane) ---
+    bool       m_hasNodes   = false;
+    glm::dvec3 m_anPos3D    {1.0, 0.0, 0.0};  // AN position in orbit plane
+    glm::dvec3 m_dnPos3D    {-1.0, 0.0, 0.0}; // DN position in orbit plane
+    double     m_taToDeg_AN = 0.0;             // true anomaly of AN (deg)
+    double     m_taToDeg_DN = 180.0;           // true anomaly of DN (deg)
+    double     m_tToANSec   = 0.0;             // time to AN (s), NaN if not computable
+    double     m_tToDNSec   = 0.0;             // time to DN (s), NaN if not computable
 };
