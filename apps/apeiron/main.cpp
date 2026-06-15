@@ -2437,13 +2437,26 @@ int main(int argc, char* argv[])
                 {
                     std::string pendingTgt = orbitalMFD.consumePendingTgt();
                     if (!pendingTgt.empty()) {
+                        // Case-insensitive helper.
+                        auto iequal = [](const std::string& a, const std::string& b) {
+                            if (a.size() != b.size()) return false;
+                            for (size_t k = 0; k < a.size(); ++k)
+                                if (std::tolower((unsigned char)a[k])
+                                 != std::tolower((unsigned char)b[k])) return false;
+                            return true;
+                        };
+
+                        // Search non-player spacecraft; tgtIdx = position in that list.
                         bool foundSC = false;
-                        for (int vi = 0; vi < (int)kSpacecraftNames.size(); ++vi) {
-                            if (kSpacecraftNames[vi] == pendingTgt) {
-                                orbitalMFD.setTgtIdx(vi);
+                        int nonPlayerCount = 0;
+                        for (int vi = 0; vi < static_cast<int>(spacecraft.size()); ++vi) {
+                            if (vi == playerVehicleIdx) continue;
+                            if (iequal(kSpacecraftNames[vi], pendingTgt)) {
+                                orbitalMFD.setTgtIdx(nonPlayerCount);
                                 foundSC = true;
                                 break;
                             }
+                            ++nonPlayerCount;
                         }
                         if (!foundSC) {
                             auto maybeId = astro::Spice().tryBodyNameToId(pendingTgt);
