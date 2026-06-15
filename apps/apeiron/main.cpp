@@ -2459,6 +2459,8 @@ int main(int argc, char* argv[])
                 }
 
                 // 5. Update orbital target state.
+                // tgtNames was built by skipping playerVehicleIdx, so
+                // targetIndex() i maps to the i-th non-player spacecraft.
                 if (orbitalMFD.tgtBodyNaifId() >= 0) {
                     try {
                         static const astro::ReferenceFrame kEclipTgt =
@@ -2472,13 +2474,26 @@ int main(int argc, char* argv[])
                     } catch (...) {
                         orbitalMFD.clearTarget();
                     }
-                } else if (orbitalMFD.targetIndex() == 0 && spacecraft.size() > issIdx) {
-                    auto& tgt = *spacecraft[issIdx];
-                    orbitalMFD.updateTarget(
-                        astro::PosState(tgt.position(), tgt.velocity()),
-                        refBody.mu, refBody.radiusKm);
                 } else {
-                    orbitalMFD.clearTarget();
+                    const int tgtIdx = orbitalMFD.targetIndex();
+                    // Map tgtIdx (in the tgtNames list) to the actual spacecraft index.
+                    int scIdx = -1, nonPlayerCount = 0;
+                    for (int vi = 0; vi < static_cast<int>(spacecraft.size()); ++vi) {
+                        if (vi == playerVehicleIdx) continue;
+                        if (nonPlayerCount == tgtIdx) { scIdx = vi; break; }
+                        ++nonPlayerCount;
+                    }
+                    if (scIdx >= 0) {
+                        auto& tgt = *spacecraft[scIdx];
+                        // State must be relative to the current reference body,
+                        // not geocentric — use refBodyGeoR/V computed above.
+                        orbitalMFD.updateTarget(
+                            astro::PosState(tgt.position() - refBodyGeoR,
+                                            tgt.velocity() - refBodyGeoV),
+                            refBody.mu, refBody.radiusKm);
+                    } else {
+                        orbitalMFD.clearTarget();
+                    }
                 }
 
                 // 6. Update DockingMFD (same for all views).
