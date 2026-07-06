@@ -1594,6 +1594,31 @@ void GatewayMFD::renderNRHO(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             txt(clCol,"Closure  %+.3f km/s  (%s)",
                 closure, closure > 0.0 ? "approaching" : "receding");
             txt(kYellow,"Rel-V  %.3f km/s  (insertion ΔV required)",relVMag);
+
+            // Closest approach with current course (straight-line approximation).
+            // t_ca = -dot(relR, relV) / |relV|²  — negative means already past CA.
+            if (relVMag > 1e-6) {
+                const double t_ca = -glm::dot(relR, relV) / (relVMag * relVMag);
+                if (t_ca > 0.0) {
+                    const double caDist = glm::length(relR + relV * t_ca);
+                    const int caMin = static_cast<int>(t_ca / 60.0);
+                    const int caSec = static_cast<int>(t_ca) % 60;
+                    ImU32 caCol = (caDist < 50.0) ? kGreen : (caDist < 500.0) ? kYellow : kOrange;
+                    txt(caCol,"CA  %.1f km  in %d:%02d",caDist,caMin,caSec);
+                } else {
+                    txt(kDim,"CA  past (diverging)");
+                }
+            }
+
+            // Burn duration to null rel-V using main thruster (F=ma, no mass change).
+            if (relVMag > 1e-6 && m_mainThrustN > 0.0 && m_shipMass > 0.0) {
+                const double accelKmS2 = (m_mainThrustN / m_shipMass) * 1e-3; // km/s²
+                const double burnSec   = relVMag / accelKmS2;
+                const int bMin = static_cast<int>(burnSec / 60.0);
+                const int bSec = static_cast<int>(burnSec) % 60;
+                txt(kCyan,"Burn to null  %d:%02d  (@ %.2f m/s²)",
+                    bMin, bSec, m_mainThrustN / m_shipMass);
+            }
             y += 2;
 
             if (m_detail.valid) {
