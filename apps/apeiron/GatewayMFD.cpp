@@ -310,6 +310,7 @@ void GatewayMFD::resolveSelected()
     // ±1 NRHO period (~6.5 days) centred on the arrival ET. ----
     m_gwTrace.clear();
     m_moonOrbitPts.clear();
+    m_gwMoonTrace.clear();
     {
         constexpr int    kN       = 180;          // sample count
         constexpr double kSpanDay = 13.0;         // total span (days)
@@ -319,21 +320,27 @@ void GatewayMFD::resolveSelected()
 
         m_gwTrace.reserve(kN);
         m_moonOrbitPts.reserve(kN);
+        m_gwMoonTrace.reserve(kN);
 
         for (int i = 0; i < kN; ++i) {
             const double t = t0 + i * dt;
             try {
                 astro::PosState gw = spacecraft::vehicleStateAtEt(
                     *m_gatewayConfig, astro::EphemerisTime(t));
-                m_gwTrace.emplace_back(gw.r.x, gw.r.y, gw.r.z);
+                const glm::dvec3 gwEci(gw.r.x, gw.r.y, gw.r.z);
+                m_gwTrace.push_back(gwEci);
 
                 astro::PosState moon;
                 astro::Spice().getRelativeGeometricState(
                     301, 399, astro::EphemerisTime(t), moon, kEclipJ2000);
-                m_moonOrbitPts.emplace_back(moon.r.x, moon.r.y, moon.r.z);
+                const glm::dvec3 moonEci(moon.r.x, moon.r.y, moon.r.z);
+                m_moonOrbitPts.push_back(moonEci);
+
+                m_gwMoonTrace.push_back(gwEci - moonEci);
             } catch (...) {
                 m_gwTrace.clear();
                 m_moonOrbitPts.clear();
+                m_gwMoonTrace.clear();
                 break;
             }
         }
@@ -1602,12 +1609,26 @@ void GatewayMFD::renderNRHO(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     if (diagH > 40) {
         OrbitDiagram diag;
         diag.setCentralBody({kRMoon, IM_COL32(180,180,180,200)});
+
+        // Ship: osculating hyperbolic arc (Keplerian is fine for short approach arc).
         if (m_inMoonSoi && glm::length(m_shipMoonR) > 1.0)
             diag.addOrbit(m_shipMoonR, m_shipMoonV, kGmMoon,
                          IM_COL32(0,210,75,200), "SHIP", false, true);
+
+        // Gateway: sampled NRHO trace (Moon-centric) — Keplerian orbit is misleading
+        // for the NRHO because it places the label at the osculating periapsis,
+        // not at Gateway's actual position.
+        if (!m_gwMoonTrace.empty()) {
+            OrbitDiagram::Arc gwArc;
+            gwArc.pts       = m_gwMoonTrace;
+            gwArc.colour    = IM_COL32(255, 200, 80, 100);
+            gwArc.thickness = 1.0f;
+            diag.addArc(gwArc);
+        }
+        // Marker at Gateway's actual current Moon-centric position.
         if (m_inMoonSoi && m_gatewayOk)
-            diag.addOrbit(m_gatewayMoonR, m_gatewayMoonV, kGmMoon,
-                         IM_COL32(255,200,80,160), "GW", false, false);
+            diag.addMarker(m_gatewayMoonR, IM_COL32(255, 200, 80, 240), "GW");
+
         diag.render(dl, {origin.x, y}, {size.x, diagH}, &m_nrhoViewRot);
     }
 }

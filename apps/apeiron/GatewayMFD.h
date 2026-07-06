@@ -170,8 +170,9 @@ private:
 
     // ---- Gateway petaloid trace (ECI, sampled ±1 NRHO period around arrival) ----
     // Precomputed in resolveSelected(); used by renderCoast for the rosette overlay.
-    std::vector<glm::dvec3> m_gwTrace;      // Gateway ECI positions
-    std::vector<glm::dvec3> m_moonOrbitPts; // Moon ECI positions (same sample times)
+    std::vector<glm::dvec3> m_gwTrace;         // Gateway ECI positions
+    std::vector<glm::dvec3> m_moonOrbitPts;    // Moon ECI positions (same sample times)
+    std::vector<glm::dvec3> m_gwMoonTrace;     // Gateway Moon-centric (gwTrace[i] - moonOrbitPts[i])
 
     // ---- Coast TCM ----
     glm::dvec3 m_tcmDv    { 0.0 };
