@@ -1693,10 +1693,12 @@ int main(int argc, char* argv[])
             }
 
             // Pin non-player orbiting spacecraft to their analytical Keplerian orbit.
-            // Prevents Lyapunov instability (e.g. NRHO) and RKF78 accumulation errors
-            // from diverging at high time warp. Applied after RKF78 so the physics world
-            // gravity/SOI detection still runs normally (using the player's position).
-            {
+            // Only at warp >= 100x: at low warp the RKF78 integrator is accurate enough
+            // and frame-to-frame Keplerian snapping causes visible prograde oscillation
+            // for near-circular LEO orbits (ill-defined periapsis direction at e~0.0006).
+            // At >= 100x the Lyapunov-unstable NRHO diverges without pinning, and LEO
+            // spacecraft (ISS etc.) are not normally visible during high-warp transit.
+            if (simSecondsPerRealSecond >= 100.0) {
                 for (size_t vi = 0; vi < vehicleConfigs.size(); ++vi) {
                     if (vi == playerIdx) continue;
                     const auto& vc = vehicleConfigs[vi];
