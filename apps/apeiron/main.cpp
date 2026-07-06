@@ -2863,6 +2863,11 @@ int main(int argc, char* argv[])
                        camMFD.slewYaw(), camMFD.slewPitch());
             buildCamVP(dockingMFD.preferredCamNode(), dockingMFD.fovDeg(),    dockVP, dockCamPos, &dockVPRot);
 
+            // If needsResize was set mid-frame (e.g. by the fullscreen checkbox firing
+            // glfwSetWindowMonitor during ImGui processing), skip acquire+render+present
+            // for this frame so we never present an old-size image on the new surface.
+            // The swapchain is recreated at the top of the next iteration.
+            if (needsResize) continue;
             if (!renderer.acquireFrame()) continue;
 
             // ---- Offscreen cam pre-passes (before the main HDR pass) ----
