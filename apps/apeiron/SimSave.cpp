@@ -168,6 +168,16 @@ bool saveSimState(const std::string& path, const SimSaveData& data)
         if (data.cislunarPlan.valid)
             root.insert("cislunar_plan", cislunarPlanToToml(data.cislunarPlan));
 
+        // ---- [docking] ----
+        if (data.docking.active) {
+            toml::table dk;
+            dk.insert("active_sc",    data.docking.activeScIdx);
+            dk.insert("passive_sc",   data.docking.passiveScIdx);
+            dk.insert("active_port",  data.docking.activePortIdx);
+            dk.insert("passive_port", data.docking.passivePortIdx);
+            root.insert("docking", std::move(dk));
+        }
+
         // ---- [[events]] ----
         if (!data.events.empty()) {
             toml::array evArr;
@@ -236,6 +246,16 @@ bool loadSimState(const std::string& path, SimSaveData& data)
         data.cislunarPlan = {};
         if (auto* tp = tbl["cislunar_plan"].as_table())
             cislunarPlanFromToml(*tp, data.cislunarPlan);
+
+        // ---- [docking] ----
+        data.docking = {};
+        if (auto* dk = tbl["docking"].as_table()) {
+            data.docking.active         = true;
+            data.docking.activeScIdx    = (*dk)["active_sc"]   .value_or(0);
+            data.docking.passiveScIdx   = (*dk)["passive_sc"]  .value_or(1);
+            data.docking.activePortIdx  = (*dk)["active_port"] .value_or(0);
+            data.docking.passivePortIdx = (*dk)["passive_port"].value_or(0);
+        }
 
         // ---- [[events]] ----
         data.events.clear();

@@ -44,6 +44,15 @@ struct SimSaveData
     TransferPlanSnapshot  plan;         // plan.valid=false if no plan was active
     CislunarPlanSnapshot  cislunarPlan; // cislunarPlan.valid=false if no plan was active
 
+    // Docking state — only present when active spacecraft was in HardCapture at save time.
+    struct DockingState {
+        bool active         = false; // true = a docked pair was saved
+        int  activeScIdx    = 0;     // index into spacecraft[] (probe / player)
+        int  passiveScIdx   = 1;     // index into spacecraft[] (drogue / station)
+        int  activePortIdx  = 0;     // port index on active  spacecraft
+        int  passivePortIdx = 0;     // port index on passive spacecraft
+    } docking;
+
     // Scheduled OBC events — empty if none were active at save time.
     struct SavedEvent {
         std::string name;

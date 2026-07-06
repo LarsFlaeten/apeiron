@@ -2148,6 +2148,23 @@ int main(int argc, char* argv[])
                     }
                     sd.plan         = transferMFD.getPlan();
                     sd.cislunarPlan = cislunarMFD.getPlan();
+                    // Docking: record hard-captured pair so restore can re-lock them.
+                    if (dockingConstraint.phase() == DockingConstraint::Phase::HardCapture) {
+                        auto* act = dockingConstraint.activeSc();
+                        auto* pas = dockingConstraint.passiveSc();
+                        int ai = -1, pi = -1;
+                        for (int i = 0; i < static_cast<int>(spacecraft.size()); ++i) {
+                            if (spacecraft[i].get() == act) ai = i;
+                            if (spacecraft[i].get() == pas) pi = i;
+                        }
+                        if (ai >= 0 && pi >= 0) {
+                            sd.docking.active         = true;
+                            sd.docking.activeScIdx    = ai;
+                            sd.docking.passiveScIdx   = pi;
+                            sd.docking.activePortIdx  = 0;  // player always uses port 0
+                            sd.docking.passivePortIdx = nav.dockPortIdx >= 0 ? nav.dockPortIdx : 0;
+                        }
+                    }
                     for (const auto& ev : obcEventQueue.events()) {
                         SimSaveData::SavedEvent se;
                         se.name        = ev.name;
@@ -2177,6 +2194,29 @@ int main(int argc, char* argv[])
                             spacecraft[i]->setAttitude(st.attitude);
                             spacecraft[i]->setAngularVelocity(st.angularVelocity);
                         }
+                        // Restore docking before plan (plan restore may reconfigure nav).
+                        if (sd.docking.active) {
+                            const int ai = sd.docking.activeScIdx;
+                            const int pi = sd.docking.passiveScIdx;
+                            const int aPort = sd.docking.activePortIdx;
+                            const int pPort = sd.docking.passivePortIdx;
+                            const bool validIdx =
+                                ai >= 0 && ai < static_cast<int>(spacecraft.size()) &&
+                                pi >= 0 && pi < static_cast<int>(spacecraft.size()) &&
+                                ai != pi &&
+                                !scPorts[ai].empty() &&
+                                pPort < static_cast<int>(scPorts[pi].size());
+                            if (validIdx) {
+                                dockingConstraint.arm(
+                                    spacecraft[ai].get(), scPorts[ai][aPort],
+                                    spacecraft[pi].get(), scPorts[pi][pPort]);
+                                dockingConstraint.restoreHardCapture();
+                                // Mirror into nav so the docking MFD shows the right target.
+                                nav.dockTgtIdx  = pi;
+                                nav.dockPortIdx = pPort;
+                            }
+                        }
+
                         if (sd.plan.valid)
                             transferMFD.restorePlan(sd.plan);
                         if (sd.cislunarPlan.valid)

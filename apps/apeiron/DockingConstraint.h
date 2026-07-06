@@ -85,6 +85,12 @@ public:
     // range is within maxHardCaptureM (default 0.5 m).
     void initiateHardCapture();
 
+    // Restore a previously-saved hard-capture state.  Requires arm() to have
+    // been called first so m_active and m_passive are valid.  Computes the
+    // relative transform from the spacecraft's current (just-loaded) positions
+    // and immediately enters HardCapture phase.  Used by the save/load system.
+    void restoreHardCapture();
+
     // Release from dock (any phase).  Applies a small separation impulse,
     // clears parent, and returns to Unarmed (not Armed) to prevent immediate re-capture.
     void release();
@@ -95,6 +101,10 @@ public:
     float attErrDeg() const { return m_attErrDeg; } // combined attitude error (°)
     float closureMs() const { return m_closureMs; } // axial approach speed (m/s)
     float holdTimer() const { return m_holdTimer; } // hold time so far (s)
+
+    // Expose pointers so save/load can map back to spacecraft indices.
+    Spacecraft* activeSc()  const { return m_active; }
+    Spacecraft* passiveSc() const { return m_passive; }
 
 private:
     static glm::dvec3 portWorldPos(const Spacecraft& sc, const DockPort& p);

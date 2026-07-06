@@ -219,6 +219,19 @@ void DockingConstraint::initiateHardCapture()
 }
 
 // ---------------------------------------------------------------------------
+void DockingConstraint::restoreHardCapture()
+{
+    if (!m_active || !m_passive) return;
+
+    const glm::dquat tAttInv = glm::conjugate(m_passive->attitude());
+    m_hardRelPos = tAttInv * (m_active->position() - m_passive->position());
+    m_hardRelAtt = tAttInv * m_active->attitude();
+
+    m_active->setParent(1);
+    m_phase = Phase::HardCapture;
+}
+
+// ---------------------------------------------------------------------------
 void DockingConstraint::release()
 {
     if (!m_active) return;
