@@ -40,6 +40,7 @@ add_executable(apeiron
     CamMFD.cpp
     TransferMFD.cpp
     CislunarMFD.cpp
+    GatewayMFD.cpp
     MapMFD.cpp
     OrbitDiagram.cpp
     OffscreenCam.cpp

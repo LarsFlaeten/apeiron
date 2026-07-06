@@ -79,9 +79,13 @@ PorkchopData computePorkchop(const PorkchopParams& paramsIn,
 
             // Position + velocity of arrival body at arrival ET.
             astro::PosState arr;
-            astro::Spice().getRelativeGeometricState(
-                out.params.arrivalBody, out.params.centralBody, etArrT, arr,
-                kEclipJ2000);
+            if (out.params.arrivalOverrideFn) {
+                arr = out.params.arrivalOverrideFn(etArr);
+            } else {
+                astro::Spice().getRelativeGeometricState(
+                    out.params.arrivalBody, out.params.centralBody, etArrT, arr,
+                    kEclipJ2000);
+            }
 
             // Lambert solve.
             glm::dvec3 vDep, vArr;

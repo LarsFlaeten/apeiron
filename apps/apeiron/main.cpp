@@ -46,6 +46,7 @@
 #include "CamMFD.h"
 #include "TransferMFD.h"
 #include "CislunarMFD.h"
+#include "GatewayMFD.h"
 #include "MapMFD.h"
 #include "SimSave.h"
 #include "MFDMenu.h"
@@ -1170,6 +1171,16 @@ int main(int argc, char* argv[])
 
         CislunarMFD cislunarMFD;
 
+        GatewayMFD gatewayMFD;
+        {
+            for (auto& vc : vehicleConfigs) {
+                if (vc.name == "Gateway") {
+                    gatewayMFD.setTargetConfig(&vc);
+                    break;
+                }
+            }
+        }
+
         MapMFD mapMFD;
         OBCMFD obcMFD;
 
@@ -1179,6 +1190,7 @@ int main(int argc, char* argv[])
         mfdMenu.addApp(&camMFD,      "CAM");
         mfdMenu.addApp(&transferMFD,  "XFER");
         mfdMenu.addApp(&cislunarMFD,  "LUNAR");
+        mfdMenu.addApp(&gatewayMFD,   "NRHO");
         mfdMenu.addApp(&mapMFD,       "MAP");
         mfdMenu.addApp(&obcMFD,      "OBC");
 
@@ -1272,6 +1284,9 @@ int main(int argc, char* argv[])
                 const double lunarCap = cislunarMFD.maxSimSpeed();
                 if (lunarCap > 0.0 && (burnCap <= 0.0 || lunarCap < burnCap))
                     burnCap = lunarCap;
+                const double nrhoCap = gatewayMFD.maxSimSpeed();
+                if (nrhoCap > 0.0 && (burnCap <= 0.0 || nrhoCap < burnCap))
+                    burnCap = nrhoCap;
                 if (burnCap > 0.0) {
                     simSpeedTarget          = std::min(simSpeedTarget,          burnCap);
                     simSecondsPerRealSecond = std::min(simSecondsPerRealSecond, burnCap);
@@ -1289,6 +1304,12 @@ int main(int argc, char* argv[])
             // Drop to 1× on Moon SOI entry during cislunar coast so the pilot
             // can switch to the LOI page and arm the capture burn.
             if (cislunarMFD.consumeSoiEntry()) {
+                simSpeedTarget          = 1.0;
+                simSecondsPerRealSecond = 1.0;
+            }
+
+            // Same drop for GatewayMFD Moon SOI entry.
+            if (gatewayMFD.consumeSoiEntry()) {
                 simSpeedTarget          = 1.0;
                 simSecondsPerRealSecond = 1.0;
             }
@@ -1346,6 +1367,11 @@ int main(int argc, char* argv[])
             // (or whenever Pe < 50,000 km) so shift-G stays locked on the approach
             // correction without a jarring mid-course jump.
             const glm::dvec3 activeNavDv = [&]() -> glm::dvec3 {
+                // GatewayMFD TCM takes top priority when planning an NRHO transfer.
+                const glm::dvec3 gatewayTcm = gatewayMFD.getTcmDv();
+                if (glm::length(gatewayTcm) > 1e-9)
+                    return gatewayTcm;
+
                 // CislunarMFD coast TCM takes priority when it has a valid correction.
                 const glm::dvec3 cislunarTcm = cislunarMFD.getTcmDv();
                 if (glm::length(cislunarTcm) > 1e-9)
@@ -1433,7 +1459,8 @@ int main(int argc, char* argv[])
                             (spaceDown && !shiftHeld)
                             || transferMFD.requestMainEngine()
                             || transferMFD.requestTcmMainEngine()
-                            || cislunarMFD.requestMainEngine();
+                            || cislunarMFD.requestMainEngine()
+                            || gatewayMFD.requestMainEngine();
                         if (mainEngineKey) {
                             desired[0] += mainEngineThrust;
                             mainEngineOn = true;
@@ -1629,7 +1656,9 @@ int main(int argc, char* argv[])
                         if (spaceDownFb && shiftHeldFb) {
                             shipForce.x += auxEngineThrust;  // SHIFT+SPACE — aux only
                         } else if (spaceDownFb && !shiftHeldFb
-                            || transferMFD.requestMainEngine()) {
+                            || transferMFD.requestMainEngine()
+                            || cislunarMFD.requestMainEngine()
+                            || gatewayMFD.requestMainEngine()) {
                             shipForce.x += mainEngineThrust;
                             mainEngineOn = true;
                         }
@@ -2490,6 +2519,7 @@ int main(int argc, char* argv[])
                 mapMFD.update(mfdCtx);
                 transferMFD.update(mfdCtx);   // calls tickTcm + tickBplane internally
                 cislunarMFD.update(mfdCtx);
+                gatewayMFD.update(mfdCtx);
                 obcMFD.update(mfdCtx);
 
                 // 4. Resolve pending TGT input.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <astro/State.h>
+
 #include <glm/glm.hpp>
 #include <vector>
 #include <functional>
@@ -33,6 +35,13 @@ struct PorkchopParams {
     bool       useDepartureOverride = false;
     glm::dvec3 departureR { 0.0 };   // km,   relative to centralBody
     glm::dvec3 departureV { 0.0 };   // km/s, relative to centralBody
+
+    // Optional arrival-state override function.
+    // When set, called with the arrival ET (seconds past J2000) and returns
+    // the arrival body state relative to centralBody.  Takes priority over the
+    // SPICE arrivalBody lookup.  Use for targets that are not SPICE bodies
+    // (e.g. Gateway on its NRHO, computed via vehicleStateAtEt).
+    std::function<astro::PosState(double etArr)> arrivalOverrideFn;
 };
 
 // ---------------------------------------------------------------------------
