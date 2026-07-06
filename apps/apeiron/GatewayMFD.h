@@ -16,6 +16,17 @@
 #include <limits>
 
 // ---------------------------------------------------------------------------
+// Snapshot for quicksave / quickload — mirrors CislunarPlanSnapshot.
+// ---------------------------------------------------------------------------
+struct GatewayPlanSnapshot {
+    bool                       valid   = false;
+    spacecraft::PorkchopParams params;   // includes departureR/V override
+    int                        selDep  = -1;
+    int                        selTof  = -1;
+    int                        parkIdx = 1;
+};
+
+// ---------------------------------------------------------------------------
 // GatewayMFD — Earth → Gateway (NRHO) transfer planning.
 //
 // Structurally mirrors CislunarMFD but targets Gateway specifically
@@ -62,6 +73,9 @@ public:
 
     // Supply Gateway's VehicleConfig once at startup.
     void setTargetConfig(const spacecraft::VehicleConfig* vc) { m_gatewayConfig = vc; }
+
+    GatewayPlanSnapshot getPlan() const;
+    void                restorePlan(const GatewayPlanSnapshot& snap);
 
     void update(const MFDContext& ctx);
 
@@ -153,6 +167,11 @@ private:
     double     m_currentET   = 0.0;
     double     m_mainThrustN = 25700.0;
     double     m_shipMass    = 26500.0;
+
+    // ---- Gateway petaloid trace (ECI, sampled ±1 NRHO period around arrival) ----
+    // Precomputed in resolveSelected(); used by renderCoast for the rosette overlay.
+    std::vector<glm::dvec3> m_gwTrace;      // Gateway ECI positions
+    std::vector<glm::dvec3> m_moonOrbitPts; // Moon ECI positions (same sample times)
 
     // ---- Coast TCM ----
     glm::dvec3 m_tcmDv    { 0.0 };

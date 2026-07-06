@@ -3,6 +3,7 @@
 #include "apeiron/spacecraft/Spacecraft.h"
 #include "TransferMFD.h"
 #include "CislunarMFD.h"
+#include "GatewayMFD.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -43,6 +44,7 @@ struct SimSaveData
 
     TransferPlanSnapshot  plan;         // plan.valid=false if no plan was active
     CislunarPlanSnapshot  cislunarPlan; // cislunarPlan.valid=false if no plan was active
+    GatewayPlanSnapshot   gatewayPlan;  // gatewayPlan.valid=false if no plan was active
 
     // Docking state — only present when active spacecraft was in HardCapture at save time.
     struct DockingState {

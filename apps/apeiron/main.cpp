@@ -2205,6 +2205,7 @@ int main(int argc, char* argv[])
                     }
                     sd.plan         = transferMFD.getPlan();
                     sd.cislunarPlan = cislunarMFD.getPlan();
+                    sd.gatewayPlan  = gatewayMFD.getPlan();
                     // Docking: record hard-captured pair so restore can re-lock them.
                     if (dockingConstraint.phase() == DockingConstraint::Phase::HardCapture) {
                         auto* act = dockingConstraint.activeSc();
@@ -2278,6 +2279,8 @@ int main(int argc, char* argv[])
                             transferMFD.restorePlan(sd.plan);
                         if (sd.cislunarPlan.valid)
                             cislunarMFD.restorePlan(sd.cislunarPlan);
+                        if (sd.gatewayPlan.valid)
+                            gatewayMFD.restorePlan(sd.gatewayPlan);
                         {
                             std::vector<ScheduledEvent> restored;
                             for (const auto& se : sd.events) {

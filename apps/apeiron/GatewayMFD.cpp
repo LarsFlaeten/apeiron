@@ -102,8 +102,9 @@ void GatewayMFD::update(const MFDContext& ctx)
 
     m_burnCtrl.tick(m_currentET, m_shipR, m_shipV);
 
-    // TCM: Lambert from current position to Gateway's position at arrET.
-    // Uses geocentric frame outside Moon SOI, Moon-centric inside.
+    // TCM: Earth-centric Lambert from current position to Gateway's ECI position at arrET.
+    // Always uses geocentric frame — valid throughout the transfer including inside Moon SOI.
+    // (Moon-centric Lambert would yield a hyperbolic LOI-style ΔV, not a course correction.)
     m_tcmValid = false;
     if (m_detail.valid
             && m_burnCtrl.phase() != BurnPhase::Armed
@@ -111,29 +112,16 @@ void GatewayMFD::update(const MFDContext& ctx)
             && m_burnCtrl.phase() != BurnPhase::Executing
             && m_gatewayConfig && m_gatewayConfig->hasOrbit) {
         const double tofRem = m_detail.arrET - m_currentET;
-        if (tofRem > 600.0) {
+        if (tofRem > 600.0 && glm::length(m_shipR) > 100.0) {
             try {
                 astro::PosState gwArr = spacecraft::vehicleStateAtEt(
                     *m_gatewayConfig, astro::EphemerisTime(m_detail.arrET));
                 glm::dvec3 gwArrR(gwArr.r.x, gwArr.r.y, gwArr.r.z);
 
-                // Inside Moon SOI: use Moon-centric coordinates and Moon's GM.
-                const double mu = m_inMoonSoi ? kGmMoon : kGmEarth;
-                const glm::dvec3 depR = m_inMoonSoi ? m_shipMoonR  : m_shipR;
-                const glm::dvec3 depV = m_inMoonSoi ? m_shipMoonV  : m_shipV;
-                glm::dvec3 arrR = gwArrR;
-                if (m_inMoonSoi) {
-                    // Subtract Moon's geocentric position at arrival to get Moon-centric arrR.
-                    astro::PosState moonArr;
-                    astro::Spice().getRelativeGeometricState(301, 399,
-                        astro::EphemerisTime(m_detail.arrET), moonArr, kEclipJ2000);
-                    arrR -= glm::dvec3(moonArr.r.x, moonArr.r.y, moonArr.r.z);
-                }
-
                 glm::dvec3 vReq, vArr;
-                if (spacecraft::solveLambert(mu, depR, arrR, tofRem, true, vReq, vArr)) {
-                    // TCM ΔV is in the frame of depV (geocentric or Moon-centric).
-                    m_tcmDv    = vReq - depV;
+                if (spacecraft::solveLambert(kGmEarth, m_shipR, gwArrR,
+                                              tofRem, true, vReq, vArr)) {
+                    m_tcmDv    = vReq - m_shipV;
                     m_tcmValid = true;
                 }
             } catch (...) {}
@@ -145,6 +133,45 @@ void GatewayMFD::update(const MFDContext& ctx)
         const double ignET = computeTliIgnitionET();
         if (ignET > m_currentET)
             m_burnCtrl.updateIgnitionET(ignET, m_eventQueue);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// getPlan / restorePlan — quicksave support
+// ---------------------------------------------------------------------------
+GatewayPlanSnapshot GatewayMFD::getPlan() const
+{
+    GatewayPlanSnapshot snap;
+    snap.valid   = m_hasData;
+    snap.params  = m_params;
+    snap.selDep  = m_selDep;
+    snap.selTof  = m_selTof;
+    snap.parkIdx = m_parkIdx;
+    return snap;
+}
+
+void GatewayMFD::restorePlan(const GatewayPlanSnapshot& snap)
+{
+    if (!snap.valid) return;
+    m_params  = snap.params;
+    m_parkIdx = snap.parkIdx;
+
+    // Re-wire the arrival override function (not serialisable — rebuild from config).
+    if (m_gatewayConfig && m_gatewayConfig->hasOrbit) {
+        const auto* vc = m_gatewayConfig;
+        m_params.arrivalOverrideFn = [vc](double etArr) -> astro::PosState {
+            return spacecraft::vehicleStateAtEt(*vc, astro::EphemerisTime(etArr));
+        };
+    }
+
+    compute();  // blocking recompute, same as pressing COMP
+
+    m_selDep = snap.selDep;
+    m_selTof = snap.selTof;
+    if (m_hasData && m_selDep >= 0 && m_selTof >= 0) {
+        resolveSelected();
+        if (m_detail.valid)
+            m_page = 3;   // drop onto coast page — if loading mid-transit
     }
 }
 
@@ -279,6 +306,39 @@ void GatewayMFD::resolveSelected()
     m_detail.vArr     = vArr;
     m_detail.vDepBody = depV;
     m_detail.vArrBody = gwArrV;
+
+    // ---- Petaloid trace: sample Gateway and Moon ECI positions over
+    // ±1 NRHO period (~6.5 days) centred on the arrival ET. ----
+    m_gwTrace.clear();
+    m_moonOrbitPts.clear();
+    {
+        constexpr int    kN       = 180;          // sample count
+        constexpr double kSpanDay = 13.0;         // total span (days)
+        const double span = kSpanDay * kDay;
+        const double dt   = span / (kN - 1);
+        const double t0   = arrET - span * 0.5;
+
+        m_gwTrace.reserve(kN);
+        m_moonOrbitPts.reserve(kN);
+
+        for (int i = 0; i < kN; ++i) {
+            const double t = t0 + i * dt;
+            try {
+                astro::PosState gw = spacecraft::vehicleStateAtEt(
+                    *m_gatewayConfig, astro::EphemerisTime(t));
+                m_gwTrace.emplace_back(gw.r.x, gw.r.y, gw.r.z);
+
+                astro::PosState moon;
+                astro::Spice().getRelativeGeometricState(
+                    301, 399, astro::EphemerisTime(t), moon, kEclipJ2000);
+                m_moonOrbitPts.emplace_back(moon.r.x, moon.r.y, moon.r.z);
+            } catch (...) {
+                m_gwTrace.clear();
+                m_moonOrbitPts.clear();
+                break;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1297,19 +1357,82 @@ void GatewayMFD::renderCoast(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     {
         OrbitDiagram diag;
         diag.setCentralBody({kREarth, IM_COL32(80,120,220,200)});
-        if (glm::length(m_shipR) > 100.0)
-            diag.addOrbit(m_shipR,m_shipV,kGmEarth,
-                         IM_COL32(200,200,80,200),"",false,true);
-        if (gwOk) {
-            diag.addOrbit(gwPos,gwVel,kGmEarth,
-                         IM_COL32(160,160,80,100),"",false,false);
-            diag.addMarker(gwPos,IM_COL32(255,200,80,240),"G");
+
+        // Moon orbit trace — stable ellipse, drawn as an Arc from the
+        // precomputed sample points so it matches the petaloid time range.
+        if (!m_moonOrbitPts.empty()) {
+            OrbitDiagram::Arc moonArc;
+            moonArc.pts       = m_moonOrbitPts;
+            moonArc.colour    = IM_COL32(120, 120, 160, 80);
+            moonArc.thickness = 1.0f;
+            diag.addArc(moonArc);
         }
+
+        // Gateway petaloid — ECI positions over ±1 NRHO period around arrival.
+        // Split into "past" (dimmer) and "future" (brighter) segments at current ET
+        // so the pilot can see which petal they're aiming for.
+        if (!m_gwTrace.empty() && m_detail.valid) {
+            constexpr int    kN       = 180;
+            constexpr double kSpanDay = 13.0;
+            const double span = kSpanDay * kDay;
+            const double t0   = m_detail.arrET - span * 0.5;
+            const double dt   = span / (kN - 1);
+
+            // Find split index: first sample at or after current ET.
+            int splitIdx = kN;
+            for (int i = 0; i < (int)m_gwTrace.size(); ++i) {
+                if (t0 + i * dt >= m_currentET) { splitIdx = i; break; }
+            }
+
+            // Past segment (dim gold).
+            if (splitIdx > 1) {
+                OrbitDiagram::Arc past;
+                past.pts.assign(m_gwTrace.begin(),
+                                m_gwTrace.begin() + splitIdx + 1);
+                past.colour    = IM_COL32(180, 140, 40, 60);
+                past.thickness = 1.0f;
+                diag.addArc(past);
+            }
+            // Future segment (bright gold).
+            if (splitIdx < (int)m_gwTrace.size() - 1) {
+                OrbitDiagram::Arc future;
+                future.pts.assign(m_gwTrace.begin() + splitIdx,
+                                  m_gwTrace.end());
+                future.colour    = IM_COL32(255, 200, 60, 180);
+                future.thickness = 1.5f;
+                diag.addArc(future);
+            }
+        }
+
+        // Ship transfer arc (current osculating orbit, ship dot).
+        if (glm::length(m_shipR) > 100.0)
+            diag.addOrbit(m_shipR, m_shipV, kGmEarth,
+                         IM_COL32(0, 200, 80, 200), "", false, true);
+
+        // Moon current position.
+        if (!m_moonOrbitPts.empty() && m_detail.valid) {
+            constexpr int    kN       = 180;
+            constexpr double kSpanDay = 13.0;
+            const double span = kSpanDay * kDay;
+            const double t0   = m_detail.arrET - span * 0.5;
+            const double dt   = span / (kN - 1);
+            // Nearest sample to currentET.
+            int mi = static_cast<int>((m_currentET - t0) / dt + 0.5);
+            mi = std::clamp(mi, 0, (int)m_moonOrbitPts.size() - 1);
+            diag.addMarker(m_moonOrbitPts[mi], IM_COL32(180,180,220,200), "M");
+        }
+
+        // Gateway current position "G" and planned arrival "T".
+        if (gwOk)
+            diag.addMarker(gwPos, IM_COL32(255, 200, 80, 240), "G");
         if (m_detail.valid)
-            diag.addMarker(m_detail.arrPos,IM_COL32(100,200,255,180),"T");
+            diag.addMarker(m_detail.arrPos, IM_COL32(100, 200, 255, 220), "T");
+
+        // TCM correction arrow.
         if (m_tcmValid && glm::length(m_tcmDv) > 1e-4)
             diag.addArrow(m_shipR, glm::normalize(m_tcmDv), 20.0f,
-                         IM_COL32(255,160,0,220));
+                         IM_COL32(255, 160, 0, 220));
+
         diag.render(dl, origin, size, &m_coastViewRot);
     }
 
