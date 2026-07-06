@@ -58,7 +58,7 @@ void Autopilot::updateOrbitalTarget(const glm::dvec3& r, const glm::dvec3& v,
 
 void Autopilot::updateTcmTarget(const glm::dquat& att)
 {
-    if (mode != AutopilotMode::TcmPlus) return;
+    if (mode != AutopilotMode::TcmPlus && mode != AutopilotMode::PointToTarget) return;
 
     const double len = glm::length(tcmDirInertial);
     if (len < 1e-9) return;

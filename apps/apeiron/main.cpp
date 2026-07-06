@@ -1539,10 +1539,24 @@ int main(int argc, char* argv[])
                             }
                             autopilot.updateOrbitalTarget(apR, apV, att);
                             autopilot.updateRelVelTarget(att);
+
+                            // PointToTarget: aim body +X toward the selected target spacecraft.
+                            if (autopilot.mode == spacecraft::AutopilotMode::PointToTarget
+                                    && nav.dockTgtIdx >= 0
+                                    && nav.dockTgtIdx < static_cast<int>(spacecraft.size())) {
+                                const glm::dvec3 toTgt =
+                                    spacecraft[nav.dockTgtIdx]->position() - ship.position();
+                                const double d = glm::length(toTgt);
+                                if (d > 0.001)
+                                    autopilot.tcmDirInertial = toTgt / d;
+                            }
+
                             // Fixed-direction burn (e.g. TLI toward NRHO) overrides TCM direction.
-                            const glm::dvec3 fixedBurnDir = gatewayMFD.getActiveBurnDir();
-                            autopilot.tcmDirInertial = (glm::length(fixedBurnDir) > 0.5)
-                                                       ? fixedBurnDir : activeNavDv;
+                            if (autopilot.mode != spacecraft::AutopilotMode::PointToTarget) {
+                                const glm::dvec3 fixedBurnDir = gatewayMFD.getActiveBurnDir();
+                                autopilot.tcmDirInertial = (glm::length(fixedBurnDir) > 0.5)
+                                                           ? fixedBurnDir : activeNavDv;
+                            }
                             autopilot.updateTcmTarget(att);
 
                             bool settleClamp = false;

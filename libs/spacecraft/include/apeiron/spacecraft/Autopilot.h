@@ -17,7 +17,8 @@ enum class AutopilotMode {
     NullV,       // null relative velocity to a target body (docking mode)
     RelVelPlus,  // hold body +X along relative velocity vector (+V, docking)
     RelVelMinus, // hold body +X against relative velocity vector (-V, docking)
-    TcmPlus,     // hold body +X along externally-set TCM burn direction
+    TcmPlus,        // hold body +X along externally-set TCM burn direction
+    PointToTarget,  // hold body +X toward selected target spacecraft (tcmDirInertial updated by main.cpp)
 };
 
 // ---------------------------------------------------------------------------

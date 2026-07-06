@@ -329,7 +329,8 @@ void NavConsole::render(float                                           posX,
     else if (apMode == M::NullV)       apLabel = "NULL V";
     else if (apMode == M::RelVelPlus)  apLabel = "+V";
     else if (apMode == M::RelVelMinus) apLabel = "-V";
-    else if (apMode == M::TcmPlus)     apLabel = "TCM+";
+    else if (apMode == M::TcmPlus)        apLabel = "TCM+";
+    else if (apMode == M::PointToTarget)  apLabel = "POINT TGT";
     ImGui::TextColored({0.0f, 0.82f, 0.30f, 0.6f}, "AP:");
     ImGui::SameLine();
     ImGui::TextColored(apMode != M::Off
@@ -388,6 +389,8 @@ void NavConsole::render(float                                           posX,
         tcmBurnButton("TCM-F [⇧F]", false);
     }
     if (nav.navMode == NavMode::Docking && nav.dockTgtIdx >= 0) {
+        apButton("POINT TGT", M::PointToTarget);
+        ImGui::SameLine();
         apButton("NULL V [⇧V]", M::NullV);
 
         // +V / -V attitude buttons — work standalone or alongside NullV.
