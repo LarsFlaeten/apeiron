@@ -1225,6 +1225,10 @@ int main(int argc, char* argv[])
                     camera.setAspect(static_cast<float>(fbW) /
                                      static_cast<float>(fbH));
                     needsResize = false;
+                    // Skip this frame — the old swapchain image was already in flight
+                    // when the surface resized; presenting it produces a black bar.
+                    // One skipped frame at 60 fps is imperceptible.
+                    continue;
                 }
             }
 
