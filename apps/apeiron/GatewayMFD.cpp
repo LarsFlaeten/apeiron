@@ -102,24 +102,38 @@ void GatewayMFD::update(const MFDContext& ctx)
 
     m_burnCtrl.tick(m_currentET, m_shipR, m_shipV);
 
-    // TCM: Lambert from current geocentric state to Gateway's geocentric
-    // position at the planned arrival ET.  Valid during coast.
+    // TCM: Lambert from current position to Gateway's position at arrET.
+    // Uses geocentric frame outside Moon SOI, Moon-centric inside.
     m_tcmValid = false;
-    if (m_detail.valid && !m_inMoonSoi
+    if (m_detail.valid
             && m_burnCtrl.phase() != BurnPhase::Armed
             && m_burnCtrl.phase() != BurnPhase::PreIgnition
             && m_burnCtrl.phase() != BurnPhase::Executing
             && m_gatewayConfig && m_gatewayConfig->hasOrbit) {
         const double tofRem = m_detail.arrET - m_currentET;
-        if (tofRem > 3600.0 && glm::length(m_shipR) > 100.0) {
+        if (tofRem > 600.0) {
             try {
                 astro::PosState gwArr = spacecraft::vehicleStateAtEt(
                     *m_gatewayConfig, astro::EphemerisTime(m_detail.arrET));
                 glm::dvec3 gwArrR(gwArr.r.x, gwArr.r.y, gwArr.r.z);
+
+                // Inside Moon SOI: use Moon-centric coordinates and Moon's GM.
+                const double mu = m_inMoonSoi ? kGmMoon : kGmEarth;
+                const glm::dvec3 depR = m_inMoonSoi ? m_shipMoonR  : m_shipR;
+                const glm::dvec3 depV = m_inMoonSoi ? m_shipMoonV  : m_shipV;
+                glm::dvec3 arrR = gwArrR;
+                if (m_inMoonSoi) {
+                    // Subtract Moon's geocentric position at arrival to get Moon-centric arrR.
+                    astro::PosState moonArr;
+                    astro::Spice().getRelativeGeometricState(301, 399,
+                        astro::EphemerisTime(m_detail.arrET), moonArr, kEclipJ2000);
+                    arrR -= glm::dvec3(moonArr.r.x, moonArr.r.y, moonArr.r.z);
+                }
+
                 glm::dvec3 vReq, vArr;
-                if (spacecraft::solveLambert(kGmEarth, m_shipR, gwArrR,
-                                              tofRem, true, vReq, vArr)) {
-                    m_tcmDv   = vReq - m_shipV;
+                if (spacecraft::solveLambert(mu, depR, arrR, tofRem, true, vReq, vArr)) {
+                    // TCM ΔV is in the frame of depV (geocentric or Moon-centric).
+                    m_tcmDv    = vReq - depV;
                     m_tcmValid = true;
                 }
             } catch (...) {}
@@ -502,6 +516,10 @@ void GatewayMFD::onLeft(int slot)
                     plan.burnDuration = dvTLI * 1000.0 / accel;
                     plan.retrogradeBurn = false;
                     plan.slewOnArm      = true;
+                    // Use the Lambert departure direction so the out-of-plane
+                    // component toward the inclined NRHO is correctly applied.
+                    if (glm::length(m_detail.vDep) > 1e-9)
+                        plan.burnDirection = glm::normalize(m_detail.vDep);
                     if (m_eventQueue) m_eventQueue->cancelByName("TLI");
                     m_burnCtrl.arm(plan, m_autopilot, m_eventQueue);
                 }

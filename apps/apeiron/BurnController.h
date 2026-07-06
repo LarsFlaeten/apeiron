@@ -34,6 +34,13 @@ struct BurnPlan {
     // If false: arm() does NOT slew the autopilot immediately — pilot orients manually.
     // The attitude is still asserted at PreIgnition and during Executing.
     bool        slewOnArm      = true;
+    // Optional fixed burn direction in ECLIPJ2000 inertial frame (unit vector).
+    // When non-zero, autopilot uses TcmPlus (fixed inertial direction) instead of
+    // Prograde.  Use this for burns that require an out-of-plane component
+    // (e.g. TLI toward a highly-inclined NRHO — the Lambert departure velocity
+    // is not purely prograde in the parking orbit).
+    // Zero (default) = prograde / retrograde as before.
+    glm::dvec3  burnDirection  {};
 };
 
 // ---------------------------------------------------------------------------
@@ -68,11 +75,22 @@ public:
     const BurnPlan& plan()              const { return m_plan; }
     double          timeToIgnition(double et) const { return m_plan.ignitionET - et; }
 
+    // Returns the fixed inertial burn direction while Armed/PreIgnition/Executing,
+    // or zero if inactive or if the burn uses prograde/retrograde attitude.
+    // main.cpp uses this to set autopilot.tcmDirInertial instead of activeNavDv.
+    glm::dvec3 getActiveBurnDirection() const {
+        if (m_phase == BurnPhase::Idle || m_phase == BurnPhase::Complete) return {};
+        return m_plan.burnDirection;  // zero if not a fixed-direction burn
+    }
+
     // Returns 10× while the engine is firing (attitude controller is stable
     // at that rate), or 0.0 when no cap is needed.
     double maxSimSpeed() const { return (m_phase == BurnPhase::Executing) ? 10.0 : 0.0; }
 
 private:
+    void setBurnAttitude (spacecraft::Autopilot* ap);
+    bool hasBurnAttitude (const spacecraft::Autopilot* ap) const;
+
     BurnPhase              m_phase       = BurnPhase::Idle;
     BurnPlan               m_plan;
     spacecraft::Autopilot* m_autopilot   = nullptr;

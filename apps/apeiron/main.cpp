@@ -1536,7 +1536,10 @@ int main(int argc, char* argv[])
                             }
                             autopilot.updateOrbitalTarget(apR, apV, att);
                             autopilot.updateRelVelTarget(att);
-                            autopilot.tcmDirInertial = activeNavDv;
+                            // Fixed-direction burn (e.g. TLI toward NRHO) overrides TCM direction.
+                            const glm::dvec3 fixedBurnDir = gatewayMFD.getActiveBurnDir();
+                            autopilot.tcmDirInertial = (glm::length(fixedBurnDir) > 0.5)
+                                                       ? fixedBurnDir : activeNavDv;
                             autopilot.updateTcmTarget(att);
 
                             bool settleClamp = false;

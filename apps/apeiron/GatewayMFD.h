@@ -67,7 +67,8 @@ public:
 
     bool requestMainEngine() const { return m_burnCtrl.requestMainEngine(); }
 
-    glm::dvec3 getTcmDv() const { return m_tcmValid ? m_tcmDv : glm::dvec3(0.0); }
+    glm::dvec3 getTcmDv()          const { return m_tcmValid ? m_tcmDv : glm::dvec3(0.0); }
+    glm::dvec3 getActiveBurnDir()  const { return m_burnCtrl.getActiveBurnDirection(); }
 
     bool consumeSoiEntry() {
         const bool v = m_soiEntryPending;

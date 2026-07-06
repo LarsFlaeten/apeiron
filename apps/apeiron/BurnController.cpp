@@ -9,6 +9,28 @@ static constexpr double kPreIgnLead = 60.0;   // seconds before ignition to ente
 static constexpr double kIgnAbort   = 30.0;   // seconds past planned ignition before abort
 
 // ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+void BurnController::setBurnAttitude(spacecraft::Autopilot* ap)
+{
+    if (glm::dot(m_plan.burnDirection, m_plan.burnDirection) > 0.5) {
+        ap->tcmDirInertial = glm::normalize(m_plan.burnDirection);
+        ap->mode           = spacecraft::AutopilotMode::TcmPlus;
+    } else {
+        ap->mode = m_plan.retrogradeBurn ? spacecraft::AutopilotMode::Retrograde
+                                         : spacecraft::AutopilotMode::Prograde;
+    }
+}
+
+bool BurnController::hasBurnAttitude(const spacecraft::Autopilot* ap) const
+{
+    if (glm::dot(m_plan.burnDirection, m_plan.burnDirection) > 0.5)
+        return ap->mode == spacecraft::AutopilotMode::TcmPlus;
+    return ap->mode == (m_plan.retrogradeBurn ? spacecraft::AutopilotMode::Retrograde
+                                              : spacecraft::AutopilotMode::Prograde);
+}
+
+// ---------------------------------------------------------------------------
 void BurnController::arm(const BurnPlan& plan,
                          spacecraft::Autopilot* ap,
                          OBCEventQueue* eq)
@@ -24,9 +46,15 @@ void BurnController::arm(const BurnPlan& plan,
         eq->schedule(plan.name + "-IGN", plan.ignitionET, /* countdown10s= */ true);
 
     // Slew to burn attitude immediately (unless pilot wants to orient manually).
-    if (ap && plan.slewOnArm)
-        ap->mode = plan.retrogradeBurn ? spacecraft::AutopilotMode::Retrograde
-                                       : spacecraft::AutopilotMode::Prograde;
+    if (ap && plan.slewOnArm) {
+        if (glm::dot(plan.burnDirection, plan.burnDirection) > 0.5) {
+            ap->tcmDirInertial = glm::normalize(plan.burnDirection);
+            ap->mode           = spacecraft::AutopilotMode::TcmPlus;
+        } else {
+            ap->mode = plan.retrogradeBurn ? spacecraft::AutopilotMode::Retrograde
+                                           : spacecraft::AutopilotMode::Prograde;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -71,9 +99,7 @@ void BurnController::tick(double currentET,
         // attitude check so any time-accel interruption gets corrected.
         if (currentET >= m_plan.ignitionET - kPreIgnLead) {
             if (m_autopilot)
-                m_autopilot->mode = m_plan.retrogradeBurn
-                    ? spacecraft::AutopilotMode::Retrograde
-                    : spacecraft::AutopilotMode::Prograde;
+                setBurnAttitude(m_autopilot);
             m_phase = BurnPhase::PreIgnition;
         }
         return;
@@ -81,11 +107,8 @@ void BurnController::tick(double currentET,
     // -----------------------------------------------------------------------
     case BurnPhase::PreIgnition: {
         // Continuously re-engage burn attitude in case the user knocked it off.
-        const auto burnAtt = m_plan.retrogradeBurn
-            ? spacecraft::AutopilotMode::Retrograde
-            : spacecraft::AutopilotMode::Prograde;
-        if (m_autopilot && m_autopilot->mode != burnAtt)
-            m_autopilot->mode = burnAtt;
+        if (m_autopilot && !hasBurnAttitude(m_autopilot))
+            setBurnAttitude(m_autopilot);
 
         if (currentET >= m_plan.ignitionET) {
             const bool settled = !m_autopilot || !m_autopilot->inLargeSlew;
