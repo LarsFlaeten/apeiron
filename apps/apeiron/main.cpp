@@ -1663,6 +1663,25 @@ int main(int argc, char* argv[])
                     [&](double)    { dockingConstraint.enforcePostStep(); });
             }
 
+            // Pin non-player orbiting spacecraft to their analytical Keplerian orbit.
+            // Prevents Lyapunov instability (e.g. NRHO) and RKF78 accumulation errors
+            // from diverging at high time warp. Applied after RKF78 so the physics world
+            // gravity/SOI detection still runs normally (using the player's position).
+            {
+                for (size_t vi = 0; vi < vehicleConfigs.size(); ++vi) {
+                    if (vi == playerIdx) continue;
+                    const auto& vc = vehicleConfigs[vi];
+                    if (!vc.hasOrbit) continue;
+                    astro::PosState st = spacecraft::vehicleStateAtEt(vc, currentEt);
+                    spacecraft[vi]->setPosition(glm::dvec3(st.r));
+                    spacecraft[vi]->setVelocity(glm::dvec3(st.v));
+                }
+                // Re-enforce rigid docking lock so the active (child) spacecraft
+                // follows the Keplerian-corrected passive position.
+                if (dockingConstraint.phase() == DockingConstraint::Phase::HardCapture)
+                    dockingConstraint.enforcePostStep();
+            }
+
             observerPos = observer.worldPosition(currentEt);
             scene.update(currentEt, observerPos);
 
