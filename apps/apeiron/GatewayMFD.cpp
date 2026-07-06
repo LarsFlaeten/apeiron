@@ -93,10 +93,9 @@ void GatewayMFD::update(const MFDContext& ctx)
                 m_gatewayOk = true;
             }
         }
-        if (m_inMoonSoi && !m_wasInMoonSoi) {
-            obc::speak("Entered Moon sphere of influence.");
+        // Rising edge — flag for main.cpp to announce and drop to 1×.
+        if (m_inMoonSoi && !m_wasInMoonSoi)
             m_soiEntryPending = true;
-        }
         m_wasInMoonSoi = m_inMoonSoi;
     } catch (...) {}
 
@@ -1409,17 +1408,19 @@ void GatewayMFD::renderCoast(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             diag.addOrbit(m_shipR, m_shipV, kGmEarth,
                          IM_COL32(0, 200, 80, 200), "", false, true);
 
-        // Moon current position.
+        // Moon current position — linearly interpolated between samples.
         if (!m_moonOrbitPts.empty() && m_detail.valid) {
             constexpr int    kN       = 180;
             constexpr double kSpanDay = 13.0;
             const double span = kSpanDay * kDay;
             const double t0   = m_detail.arrET - span * 0.5;
             const double dt   = span / (kN - 1);
-            // Nearest sample to currentET.
-            int mi = static_cast<int>((m_currentET - t0) / dt + 0.5);
-            mi = std::clamp(mi, 0, (int)m_moonOrbitPts.size() - 1);
-            diag.addMarker(m_moonOrbitPts[mi], IM_COL32(180,180,220,200), "M");
+            const double frac = (m_currentET - t0) / dt;
+            const int    i0   = std::clamp(static_cast<int>(frac), 0, (int)m_moonOrbitPts.size() - 2);
+            const int    i1   = i0 + 1;
+            const double t    = std::clamp(frac - i0, 0.0, 1.0);
+            const glm::dvec3 moonInterp = glm::mix(m_moonOrbitPts[i0], m_moonOrbitPts[i1], t);
+            diag.addMarker(moonInterp, IM_COL32(180,180,220,200), "M");
         }
 
         // Gateway current position "G" and planned arrival "T".

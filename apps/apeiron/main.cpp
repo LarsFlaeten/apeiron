@@ -1305,17 +1305,16 @@ int main(int argc, char* argv[])
                 transferMFD.scheduleFineApproachTcms();
             }
 
-            // Drop to 1× on Moon SOI entry during cislunar coast so the pilot
-            // can switch to the LOI page and arm the capture burn.
-            if (cislunarMFD.consumeSoiEntry()) {
-                simSpeedTarget          = 1.0;
-                simSecondsPerRealSecond = 1.0;
-            }
-
-            // Same drop for GatewayMFD Moon SOI entry.
-            if (gatewayMFD.consumeSoiEntry()) {
-                simSpeedTarget          = 1.0;
-                simSecondsPerRealSecond = 1.0;
+            // Drop to 1× on Moon SOI entry (cislunar or gateway).
+            // Consume both flags but speak/drop only once regardless of which fired.
+            {
+                const bool cis = cislunarMFD.consumeSoiEntry();
+                const bool gw  = gatewayMFD.consumeSoiEntry();
+                if (cis || gw) {
+                    obc::speak("Entered Moon sphere of influence.");
+                    simSpeedTarget          = 1.0;
+                    simSecondsPerRealSecond = 1.0;
+                }
             }
 
             // Drop to 1× on TCM warning rising edge; pilot can speed up freely after.

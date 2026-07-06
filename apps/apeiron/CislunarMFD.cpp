@@ -84,11 +84,9 @@ void CislunarMFD::update(const MFDContext& ctx)
         } else {
             m_moonPeCurrent = std::numeric_limits<double>::quiet_NaN();
         }
-        // Rising edge — announce and flag for main.cpp to drop to 1×.
-        if (m_inMoonSoi && !m_wasInMoonSoi) {
-            obc::speak("Entered Moon sphere of influence.");
+        // Rising edge — flag for main.cpp to announce and drop to 1×.
+        if (m_inMoonSoi && !m_wasInMoonSoi)
             m_soiEntryPending = true;
-        }
         m_wasInMoonSoi = m_inMoonSoi;
     } catch (...) {}
 
