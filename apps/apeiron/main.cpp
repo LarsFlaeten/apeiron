@@ -1726,23 +1726,27 @@ int main(int argc, char* argv[])
                     [&](double)    { dockingConstraint.enforcePostStep(); });
             }
 
-            // Pin non-player orbiting spacecraft to their analytical Keplerian orbit.
-            // Only at warp >= 100x: at low warp the RKF78 integrator is accurate enough
-            // and frame-to-frame Keplerian snapping causes visible prograde oscillation
-            // for near-circular LEO orbits (ill-defined periapsis direction at e~0.0006).
-            // At >= 100x the Lyapunov-unstable NRHO diverges without pinning, and LEO
-            // spacecraft (ISS etc.) are not normally visible during high-warp transit.
-            if (simSecondsPerRealSecond >= 100.0) {
+            // Pin non-player orbiting spacecraft to their analytical orbit.
+            // Strategy is split by eccentricity:
+            //   Near-circular (e < 0.05, e.g. ISS e≈0.0006): pin only at high warp.
+            //     At low warp the two-body integrator is accurate and the frame-by-frame
+            //     Keplerian snap causes prograde oscillation (ill-defined periapsis direction).
+            //   Eccentric / three-body (e >= 0.05, e.g. Gateway NRHO e≈0.72): pin always.
+            //     The NRHO diverges from two-body within hours; must be corrected at any warp.
+            {
+                const bool highWarp = (simSecondsPerRealSecond >= 100.0);
                 for (size_t vi = 0; vi < vehicleConfigs.size(); ++vi) {
                     if (vi == playerIdx) continue;
                     const auto& vc = vehicleConfigs[vi];
                     if (!vc.hasOrbit) continue;
+                    const bool eccentric = (vc.orbitElements.e >= 0.05);
+                    if (!highWarp && !eccentric) continue;  // let integrator run for near-circular at low warp
                     astro::PosState st = spacecraft::vehicleStateAtEt(vc, currentEt);
                     spacecraft[vi]->setPosition(glm::dvec3(st.r));
                     spacecraft[vi]->setVelocity(glm::dvec3(st.v));
                 }
                 // Re-enforce rigid docking lock so the active (child) spacecraft
-                // follows the Keplerian-corrected passive position.
+                // follows the corrected passive position.
                 if (dockingConstraint.phase() == DockingConstraint::Phase::HardCapture)
                     dockingConstraint.enforcePostStep();
             }
