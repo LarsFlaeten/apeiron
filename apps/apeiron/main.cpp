@@ -934,7 +934,8 @@ int main(int argc, char* argv[])
         } windowState{&renderer, 0.0, &viewMode, &simSpeedTarget,
                       &navCamNodes, &navCamIdx, nullptr};
 
-        bool isFullscreen = false;
+        bool isFullscreen        = false;
+        bool pendingFullscreen   = false;  // deferred: apply at top of next frame
         bool needsResize  = false;
         int  windowedX = 100, windowedY = 100;
 
@@ -1213,6 +1214,23 @@ int main(int argc, char* argv[])
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
 
+            // Apply a deferred fullscreen toggle before touching the swapchain.
+            // glfwSetWindowMonitor is called here (top of frame, before acquire) so
+            // the swapchain recreate that follows immediately uses the correct size.
+            if (pendingFullscreen) {
+                pendingFullscreen = false;
+                if (isFullscreen) {
+                    GLFWmonitor* mon = glfwGetPrimaryMonitor();
+                    const GLFWvidmode* vm = glfwGetVideoMode(mon);
+                    glfwSetWindowMonitor(window, mon, 0, 0,
+                                        vm->width, vm->height, vm->refreshRate);
+                } else {
+                    glfwSetWindowMonitor(window, nullptr,
+                                        windowedX, windowedY, kWidth, kHeight, 0);
+                }
+                needsResize = true;
+            }
+
             if (needsResize) {
                 int fbW = 0, fbH = 0;
                 glfwGetFramebufferSize(window, &fbW, &fbH);
@@ -1225,10 +1243,6 @@ int main(int argc, char* argv[])
                     camera.setAspect(static_cast<float>(fbW) /
                                      static_cast<float>(fbH));
                     needsResize = false;
-                    // Skip this frame — the old swapchain image was already in flight
-                    // when the surface resized; presenting it produces a black bar.
-                    // One skipped frame at 60 fps is imperceptible.
-                    continue;
                 }
             }
 
@@ -2028,17 +2042,9 @@ int main(int argc, char* argv[])
             ImGui::Text("%.1f fps  (%.2f ms)", ImGui::GetIO().Framerate,
                         1000.0f / ImGui::GetIO().Framerate);
             if (ImGui::Checkbox("Fullscreen", &isFullscreen)) {
-                if (isFullscreen) {
+                if (isFullscreen)
                     glfwGetWindowPos(window, &windowedX, &windowedY);
-                    GLFWmonitor* mon = glfwGetPrimaryMonitor();
-                    const GLFWvidmode* mode = glfwGetVideoMode(mon);
-                    glfwSetWindowMonitor(window, mon, 0, 0,
-                                        mode->width, mode->height, mode->refreshRate);
-                } else {
-                    glfwSetWindowMonitor(window, nullptr,
-                                        windowedX, windowedY, kWidth, kHeight, 0);
-                }
-                needsResize = true;
+                pendingFullscreen = true;  // apply at top of next frame, before acquire
             }
             ImGui::Separator();
 
@@ -2863,12 +2869,7 @@ int main(int argc, char* argv[])
                        camMFD.slewYaw(), camMFD.slewPitch());
             buildCamVP(dockingMFD.preferredCamNode(), dockingMFD.fovDeg(),    dockVP, dockCamPos, &dockVPRot);
 
-            // If needsResize was set mid-frame (e.g. by the fullscreen checkbox firing
-            // glfwSetWindowMonitor during ImGui processing), skip acquire+render+present
-            // for this frame so we never present an old-size image on the new surface.
-            // The swapchain is recreated at the top of the next iteration.
-            if (needsResize) continue;
-            if (!renderer.acquireFrame()) continue;
+            if (!renderer.acquireFrame()) { needsResize = true; continue; }
 
             // ---- Offscreen cam pre-passes (before the main HDR pass) ----
             {
