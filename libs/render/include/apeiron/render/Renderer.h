@@ -135,6 +135,11 @@ public:
     // Call after Swapchain::recreate() with the device idle.
     void recreateFramebuffers();
 
+    // True if endFrame() detected that the swapchain is out-of-date or suboptimal.
+    // Caller should recreate the swapchain and reset this flag.
+    bool needsResize() const  { return m_needsResize; }
+    void clearNeedsResize()   { m_needsResize = false; }
+
     // Access the active command buffer — valid between beginFrame/endFrame.
     vk::CommandBuffer currentCmd() const { return m_commandBuffers[m_currentFrame]; }
 
@@ -172,6 +177,7 @@ private:
     uint32_t m_activeImageIndex = 0;
     bool     m_wireframe        = false;
     float    m_exposure         = 1.0f;
+    bool     m_needsResize      = false;
 };
 
 } // namespace apeiron::render

@@ -238,7 +238,9 @@ bool Renderer::acquireFrame()
         m_swapchain.handle(), UINT64_MAX, m_imageAvailable[frame], nullptr);
 
     if (acqResult == vk::Result::eErrorOutOfDateKHR)
-        return false;
+        return false;  // no image acquired, semaphore not signaled — skip frame
+    if (acqResult == vk::Result::eSuboptimalKHR)
+        m_needsResize = true;  // image acquired (semaphore signaled) — render normally, recreate after present
 
     device.resetFences(m_inFlight[frame]);
     m_activeImageIndex = imageIndex;
@@ -521,7 +523,10 @@ void Renderer::endFrame()
     presentInfo.setWaitSemaphores(m_renderFinished[frame])
                .setSwapchains   (swapchain)
                .setImageIndices (m_activeImageIndex);
-    (void)m_ctx.presentQueue().presentKHR(presentInfo);
+    auto presentResult = m_ctx.presentQueue().presentKHR(presentInfo);
+    if (presentResult == vk::Result::eErrorOutOfDateKHR ||
+        presentResult == vk::Result::eSuboptimalKHR)
+        m_needsResize = true;
 
     m_currentFrame = (m_currentFrame + 1) % kMaxFramesInFlight;
 }

@@ -1228,6 +1228,9 @@ int main(int argc, char* argv[])
                     glfwSetWindowMonitor(window, nullptr,
                                         windowedX, windowedY, kWidth, kHeight, 0);
                 }
+                // Poll once more so the OS resize event is dispatched and
+                // glfwGetFramebufferSize() below returns the new dimensions.
+                glfwPollEvents();
                 needsResize = true;
             }
 
@@ -2728,7 +2731,7 @@ int main(int argc, char* argv[])
                     navConsole.update(*spacecraft[playerIdx], shipForce, shipMass, frameDt);
                     navConsole.render(kMfdW, H, kMfdW, nav, autopilot,
                                       spacecraft, playerIdx, kSpacecraftNames, scPorts, mainEngineOn,
-                                      activeNavDv);
+                                      mainEngineThrust, activeNavDv);
                 }
 
                 // ---- Helmet HUD overlay ----
@@ -3157,6 +3160,11 @@ int main(int argc, char* argv[])
             }
 
             renderer.endFrame();
+            // Detect suboptimal/out-of-date from the present side (e.g. Wayland async resize).
+            if (renderer.needsResize()) {
+                renderer.clearNeedsResize();
+                needsResize = true;
+            }
         }
     }
     catch (const std::exception& e) {
