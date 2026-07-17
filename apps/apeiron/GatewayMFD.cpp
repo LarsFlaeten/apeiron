@@ -888,9 +888,11 @@ void GatewayMFD::renderWindow(ImDrawList* dl, ImVec2 origin, ImVec2 size)
     }
 
     // Minimum-plane-change isoline — always drawn when plane data exists.
-    // Marks the diagonal ridge where the out-of-plane ΔV is lowest.
+    // Drawn 5% of the PC range above the minimum so it sits visibly inside
+    // the first regular isoline rather than coinciding with it.
     if (!m_planeGrid.empty() && m_planeMin < spacecraft::PorkchopData::kNoSolution * 0.5f) {
-        const float kZeroLev = m_planeMin * 1.001f;  // just above minimum to guarantee crossings
+        const float pcRange  = (m_planeMax > m_planeMin) ? (m_planeMax - m_planeMin) : 1.0f;
+        const float kZeroLev = m_planeMin + std::max(0.1f, pcRange * 0.05f);
         const ImU32 zeroCol  = IM_COL32(255, 120, 220, 220);   // magenta
         const float kNS3 = spacecraft::PorkchopData::kNoSolution * 0.5f;
         static const int8_t kMS3[16][4] = {
@@ -938,7 +940,7 @@ void GatewayMFD::renderWindow(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             }
         }
         if(lblValid){
-            char lbl[16]; std::snprintf(lbl,sizeof(lbl),"PC %.2f",m_planeMin);
+            char lbl[20]; std::snprintf(lbl,sizeof(lbl),"PC min %.2f",m_planeMin);
             ImVec2 tsz=ImGui::CalcTextSize(lbl);
             float lx=gx0+(lblPt.x+0.5f)*cellW-tsz.x*0.5f;
             float ly=lblPt.y-tsz.y*0.5f;
