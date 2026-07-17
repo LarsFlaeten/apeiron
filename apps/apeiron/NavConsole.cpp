@@ -72,6 +72,7 @@ void NavConsole::render(float                                           posX,
                         const std::vector<std::string>&                 scNames,
                         const std::vector<std::vector<DockPort>>&       scPorts,
                         bool                                            mainEngineOn,
+                        double                                          mainThrustN,
                         const glm::dvec3&                               tcmDv)
 {
     const float  consW  = width;
@@ -284,32 +285,62 @@ void NavConsole::render(float                                           posX,
             }
 
             double distM  = distKm * 1000.0;
-            double relVMs = glm::length(player.velocity() - tgt.velocity()) * 1000.0;
+            const glm::dvec3 relR = player.position() - tgt.position();   // km
+            const glm::dvec3 relV = player.velocity() - tgt.velocity();   // km/s
+            double relVMs = glm::length(relV) * 1000.0;                   // m/s
             if (distM < 1000.0)
                 rowf("DIST   ", "%7.1f m",   distM);
             else
                 rowf("DIST   ", "%7.3f km",  distKm);
             rowf("VR     ", "%7.3f m/s", relVMs);
 
-            // Time and distance to null relative velocity, assuming NullV autopilot
-            // engages now with current RCS authority in the relative-velocity direction.
-            // a = F/m where F is the authority the autopilot would command.
+            // Closest approach with current course (straight-line estimate).
             {
-                const double aMs2 = autopilot.nullVAuthN / m_shipMass;  // m/s²
+                const double relVKmS2 = glm::dot(relV, relV);
+                if (relVKmS2 > 1e-12) {
+                    const double t_ca = -glm::dot(relR, relV) / relVKmS2;  // s
+                    if (t_ca > 0.0) {
+                        const double caDist  = glm::length(relR + relV * t_ca) * 1000.0; // m
+                        const int    caHr    = static_cast<int>(t_ca / 3600.0);
+                        const int    caMin   = static_cast<int>(t_ca / 60.0) % 60;
+                        const int    caSec   = static_cast<int>(t_ca) % 60;
+                        if (caDist < 1000.0)
+                            rowf("CA-DST ", "%7.1f m",  caDist);
+                        else
+                            rowf("CA-DST ", "%7.3f km", caDist / 1000.0);
+                        if (caHr > 0)
+                            rowf("CA-T   ", "%3dh%02dm%02ds", caHr, caMin, caSec);
+                        else if (caMin > 0)
+                            rowf("CA-T   ", "   %2dm%02ds",   caMin, caSec);
+                        else
+                            rowf("CA-T   ", "%7.1f s",        t_ca);
+                    } else {
+                        rowf("CA-DST ", "  --");
+                        rowf("CA-T   ", "  --");
+                    }
+                } else {
+                    rowf("CA-DST ", "  --");
+                    rowf("CA-T   ", "  --");
+                }
+            }
+
+            // Time to null relative velocity using main thruster.
+            {
+                const double aMs2 = (mainThrustN > 0.0 && m_shipMass > 1.0)
+                                    ? mainThrustN / m_shipMass : 0.0;
                 if (aMs2 > 1e-9 && relVMs > 1e-3) {
-                    double tNull = relVMs / aMs2;                        // s
-                    double dNull = (relVMs * relVMs) / (2.0 * aMs2);    // m
-                    if (tNull < 60.0)
-                        rowf("T-NV   ", "%7.1f s",  tNull);
+                    const double tNull = relVMs / aMs2;
+                    const int    tHr   = static_cast<int>(tNull / 3600.0);
+                    const int    tMin  = static_cast<int>(tNull / 60.0) % 60;
+                    const int    tSec  = static_cast<int>(tNull) % 60;
+                    if (tHr > 0)
+                        rowf("T-NV   ", "%3dh%02dm%02ds", tHr, tMin, tSec);
+                    else if (tMin > 0)
+                        rowf("T-NV   ", "   %2dm%02ds",   tMin, tSec);
                     else
-                        rowf("T-NV   ", "%7.1f min", tNull / 60.0);
-                    if (dNull < 1000.0)
-                        rowf("D-NV   ", "%7.1f m",  dNull);
-                    else
-                        rowf("D-NV   ", "%7.3f km", dNull / 1000.0);
+                        rowf("T-NV   ", "%7.1f s",        tNull);
                 } else {
                     rowf("T-NV   ", "  --");
-                    rowf("D-NV   ", "  --");
                 }
             }
         }
