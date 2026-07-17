@@ -582,10 +582,15 @@ void GatewayMFD::onLeft(int slot)
                     plan.burnDuration = dvTLI * 1000.0 / accel;
                     plan.retrogradeBurn = false;
                     plan.slewOnArm      = true;
-                    // Use the Lambert departure direction so the out-of-plane
-                    // component toward the inclined NRHO is correctly applied.
-                    if (glm::length(m_detail.vDep) > 1e-9)
-                        plan.burnDirection = glm::normalize(m_detail.vDep);
+                    // Burn direction = ΔV vector (departure velocity minus parking-orbit
+                    // velocity at burn point).  This correctly captures any out-of-plane
+                    // component for inclined NRHO transfers; reduces to near-prograde
+                    // for low-plane-change windows.
+                    {
+                        const glm::dvec3 dv = m_detail.vDep - m_detail.vDepBody;
+                        if (glm::length(dv) > 1e-9)
+                            plan.burnDirection = glm::normalize(dv);
+                    }
                     if (m_eventQueue) m_eventQueue->cancelByName("TLI");
                     m_burnCtrl.arm(plan, m_autopilot, m_eventQueue);
                 }
@@ -879,6 +884,66 @@ void GatewayMFD::renderWindow(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             float ly=pcLblPts[li].y-tsz.y*0.5f;
             dl->AddRectFilled({lx-1,ly-1},{lx+tsz.x+1,ly+tsz.y+1},IM_COL32(0,0,30,180));
             dl->AddText({lx,ly},IM_COL32(100,230,255,230),buf);
+        }
+    }
+
+    // Minimum-plane-change isoline — always drawn when plane data exists.
+    // Marks the diagonal ridge where the out-of-plane ΔV is lowest.
+    if (!m_planeGrid.empty() && m_planeMin < spacecraft::PorkchopData::kNoSolution * 0.5f) {
+        const float kZeroLev = m_planeMin * 1.001f;  // just above minimum to guarantee crossings
+        const ImU32 zeroCol  = IM_COL32(255, 120, 220, 220);   // magenta
+        const float kNS3 = spacecraft::PorkchopData::kNoSolution * 0.5f;
+        static const int8_t kMS3[16][4] = {
+            {-1,-1,-1,-1},{3,0,-1,-1},{0,1,-1,-1},{3,1,-1,-1},
+            {1,2,-1,-1},  {0,0,0,0}, {0,2,-1,-1},{3,2,-1,-1},
+            {2,3,-1,-1},  {2,0,-1,-1},{0,0,0,0}, {2,1,-1,-1},
+            {1,3,-1,-1},  {1,0,-1,-1},{0,3,-1,-1},{-1,-1,-1,-1},
+        };
+        auto zEdgePt = [&](int i, int j, int edge,
+                           float v0, float v1, float v2, float v3) -> ImVec2 {
+            float bx=gx0+(i+0.5f)*cellW, by=gy0+(nTof-0.5f-j)*cellH;
+            float tx=bx+cellW, ty=by-cellH;
+            auto lerp=[](float a,float b,float lev){float d=b-a; return d==0?0.5f:(lev-a)/d;};
+            switch(edge){
+            case 0:return{bx+lerp(v0,v1,kZeroLev)*cellW, by};
+            case 1:return{tx, by-lerp(v1,v2,kZeroLev)*cellH};
+            case 2:return{tx-lerp(v2,v3,kZeroLev)*cellW, ty};
+            case 3:return{bx, ty+lerp(v3,v0,kZeroLev)*cellH};
+            default:return{bx,by};}
+        };
+        ImVec2 lblPt{0,0}; bool lblValid=false;
+        for (int i=0;i<nDep-1;++i) for (int j=0;j<nTof-1;++j) {
+            float v0=m_planeGrid[j*nDep+i],       v1=m_planeGrid[j*nDep+i+1];
+            float v2=m_planeGrid[(j+1)*nDep+i+1], v3=m_planeGrid[(j+1)*nDep+i];
+            if(v0>kNS3||v1>kNS3||v2>kNS3||v3>kNS3) continue;
+            int ci=((v0>kZeroLev)?1:0)|((v1>kZeroLev)?2:0)|
+                   ((v2>kZeroLev)?4:0)|((v3>kZeroLev)?8:0);
+            if(ci==0||ci==15) continue;
+            int8_t e[4];
+            if(ci==5||ci==10){
+                bool ca=((v0+v1+v2+v3)*0.25f>kZeroLev);
+                if(ci==5){if(!ca){e[0]=3;e[1]=0;e[2]=1;e[3]=2;}else{e[0]=0;e[1]=1;e[2]=2;e[3]=3;}}
+                else     {if(!ca){e[0]=0;e[1]=1;e[2]=2;e[3]=3;}else{e[0]=3;e[1]=0;e[2]=1;e[3]=2;}}
+            } else { e[0]=kMS3[ci][0];e[1]=kMS3[ci][1];e[2]=kMS3[ci][2];e[3]=kMS3[ci][3]; }
+            if(e[0]>=0&&e[1]>=0){
+                ImVec2 pa=zEdgePt(i,j,e[0],v0,v1,v2,v3);
+                ImVec2 pb=zEdgePt(i,j,e[1],v0,v1,v2,v3);
+                dl->AddLine(pa,pb,zeroCol,1.5f);
+                if(!lblValid||i>(int)lblPt.x){lblPt={float(i),(pa.y+pb.y)*0.5f};lblValid=true;}
+            }
+            if(e[2]>=0&&e[3]>=0){
+                ImVec2 pc=zEdgePt(i,j,e[2],v0,v1,v2,v3);
+                ImVec2 pd=zEdgePt(i,j,e[3],v0,v1,v2,v3);
+                dl->AddLine(pc,pd,zeroCol,1.5f);
+            }
+        }
+        if(lblValid){
+            char lbl[16]; std::snprintf(lbl,sizeof(lbl),"PC %.2f",m_planeMin);
+            ImVec2 tsz=ImGui::CalcTextSize(lbl);
+            float lx=gx0+(lblPt.x+0.5f)*cellW-tsz.x*0.5f;
+            float ly=lblPt.y-tsz.y*0.5f;
+            dl->AddRectFilled({lx-1,ly-1},{lx+tsz.x+1,ly+tsz.y+1},IM_COL32(0,0,20,180));
+            dl->AddText({lx,ly},zeroCol,lbl);
         }
     }
 
@@ -1260,7 +1325,12 @@ void GatewayMFD::renderBurn(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             double tti=m_burnCtrl.timeToIgnition(m_currentET);
             char hms[16];
             if(tti>=0.0) fmtHMS(tti,hms,sizeof(hms)); else std::snprintf(hms,sizeof(hms),"HOLD");
-            add(kArmed,"PRE-IGN  T-%s  PROGRADE  [DSARM]",hms); sep(); break;
+            {
+                const bool fixedDir = glm::length(m_burnCtrl.getActiveBurnDirection()) > 0.5;
+                add(kArmed,"PRE-IGN  T-%s  %s  [DSARM]",hms,
+                    fixedDir ? "FIXED DIR" : "PROGRADE"); sep();
+            }
+            break;
         }
         case BurnPhase::Executing: add(kExec,"EXECUTING BURN  [DSARM]"); sep(); break;
         case BurnPhase::Complete:  add(kDone,"BURN COMPLETE"); sep(); break;
@@ -1614,10 +1684,15 @@ void GatewayMFD::renderNRHO(ImDrawList* dl, ImVec2 origin, ImVec2 size)
             if (relVMag > 1e-6 && m_mainThrustN > 0.0 && m_shipMass > 0.0) {
                 const double accelKmS2 = (m_mainThrustN / m_shipMass) * 1e-3; // km/s²
                 const double burnSec   = relVMag / accelKmS2;
-                const int bMin = static_cast<int>(burnSec / 60.0);
+                const int bHr  = static_cast<int>(burnSec / 3600.0);
+                const int bMin = static_cast<int>(burnSec / 60.0) % 60;
                 const int bSec = static_cast<int>(burnSec) % 60;
-                txt(kCyan,"Burn to null  %d:%02d  (@ %.2f m/s²)",
-                    bMin, bSec, m_mainThrustN / m_shipMass);
+                if (bHr > 0)
+                    txt(kCyan,"Burn to null  %dh%02dm%02ds  (@ %.2f m/s²)",
+                        bHr, bMin, bSec, m_mainThrustN / m_shipMass);
+                else
+                    txt(kCyan,"Burn to null  %d:%02d  (@ %.2f m/s²)",
+                        bMin, bSec, m_mainThrustN / m_shipMass);
             }
             y += 2;
 
