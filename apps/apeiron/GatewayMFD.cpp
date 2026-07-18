@@ -152,7 +152,7 @@ void GatewayMFD::update(const MFDContext& ctx)
                 if (tIgn > 30.0) {  // stop only in the last 30 s before ignition
                     const double ignET = m_currentET + tIgn;
                     const double curET = m_eventQueue->etForName("NRHO INS");
-                    if (curET > 0.0 && std::abs(curET - ignET) > 60.0)
+                    if (curET > 0.0 && std::abs(curET - ignET) > 5.0)
                         m_eventQueue->updateEventTime("NRHO INS", ignET);
                 }
             }
