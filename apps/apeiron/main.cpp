@@ -2232,6 +2232,9 @@ int main(int argc, char* argv[])
                     sd.plan         = transferMFD.getPlan();
                     sd.cislunarPlan = cislunarMFD.getPlan();
                     sd.gatewayPlan  = gatewayMFD.getPlan();
+                    // Nav docking target selection (independent of hard-capture state).
+                    sd.navDockTgtIdx  = nav.dockTgtIdx;
+                    sd.navDockPortIdx = nav.dockPortIdx;
                     // Docking: record hard-captured pair so restore can re-lock them.
                     if (dockingConstraint.phase() == DockingConstraint::Phase::HardCapture) {
                         auto* act = dockingConstraint.activeSc();
@@ -2299,6 +2302,15 @@ int main(int argc, char* argv[])
                                 nav.dockTgtIdx  = pi;
                                 nav.dockPortIdx = pPort;
                             }
+                        }
+
+                        // Restore nav docking target (overrides what hard-capture restore may
+                        // have set — if both existed at save time they agree anyway).
+                        if (sd.navDockTgtIdx >= 0 &&
+                            sd.navDockTgtIdx < static_cast<int>(spacecraft.size())) {
+                            nav.dockTgtIdx  = sd.navDockTgtIdx;
+                            nav.dockPortIdx = sd.navDockPortIdx;
+                            nav.navMode     = NavMode::Docking;
                         }
 
                         if (sd.plan.valid)

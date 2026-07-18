@@ -186,10 +186,14 @@ bool saveSimState(const std::string& path, const SimSaveData& data)
 
         // ---- [sim] ----
         toml::table sim;
-        sim.insert("elapsed_s",    data.simElapsed);
-        sim.insert("speed_target", data.simSpeedTarget);
+        sim.insert("elapsed_s",       data.simElapsed);
+        sim.insert("speed_target",    data.simSpeedTarget);
         if (!data.refBodyName.empty())
-            sim.insert("ref_body", data.refBodyName);
+            sim.insert("ref_body",    data.refBodyName);
+        if (data.navDockTgtIdx >= 0) {
+            sim.insert("nav_dock_tgt",  data.navDockTgtIdx);
+            sim.insert("nav_dock_port", data.navDockPortIdx);
+        }
         root.insert("sim", std::move(sim));
 
         // ---- [[spacecraft]] ----
@@ -266,9 +270,11 @@ bool loadSimState(const std::string& path, SimSaveData& data)
         auto tbl = toml::parse_file(path);
 
         // ---- [sim] ----
-        data.simElapsed     = tbl["sim"]["elapsed_s"]   .value_or(0.0);
-        data.simSpeedTarget = tbl["sim"]["speed_target"].value_or(1.0);
-        data.refBodyName    = tbl["sim"]["ref_body"]    .value_or(std::string{});
+        data.simElapsed        = tbl["sim"]["elapsed_s"]     .value_or(0.0);
+        data.simSpeedTarget    = tbl["sim"]["speed_target"]  .value_or(1.0);
+        data.refBodyName       = tbl["sim"]["ref_body"]      .value_or(std::string{});
+        data.navDockTgtIdx     = tbl["sim"]["nav_dock_tgt"]  .value_or(-1);
+        data.navDockPortIdx    = tbl["sim"]["nav_dock_port"] .value_or(-1);
 
         // ---- [[spacecraft]] ----
         data.spacecraft.clear();

@@ -46,6 +46,11 @@ struct SimSaveData
     CislunarPlanSnapshot  cislunarPlan; // cislunarPlan.valid=false if no plan was active
     GatewayPlanSnapshot   gatewayPlan;  // gatewayPlan.valid=false if no plan was active
 
+    // Selected docking target in the nav console (NavState::dockTgtIdx/dockPortIdx).
+    // -1 = none.  Saved regardless of whether the pair is hard-captured.
+    int navDockTgtIdx  = -1;
+    int navDockPortIdx = -1;
+
     // Docking state — only present when active spacecraft was in HardCapture at save time.
     struct DockingState {
         bool active         = false; // true = a docked pair was saved
