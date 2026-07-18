@@ -81,6 +81,13 @@ public:
     void tick(double currentET, double frameDtReal,
               double& simSpeedTarget, double& simSecondsPerRealSecond);
 
+    // Return the scheduled ET for the named event, or 0.0 if not found.
+    double etForName(const std::string& name) const {
+        for (const auto& e : m_events)
+            if (e.name == name) return e.eventET;
+        return 0.0;
+    }
+
     // Read-only access for SimSave serialisation.
     const std::vector<ScheduledEvent>& events() const { return m_events; }
 

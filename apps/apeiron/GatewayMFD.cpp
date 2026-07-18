@@ -133,6 +133,31 @@ void GatewayMFD::update(const MFDContext& ctx)
         if (ignET > m_currentET)
             m_burnCtrl.updateIgnitionET(ignET, m_eventQueue);
     }
+
+    // While in Moon SOI, keep the "NRHO INS" OBC event updated to the live
+    // ignition time (t_CA − half burn).  Only reschedule when the estimate
+    // has shifted by more than 60 s, and stop when the burn is imminent
+    // (within 2× burn duration) to avoid disturbing the OBC countdown.
+    if (m_inMoonSoi && m_gatewayOk && m_eventQueue
+            && m_mainThrustN > 0.0 && m_shipMass > 1.0) {
+        const glm::dvec3 relR = m_shipMoonR - m_gatewayMoonR;
+        const glm::dvec3 relV = m_shipMoonV - m_gatewayMoonV;
+        const double relVMag  = glm::length(relV);
+        if (relVMag > 1e-6) {
+            const double t_ca = -glm::dot(relR, relV) / (relVMag * relVMag);
+            if (t_ca > 0.0) {
+                const double accelKmS2 = (m_mainThrustN / m_shipMass) * 1e-3;
+                const double burnSec   = relVMag / accelKmS2;
+                const double tIgn      = t_ca - burnSec * 0.5;
+                if (tIgn > 30.0) {  // stop only in the last 30 s before ignition
+                    const double ignET = m_currentET + tIgn;
+                    const double curET = m_eventQueue->etForName("NRHO INS");
+                    if (curET > 0.0 && std::abs(curET - ignET) > 60.0)
+                        m_eventQueue->updateEventTime("NRHO INS", ignET);
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -655,8 +680,16 @@ void GatewayMFD::onRight(int slot)
                     if (m_eventQueue) {
                         if (m_detail.depET > m_currentET)
                             m_eventQueue->schedule("TLI", m_detail.depET);
-                        if (m_detail.arrET > m_currentET)
-                            m_eventQueue->schedule("NRHO INS", m_detail.arrET);
+                        if (m_detail.arrET > m_currentET) {
+                            // Estimate ignition = arrET − half burn, using plan dv2
+                            // and current thrust/mass.  Refined live once in Moon SOI.
+                            double insET = m_detail.arrET;
+                            if (m_mainThrustN > 0.0 && m_shipMass > 1.0) {
+                                const double accel = (m_mainThrustN / m_shipMass) * 1e-3;
+                                insET -= (static_cast<double>(m_detail.dv2) / accel) * 0.5;
+                            }
+                            m_eventQueue->schedule("NRHO INS", insET);
+                        }
                         const double mccET = m_detail.depET + m_detail.tofSec * 0.5;
                         if (mccET > m_currentET)
                             m_eventQueue->schedule("MCC", mccET);
@@ -1667,25 +1700,36 @@ void GatewayMFD::renderNRHO(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                 closure, closure > 0.0 ? "approaching" : "receding");
             txt(kYellow,"Rel-V  %.3f km/s  (insertion ΔV required)",relVMag);
 
-            // Closest approach with current course (straight-line approximation).
-            // t_ca = -dot(relR, relV) / |relV|²  — negative means already past CA.
+            // Closest approach + burn-to-null + insertion ignition time.
+            // t_ca = -dot(relR, relV) / |relV|²  (negative = already past CA)
+            double t_ca    = 0.0;
+            double burnSec = 0.0;
+            bool   hasCa   = false;
+            bool   hasBurn = false;
+
             if (relVMag > 1e-6) {
-                const double t_ca = -glm::dot(relR, relV) / (relVMag * relVMag);
-                if (t_ca > 0.0) {
+                t_ca  = -glm::dot(relR, relV) / (relVMag * relVMag);
+                hasCa = (t_ca > 0.0);
+                if (hasCa) {
                     const double caDist = glm::length(relR + relV * t_ca);
-                    const int caMin = static_cast<int>(t_ca / 60.0);
+                    const int caHr  = static_cast<int>(t_ca / 3600.0);
+                    const int caMin = static_cast<int>(t_ca / 60.0) % 60;
                     const int caSec = static_cast<int>(t_ca) % 60;
                     ImU32 caCol = (caDist < 50.0) ? kGreen : (caDist < 500.0) ? kYellow : kOrange;
-                    txt(caCol,"CA  %.1f km  in %d:%02d",caDist,caMin,caSec);
+                    txt(caCol,"CA  %.1f km  in %s",caDist,
+                        [&]{ static char b[16];
+                             if(caHr>0) std::snprintf(b,sizeof(b),"%dh%02dm%02ds",caHr,caMin,caSec);
+                             else       std::snprintf(b,sizeof(b),"%d:%02d",caMin,caSec);
+                             return b; }());
                 } else {
                     txt(kDim,"CA  past (diverging)");
                 }
             }
 
-            // Burn duration to null rel-V using main thruster (F=ma, no mass change).
             if (relVMag > 1e-6 && m_mainThrustN > 0.0 && m_shipMass > 0.0) {
-                const double accelKmS2 = (m_mainThrustN / m_shipMass) * 1e-3; // km/s²
-                const double burnSec   = relVMag / accelKmS2;
+                const double accelKmS2 = (m_mainThrustN / m_shipMass) * 1e-3;
+                burnSec  = relVMag / accelKmS2;
+                hasBurn  = true;
                 const int bHr  = static_cast<int>(burnSec / 3600.0);
                 const int bMin = static_cast<int>(burnSec / 60.0) % 60;
                 const int bSec = static_cast<int>(burnSec) % 60;
@@ -1695,6 +1739,23 @@ void GatewayMFD::renderNRHO(ImDrawList* dl, ImVec2 origin, ImVec2 size)
                 else
                     txt(kCyan,"Burn to null  %d:%02d  (@ %.2f m/s²)",
                         bMin, bSec, m_mainThrustN / m_shipMass);
+            }
+
+            // NRHO INS ignition = CA - half burn (centre-of-burn at CA).
+            if (hasCa && hasBurn) {
+                const double tIgn = t_ca - burnSec * 0.5;
+                if (tIgn > 0.0) {
+                    const int iHr  = static_cast<int>(tIgn / 3600.0);
+                    const int iMin = static_cast<int>(tIgn / 60.0) % 60;
+                    const int iSec = static_cast<int>(tIgn) % 60;
+                    ImU32 ignCol = (tIgn < 120.0) ? kOrange : kCyan;
+                    if (iHr > 0)
+                        txt(ignCol,"INS IGN  %dh%02dm%02ds",iHr,iMin,iSec);
+                    else
+                        txt(ignCol,"INS IGN  %d:%02d",iMin,iSec);
+                } else {
+                    txt(kOrange,"INS IGN  NOW (or past)");
+                }
             }
             y += 2;
 
