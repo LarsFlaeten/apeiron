@@ -513,6 +513,11 @@ int main(int argc, char* argv[])
             spacecraft.push_back(std::make_unique<Spacecraft>(m, inertia, st));
         }
 
+        // Per-vehicle physics-mode flag.  When true the vehicle is propagated by
+        // the physics integrator rather than pinned to its Keplerian orbit each frame.
+        // Must live outside the game loop so it persists across frames.
+        std::vector<bool> vehiclePhysicsMode(vehicleConfigs.size(), false);
+
         // MFD apps — updated and rendered every frame in Nav view.
         OrbitalMFD orbitalMFD;
         orbitalMFD.setContext(cfg.observerBody.c_str(), "ECLIPJ2000");
@@ -1729,24 +1734,62 @@ int main(int argc, char* argv[])
                     [&](double)    { dockingConstraint.enforcePostStep(); });
             }
 
-            // Pin non-player orbiting spacecraft to their analytical orbit.
-            // Strategy is split by eccentricity:
-            //   Near-circular (e < 0.05, e.g. ISS e≈0.0006): pin only at high warp.
-            //     At low warp the two-body integrator is accurate and the frame-by-frame
-            //     Keplerian snap causes prograde oscillation (ill-defined periapsis direction).
-            //   Eccentric / three-body (e >= 0.05, e.g. Gateway NRHO e≈0.72): pin always.
-            //     The NRHO diverges from two-body within hours; must be corrected at any warp.
+            // Pin non-player orbiting spacecraft to their analytical Keplerian orbit,
+            // OR release them to the shared physics integrator when the player is close.
+            //
+            // Near-circular (e < 0.05, e.g. ISS): skip at low warp — integrator is
+            //   accurate; Keplerian snap causes prograde oscillation for near-zero e.
+            //
+            // Eccentric / three-body (e ≥ 0.05, e.g. Gateway NRHO e≈0.72):
+            //   Physics-mode (player within kPhysDist km, warp ≤ 10×):
+            //     Both ships integrate under the same gravity call each frame, so any
+            //     common-mode SPICE noise cancels in the relative frame — no jitter.
+            //     Entry: sync from Keplerian once to align before handing off.
+            //     Exit:  snap back to Keplerian (drift over a short docking window
+            //            is sub-meter; player is already > kPhysExit km away so invisible).
+            //   Otherwise: Keplerian snap each frame to bound 3-body drift.
             {
-                const bool highWarp = (simSecondsPerRealSecond >= 100.0);
+                const bool       highWarp  = (simSecondsPerRealSecond >= 100.0);
+                constexpr double kPhysDist = 5.0;   // km — enter physics mode inside
+                constexpr double kPhysExit = 10.0;  // km — hysteresis on exit
+                const glm::dvec3 playerPos = spacecraft[playerIdx]->position();
+
                 for (size_t vi = 0; vi < vehicleConfigs.size(); ++vi) {
                     if (vi == playerIdx) continue;
                     const auto& vc = vehicleConfigs[vi];
                     if (!vc.hasOrbit) continue;
                     const bool eccentric = (vc.orbitElements.e >= 0.05);
-                    if (!highWarp && !eccentric) continue;  // let integrator run for near-circular at low warp
+                    if (!highWarp && !eccentric) continue;
+
+                    const double distKm = glm::length(spacecraft[vi]->position() - playerPos);
+
+                    // Determine desired physics-mode state.
+                    const bool wantPhysics = eccentric
+                                             && !highWarp
+                                             && simSecondsPerRealSecond <= 10.0
+                                             && distKm <= kPhysDist;
+                    const bool exitPhysics = vehiclePhysicsMode[vi]
+                                             && (highWarp
+                                                 || simSecondsPerRealSecond > 10.0
+                                                 || distKm > kPhysExit);
+
+                    if (!vehiclePhysicsMode[vi] && wantPhysics) {
+                        // Entering physics mode: align with Keplerian once.
+                        astro::PosState st = spacecraft::vehicleStateAtEt(vc, currentEt);
+                        spacecraft[vi]->setPosition(glm::dvec3(st.r.x, st.r.y, st.r.z));
+                        spacecraft[vi]->setVelocity(glm::dvec3(st.v.x, st.v.y, st.v.z));
+                        vehiclePhysicsMode[vi] = true;
+                        continue;
+                    }
+                    if (exitPhysics)
+                        vehiclePhysicsMode[vi] = false;
+                    if (vehiclePhysicsMode[vi])
+                        continue;  // physics world owns this vehicle
+
+                    // Keplerian pin.
                     astro::PosState st = spacecraft::vehicleStateAtEt(vc, currentEt);
-                    spacecraft[vi]->setPosition(glm::dvec3(st.r));
-                    spacecraft[vi]->setVelocity(glm::dvec3(st.v));
+                    spacecraft[vi]->setPosition(glm::dvec3(st.r.x, st.r.y, st.r.z));
+                    spacecraft[vi]->setVelocity(glm::dvec3(st.v.x, st.v.y, st.v.z));
                 }
                 // Re-enforce rigid docking lock so the active (child) spacecraft
                 // follows the corrected passive position.
